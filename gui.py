@@ -28,7 +28,7 @@ def describe_error(exc: Exception) -> str:
             "Start it with \"python server.py\" in another terminal, "
             "then click Refresh List."
         )
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, socket.timeout):
         return (
             f"The asset server at {HOST}:{PORT} did not respond within "
             f"{REQUEST_TIMEOUT_SECONDS} seconds. Please try again."
