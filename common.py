@@ -24,8 +24,13 @@ HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 # Checking the claim BEFORE reading the payload means no memory is used for it.
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 
-HOST = "127.0.0.1"  # "localhost" - server and clients all run on this same machine
-PORT = 65432        # arbitrary unused port number; server and clients must agree on it
+# The address of each server: the primary first, then the backup. Every program
+# must agree on this list. 127.0.0.1 means "this machine"; to use separate
+# machines, replace it with each server's IP address.
+SERVERS = [
+    ("127.0.0.1", 65432),  # primary
+    ("127.0.0.1", 65433),  # backup
+]
 
 TIMEOUT_SECONDS = 5  # how long a client waits for the server before giving up
 
@@ -131,21 +136,35 @@ def receive_message(sock: socket.socket) -> dict:
     return message
 
 
-def send_request(request: dict) -> dict:
-    """Send one request to the server and return its reply. Used by every client.
+def request_from(address: tuple, request: dict) -> dict:
+    """Send one request to the server at `address` and return its reply."""
+    # create_connection() is used because it takes a timeout. Without one, a
+    # stalled server would leave the program waiting forever.
+    with socket.create_connection(address, timeout=TIMEOUT_SECONDS) as sock:
+        send_message(sock, request)
+        return receive_message(sock)
 
-    Raises ConnectionError with a clear message if the server cannot be reached,
-    and ValueError if its reply is not a valid message.
+
+def send_request(request: dict) -> dict:
+    """Send a request to the first server that answers. Used by every client.
+
+    This is failover: if the primary is down, the client moves on to the backup
+    without the user having to do anything. Trying a REGISTER again on the backup
+    is safe even if the primary did the work and only its reply was lost, because
+    the servers later match assets up by their unique IDs.
+
+    Raises ConnectionError with a clear message if no server can be reached, and
+    ValueError if a reply is not a valid message.
     """
-    try:
-        # create_connection() is used because it takes a timeout. Without one, a
-        # stalled server would leave the client waiting forever.
-        with socket.create_connection((HOST, PORT), timeout=TIMEOUT_SECONDS) as sock:
-            send_message(sock, request)
-            return receive_message(sock)
-    except OSError as exc:
-        # OSError covers a refused connection, a timeout and a dropped connection.
-        raise ConnectionError(
-            f"Could not reach the asset server at {HOST}:{PORT} ({exc}).\n"
-            "Check that server.py is running, then try again."
-        ) from exc
+    last_error = None
+    for address in SERVERS:
+        try:
+            return request_from(address, request)
+        except OSError as exc:
+            # OSError covers a refused connection, a timeout and a dropped connection.
+            last_error = exc
+
+    raise ConnectionError(
+        f"Could not reach any asset server ({last_error}).\n"
+        "Check that server.py is running, then try again."
+    )

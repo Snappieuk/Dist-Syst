@@ -45,7 +45,7 @@ def list_ids() -> list:
 
 def send_raw(data: bytes) -> dict:
     """Send exact bytes to the server, as a faulty client might, and read the reply."""
-    with socket.create_connection((common.HOST, common.PORT), timeout=5) as sock:
+    with socket.create_connection(common.SERVERS[0], timeout=5) as sock:
         sock.sendall(data)
         return common.receive_message(sock)
 
@@ -55,12 +55,19 @@ def with_header(payload: bytes) -> bytes:
     return len(payload).to_bytes(4, "big") + payload
 
 
+def unused_address() -> tuple:
+    """Find an address with nothing listening on it."""
+    with socket.socket() as spare:
+        spare.bind(("127.0.0.1", 0))
+        return spare.getsockname()
+
+
 class SystemTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Port 0 asks the operating system for any free port.
-        listener = server.create_listening_socket(common.HOST, 0)
-        common.PORT = listener.getsockname()[1]
+        listener = server.create_listening_socket("127.0.0.1", 0)
+        common.SERVERS = [listener.getsockname()]
         threading.Thread(target=server.run_server, args=(listener,), daemon=True).start()
 
     def setUp(self):
@@ -141,7 +148,7 @@ class SystemTest(unittest.TestCase):
     def test_server_survives_a_client_vanishing(self):
         def vanish(data: bytes) -> None:
             """Send some bytes, then drop the connection like a crashed client."""
-            sock = socket.create_connection((common.HOST, common.PORT))
+            sock = socket.create_connection(common.SERVERS[0])
             sock.sendall(data)
             time.sleep(0.1)  # let the server start working on the request
 
@@ -161,7 +168,7 @@ class SystemTest(unittest.TestCase):
         server.CLIENT_TIMEOUT_SECONDS = 0.5
         self.addCleanup(setattr, server, "CLIENT_TIMEOUT_SECONDS", original_timeout)
 
-        with socket.create_connection((common.HOST, common.PORT), timeout=5) as idle:
+        with socket.create_connection(common.SERVERS[0], timeout=5) as idle:
             # Another client is served while this one sits idle.
             self.assertEqual(register(make_asset())["status"], "OK")
 
@@ -171,18 +178,19 @@ class SystemTest(unittest.TestCase):
             except ConnectionError:
                 pass  # some systems report the close this way instead
 
-    def test_client_gets_a_clear_error_if_the_server_is_down(self):
-        # Find a port with nothing listening on it.
-        with socket.socket() as spare:
-            spare.bind((common.HOST, 0))
-            unused_port = spare.getsockname()[1]
-
-        original_port = common.PORT
-        common.PORT = unused_port
-        self.addCleanup(setattr, common, "PORT", original_port)
+    def test_client_gets_a_clear_error_if_every_server_is_down(self):
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [unused_address(), unused_address()]
 
         with self.assertRaisesRegex(ConnectionError, "server.py"):
             common.send_request({"action": "LIST"})
+
+    def test_client_fails_over_to_the_backup(self):
+        # The first server in the list is down, and the second one is running.
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [unused_address(), common.SERVERS[0]]
+
+        self.assertEqual(register(make_asset())["status"], "OK")
 
     # ---- Persistence and ACID ----
 

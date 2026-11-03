@@ -26,9 +26,8 @@ import threading  # gives each client a thread, and provides the lock
 from common import (
     BAD_REQUEST,
     DUPLICATE_ID,
-    HOST,
     INTERNAL,
-    PORT,
+    SERVERS,
     TOO_LARGE,
     MessageTooLargeError,
     receive_message,
@@ -38,6 +37,9 @@ from common import (
 # Stored next to this script, so the server finds the same data whichever
 # folder it is started from.
 ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.json")
+
+# The backup keeps its own copy, so the two servers can run from the same folder.
+BACKUP_ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets_backup.json")
 
 # The fields a client must supply when registering an asset.
 REQUIRED_FIELDS = ("asset_id", "description", "category", "location", "status")
@@ -255,6 +257,15 @@ def run_server(server_sock: socket.socket) -> None:
 
 
 def main() -> None:
+    global ASSETS_FILE
+
+    # The primary and backup are the same program. This option only decides which
+    # address and data file it uses.
+    is_backup = "--backup" in sys.argv
+    address = SERVERS[1] if is_backup else SERVERS[0]
+    if is_backup:
+        ASSETS_FILE = BACKUP_ASSETS_FILE
+
     logging.basicConfig(
         level=logging.INFO,
         # threadName in the log makes the concurrent handling visible.
@@ -265,14 +276,15 @@ def main() -> None:
     # either end the program, with a clear message rather than a traceback.
     try:
         assets.extend(load_assets())
-        server_sock = create_listening_socket(HOST, PORT)
+        server_sock = create_listening_socket(*address)
     except (OSError, ValueError) as exc:
         logger.error("Could not start the server: %s", exc)
-        logger.error("Check that assets.json is valid and that no other copy of the server is running.")
+        logger.error("Check that %s is valid and that no other copy of the server is running.", ASSETS_FILE)
         sys.exit(1)
 
     with server_sock:
-        logger.info("Asset Management server listening on %s:%s", HOST, PORT)
+        role = "backup" if is_backup else "primary"
+        logger.info("Asset Management %s server listening on %s:%s", role, *address)
         logger.info("Press Ctrl+C to stop.")
         try:
             run_server(server_sock)
