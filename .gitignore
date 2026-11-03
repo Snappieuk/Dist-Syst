@@ -4,4 +4,5 @@ __pycache__/
 
 # Data created when the server runs
 assets.json
-assets.json.tmp
+assets_backup.json
+*.tmp
