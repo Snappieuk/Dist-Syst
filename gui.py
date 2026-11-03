@@ -2,38 +2,11 @@
 
 import datetime
 import queue
-import socket
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from common import HOST, PORT, receive_message, send_message
-
-
-REQUEST_TIMEOUT_SECONDS = 5
-
-
-def send_request(request: dict) -> dict:
-    """Send one request to the asset server and return its response."""
-    with socket.create_connection((HOST, PORT), timeout=REQUEST_TIMEOUT_SECONDS) as sock:
-        send_message(sock, request)
-        return receive_message(sock)
-
-
-def describe_error(exc: Exception) -> str:
-    """Turn a request failure into a message the user can act on."""
-    if isinstance(exc, ConnectionRefusedError):
-        return (
-            f"Could not connect to the asset server at {HOST}:{PORT}.\n\n"
-            "Start it with \"python server.py\" in another terminal, "
-            "then click Refresh List."
-        )
-    if isinstance(exc, socket.timeout):
-        return (
-            f"The asset server at {HOST}:{PORT} did not respond within "
-            f"{REQUEST_TIMEOUT_SECONDS} seconds. Please try again."
-        )
-    return str(exc)
+from client_lib import send_request
 
 
 class AssetManagementApp:
@@ -133,10 +106,10 @@ class AssetManagementApp:
                         else:
                             assets = list_response.get("assets", [])
                     except (OSError, ConnectionError, ValueError) as exc:
-                        error = describe_error(exc)
+                        error = str(exc)
                 self.results.put((operation, response, assets, error))
             except (OSError, ConnectionError, ValueError, RuntimeError) as exc:
-                self.results.put((operation, None, None, describe_error(exc)))
+                self.results.put((operation, None, None, str(exc)))
 
         threading.Thread(target=run, daemon=True).start()
 
