@@ -12,42 +12,18 @@ main thread checks the queue regularly and updates the window itself.
 import queue      # carries results from background threads to the main thread
 import threading  # runs network requests without freezing the window
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
-from typing import Optional
+from tkinter import messagebox, ttk
 
-from client_lib import LoginError, ServerUnavailableError, login, send_request
-
-
-def ask_for_login(root: tk.Tk) -> Optional[str]:
-    """Keep asking until the login works, and return the session token.
-
-    Returns None if the user cancels. Logging in before the main window exists
-    keeps this simple: the rest of the program can assume it has a token.
-    """
-    while True:
-        username = simpledialog.askstring("Log in", "Username:", parent=root)
-        if username is None:
-            return None
-
-        # show="*" hides the password as it is typed.
-        password = simpledialog.askstring("Log in", "Password:", parent=root, show="*")
-        if password is None:
-            return None
-
-        try:
-            return login(username.strip(), password)
-        except (ServerUnavailableError, LoginError, ValueError) as exc:
-            messagebox.showerror("Could not log in", str(exc), parent=root)
+from client_lib import send_request
 
 
 class AssetManagementApp:
     """The main window: a form to register assets and a table listing them."""
 
-    def __init__(self, root: tk.Tk, token: str) -> None:
+    def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Asset Management")
         self.root.minsize(760, 480)
-        self.token = token  # sent with every request to prove who is logged in
         self.results = queue.Queue()  # finished requests, waiting to be displayed
 
         self.fields = {}  # the form's text boxes, by asset field name
@@ -59,7 +35,7 @@ class AssetManagementApp:
 
     def _build_ui(self) -> None:
         """Create the form, the table and the status line."""
-        form =ttk.LabelFrame(self.root, text="Register an asset", padding=10)
+        form = ttk.LabelFrame(self.root, text="Register an asset", padding=10)
         form.pack(fill=tk.X, padx=12, pady=(12, 8))
 
         labels = (
@@ -136,7 +112,7 @@ class AssetManagementApp:
             # This runs on the background thread, so it must not touch any
             # widgets. It only puts its result on the queue.
             try:
-                response = send_request(request, token=self.token)
+                response = send_request(request)
                 assets = None
                 error = None
 
@@ -144,7 +120,7 @@ class AssetManagementApp:
                 # table includes the new asset.
                 if operation == "register" and response.get("status") == "OK":
                     try:
-                        list_response = send_request({"action": "LIST"}, token=self.token)
+                        list_response = send_request({"action": "LIST"})
                         if list_response.get("status") != "OK":
                             error = list_response.get("detail", "Could not refresh the asset list")
                         else:
@@ -240,16 +216,7 @@ class AssetManagementApp:
 
 def main() -> None:
     root = tk.Tk()
-
-    # Hide the main window until the user has logged in.
-    root.withdraw()
-    token = ask_for_login(root)
-    if token is None:
-        root.destroy()
-        return
-
-    root.deiconify()
-    AssetManagementApp(root, token)
+    AssetManagementApp(root)
     root.mainloop()
 
 

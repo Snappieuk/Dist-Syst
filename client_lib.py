@@ -5,12 +5,10 @@ Fault tolerance logic is easy to get subtly wrong, so it lives here once rather
 than being copied into send.py, receive.py and gui.py.
 """
 
-import getpass  # reads a password without showing it on the screen
 import random   # adds jitter to the retry delays (explained below)
 import socket   # provides the networking building blocks (sockets)
 import time     # time.sleep() waits between retries
 import uuid     # generates a unique ID for each request
-from typing import Optional
 
 from common import HOST, PORT, receive_message, send_message
 
@@ -33,10 +31,6 @@ class ServerUnavailableError(OSError):
     """
 
 
-class LoginError(Exception):
-    """The server was reached, but it refused the username or password."""
-
-
 def _attempt(request: dict) -> dict:
     """Make one attempt: connect, send the request and wait for the reply."""
     with socket.create_connection((HOST, PORT), timeout=TIMEOUT_SECONDS) as sock:
@@ -44,10 +38,8 @@ def _attempt(request: dict) -> dict:
         return receive_message(sock)
 
 
-def send_request(request: dict, token: Optional[str] = None) -> dict:
+def send_request(request: dict) -> dict:
     """Send a request to the server, retrying if the network fails.
-
-    `token` is the session token from login(), for requests that need one.
 
     WHY RETRYING NEEDS AN ID: when a reply does not arrive, the client cannot
     tell which of these happened:
@@ -68,8 +60,6 @@ def send_request(request: dict, token: Optional[str] = None) -> dict:
     """
     # Copy rather than modify the caller's dict, and keep any ID it already has.
     request = {**request, "request_id": request.get("request_id") or str(uuid.uuid4())}
-    if token is not None:
-        request["token"] = token
 
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -94,19 +84,3 @@ def send_request(request: dict, token: Optional[str] = None) -> dict:
         f"after {MAX_ATTEMPTS} attempts ({last_error}).\n"
         "Check that server.py is running, then try again."
     )
-
-
-def login(username: str, password: str) -> str:
-    """Log in and return a session token, or raise LoginError if refused."""
-    reply = send_request({"action": "LOGIN", "username": username, "password": password})
-    if reply.get("status") != "OK":
-        raise LoginError(reply.get("detail", "The server refused the login."))
-    return reply["token"]
-
-
-def prompt_and_login() -> str:
-    """Ask for a username and password at the terminal, then log in."""
-    username = input("Username: ").strip()
-
-    # getpass does not show the password on screen as it is typed.
-    return login(username, getpass.getpass("Password: "))
