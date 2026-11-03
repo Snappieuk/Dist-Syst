@@ -24,7 +24,6 @@ import datetime   # the server stamps each new asset with today's date
 import logging    # records errors without stopping the server
 import os         # used to find the assets file next to this script
 import socket     # provides the networking building blocks (sockets)
-import ssl        # encrypts each client connection using TLS
 import sys       # sys.exit() reports startup failures to the operating system
 import threading  # gives each connected client its own thread
 from typing import Optional
@@ -33,17 +32,14 @@ from typing import Optional
 from auth import ROLE_ADMIN, ROLE_VIEWER, USERS_FILE, SessionManager, UserStore
 from common import (
     BAD_REQUEST,
-    CERT_FILE,
     FORBIDDEN,
     HOST,
     INTERNAL,
-    KEY_FILE,
     PORT,
     TOO_LARGE,
     UNAUTHORISED,
     MessageTooLargeError,
     RequestError,
-    create_server_tls_context,
     receive_message,
     send_message,
 )
@@ -86,12 +82,11 @@ class ServerContext:
     """The shared state each request needs, passed around as one object."""
 
     def __init__(self, store: AssetStore, request_cache: RequestCache, users: UserStore,
-                 sessions: SessionManager, tls_context: ssl.SSLContext) -> None:
+                 sessions: SessionManager) -> None:
         self.store = store
         self.request_cache = request_cache
         self.users = users
         self.sessions = sessions
-        self.tls_context = tls_context
 
 
 def error_reply(code: str, detail: str) -> dict:
@@ -285,29 +280,18 @@ def handle_client(conn: socket.socket, addr: tuple, context: ServerContext) -> N
             # longer. That is a known limitation.
             conn.settimeout(CLIENT_TIMEOUT_SECONDS)
 
-            # Start encryption before any data is read. This happens here, on the
-            # client's own thread, because the TLS handshake involves waiting for
-            # the client. Doing it in the accept loop would let one slow client
-            # hold up every new connection.
             try:
-                secure_conn = context.tls_context.wrap_socket(conn, server_side=True)
-            except OSError as exc:  # ssl.SSLError and timeouts are both OSErrors
-                logger.warning("TLS handshake with %s failed: %s", addr, exc)
-                return
+                reply = _read_and_process(conn, addr, context)
+            except Exception:
+                # Catching everything is deliberate at this one boundary, as
+                # this is a bug or a failure such as a full disk. Log the full
+                # traceback for the operator, but tell the client only that it
+                # failed: internal details can reveal information to attackers.
+                logger.exception("Unexpected error handling client %s", addr)
+                reply = error_reply(INTERNAL, "The server could not complete the request")
 
-            with secure_conn:
-                try:
-                    reply = _read_and_process(secure_conn, addr, context)
-                except Exception:
-                    # Catching everything is deliberate at this one boundary, as
-                    # this is a bug or a failure such as a full disk. Log the full
-                    # traceback for the operator, but tell the client only that it
-                    # failed: internal details can reveal information to attackers.
-                    logger.exception("Unexpected error handling client %s", addr)
-                    reply = error_reply(INTERNAL, "The server could not complete the request")
-
-                if reply is not None:
-                    _send_reply(secure_conn, addr, reply)
+            if reply is not None:
+                _send_reply(conn, addr, reply)
     except Exception:
         # Last resort, for example if closing the connection fails.
         logger.exception("Unexpected error cleaning up client %s", addr)
@@ -397,13 +381,6 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        tls_context = create_server_tls_context(CERT_FILE, KEY_FILE)
-    except OSError as exc:
-        logger.error("Could not load the TLS certificate or key: %s", exc)
-        logger.error("See the README for how to create cert.pem and key.pem.")
-        sys.exit(1)
-
-    try:
         server_sock = create_listening_socket(HOST, PORT)
     except OSError as exc:
         logger.error("Could not listen on %s:%s: %s", HOST, PORT, exc)
@@ -414,7 +391,7 @@ def main() -> None:
         logger.info("Asset Management server listening on %s:%s", HOST, PORT)
         logger.info("Press Ctrl+C to stop.")
         try:
-            context = ServerContext(store, RequestCache(), users, SessionManager(), tls_context)
+            context = ServerContext(store, RequestCache(), users, SessionManager())
             run_server(server_sock, context)
         except KeyboardInterrupt:
             logger.info("Server stopped.")
