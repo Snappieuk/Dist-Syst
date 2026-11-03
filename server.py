@@ -39,6 +39,7 @@ from common import (
     receive_message,
     send_message,
 )
+from idempotency import RequestCache
 from store import AssetStore
 
 # Stored next to this script, so the server finds the same data whichever
@@ -51,7 +52,22 @@ REQUIRED_ASSET_FIELDS = ("asset_id", "description", "category", "location", "sta
 # How often the accept loop wakes up. See the comment in run_server().
 ACCEPT_POLL_SECONDS = 1.0
 
+# Actions that change data. Repeats of these must not be carried out twice.
+STATE_CHANGING_ACTIONS = ("REGISTER",)
+
+# A uuid4 is 36 characters. The limit stops a client filling the request cache
+# with very long keys.
+MAX_REQUEST_ID_LENGTH = 100
+
 logger = logging.getLogger("asset_server")
+
+
+class ServerContext:
+    """The shared state each request needs, passed around as one object."""
+
+    def __init__(self, store: AssetStore, request_cache: RequestCache) -> None:
+        self.store = store
+        self.request_cache = request_cache
 
 
 def error_reply(code: str, detail: str) -> dict:
@@ -96,17 +112,13 @@ def validate_new_asset(asset: object) -> dict:
     return clean
 
 
-def process_request(request: dict, store: AssetStore) -> dict:
-    """Carry out one decoded request and return the reply.
-
-    This function does no networking, so the server's rules can be unit tested
-    without opening a socket.
-    """
+def _execute(request: dict, context: ServerContext) -> dict:
+    """Carry out the action in a request and return the reply."""
     action = request.get("action")
 
     try:
         if action == "REGISTER":
-            stored = store.register(validate_new_asset(request.get("asset")))
+            stored = context.store.register(validate_new_asset(request.get("asset")))
 
             # Echo back what was stored, because the server may have changed it
             # (trimmed spaces, added the date). The client should show the
@@ -114,7 +126,7 @@ def process_request(request: dict, store: AssetStore) -> dict:
             return {"status": "OK", "stored": stored}
 
         if action == "LIST":
-            return {"status": "OK", "assets": store.list_all()}
+            return {"status": "OK", "assets": context.store.list_all()}
 
         return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
@@ -125,7 +137,30 @@ def process_request(request: dict, store: AssetStore) -> dict:
         return error_reply(exc.code, exc.detail)
 
 
-def _read_and_process(conn: socket.socket, addr: tuple, store: AssetStore) -> Optional[dict]:
+def process_request(request: dict, context: ServerContext) -> dict:
+    """Carry out one decoded request and return the reply.
+
+    This function does no networking, so the server's rules can be unit tested
+    without opening a socket.
+    """
+    # Read-only actions are harmless to repeat, and caching their potentially
+    # large replies would waste memory, so only state changes use the cache.
+    if request.get("action") not in STATE_CHANGING_ACTIONS:
+        return _execute(request, context)
+
+    # Required rather than optional: without an ID, the server could not keep
+    # its promise that a retried request is not carried out twice.
+    request_id = request.get("request_id")
+    if not isinstance(request_id, str) or not 0 < len(request_id) <= MAX_REQUEST_ID_LENGTH:
+        return error_reply(
+            BAD_REQUEST,
+            f"'request_id' must be a string of 1 to {MAX_REQUEST_ID_LENGTH} characters",
+        )
+
+    return context.request_cache.run_once(request_id, lambda: _execute(request, context))
+
+
+def _read_and_process(conn: socket.socket, addr: tuple, context: ServerContext) -> Optional[dict]:
     """Read one request and return the reply, or None if no reply can be sent."""
     try:
         request = receive_message(conn)
@@ -139,12 +174,11 @@ def _read_and_process(conn: socket.socket, addr: tuple, store: AssetStore) -> Op
         # The connection failed, for example the client crashed or disconnected
         # part-way through. Nobody is left to read a reply, and attempting one
         # would simply raise another error, which is what used to crash the
-        # server. All that remains is to record it. (ConnectionError and socket
-        # timeouts are both kinds of OSError.)
+        # server. All that remains is to record it.
         logger.warning("Client %s disconnected before sending a request: %s", addr, exc)
         return None
 
-    return process_request(request, store)
+    return process_request(request, context)
 
 
 def _send_reply(conn: socket.socket, addr: tuple, reply: dict) -> None:
@@ -162,7 +196,7 @@ def _send_reply(conn: socket.socket, addr: tuple, reply: dict) -> None:
         logger.warning("Could not send reply to %s: %s", addr, exc)
 
 
-def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
+def handle_client(conn: socket.socket, addr: tuple, context: ServerContext) -> None:
     """Serve one client from start to finish. Runs on that client's own thread.
 
     This is the fault isolation boundary: no exception may escape it. On a
@@ -174,7 +208,7 @@ def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
         # this block finishes, even if an error happens inside it.
         with conn:
             try:
-                reply = _read_and_process(conn, addr, store)
+                reply = _read_and_process(conn, addr, context)
             except Exception:
                 # Catching everything is deliberate at this one boundary, as
                 # this is a bug or a failure such as a full disk. Log the full
@@ -215,7 +249,7 @@ def create_listening_socket(host: str, port: int) -> socket.socket:
     return server_sock
 
 
-def run_server(server_sock: socket.socket, store: AssetStore) -> None:
+def run_server(server_sock: socket.socket, context: ServerContext) -> None:
     """Accept clients until interrupted, giving each one its own thread."""
     # accept() normally waits forever, and on Windows a thread stuck in it does
     # not notice Ctrl+C. Waking up regularly lets the interrupt be delivered.
@@ -240,7 +274,7 @@ def run_server(server_sock: socket.socket, store: AssetStore) -> None:
         #
         # daemon=True means an unfinished client thread does not stop the
         # server process from exiting when the operator asks it to stop.
-        thread = threading.Thread(target=handle_client, args=(conn, addr, store), daemon=True)
+        thread = threading.Thread(target=handle_client, args=(conn, addr, context), daemon=True)
         try:
             thread.start()
         except RuntimeError:
@@ -277,7 +311,7 @@ def main() -> None:
         logger.info("Asset Management server listening on %s:%s", HOST, PORT)
         logger.info("Press Ctrl+C to stop.")
         try:
-            run_server(server_sock, store)
+            run_server(server_sock, ServerContext(store, RequestCache()))
         except KeyboardInterrupt:
             logger.info("Server stopped.")
 
