@@ -14,10 +14,8 @@ running the script from a terminal you already have open does not need
 it.
 """
 
-import socket    # provides the networking building blocks (sockets)
-
-# Import the shared constants/helpers used by every part of the prototype.
-from common import HOST, PORT, receive_message, send_message
+# The shared networking code used by every client.
+from client_lib import ServerUnavailableError, send_request
 
 
 def prompt_for_asset() -> dict:
@@ -50,19 +48,16 @@ def main() -> None:
     # Ask the user for the asset details before we even open a connection.
     new_asset = prompt_for_asset()
 
-    # Create a TCP/IPv4 socket. `with` closes it automatically on exit.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        # Connect to the server at the shared HOST/PORT.
-        sock.connect((HOST, PORT))
+    # Send a REGISTER request containing the new asset. send_request() handles
+    # timeouts and retries, so a clear message can be shown if it still fails.
+    try:
+        response = send_request({"action": "REGISTER", "asset": new_asset})
+    except (ServerUnavailableError, ValueError) as exc:
+        print(f"Could not register the asset: {exc}")
+        return
 
-        # Send a REGISTER request containing the new asset.
-        send_message(sock, {"action": "REGISTER", "asset": new_asset})
-
-        # Wait for, and decode, the server's reply.
-        response = receive_message(sock)
-
-        # Show the raw reply so the user can see what the server did.
-        print("Server response:", response)
+    # Show the raw reply so the user can see what the server did.
+    print("Server response:", response)
 
 
 # Only run this if the file is executed directly (not imported).
