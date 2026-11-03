@@ -8,7 +8,6 @@ than being copied into send.py, receive.py and gui.py.
 import random   # adds jitter to the retry delays (explained below)
 import socket   # provides the networking building blocks (sockets)
 import time     # time.sleep() waits between retries
-import uuid     # generates a unique ID for each request
 
 from common import HOST, PORT, receive_message, send_message
 
@@ -58,8 +57,6 @@ def send_request(request: dict) -> dict:
             message. This is not retried, as the network is working and repeating
             the request would not change the outcome.
     """
-    # Copy rather than modify the caller's dict, and keep any ID it already has.
-    request = {**request, "request_id": request.get("request_id") or str(uuid.uuid4())}
 
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):

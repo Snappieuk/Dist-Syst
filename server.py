@@ -39,7 +39,6 @@ from common import (
     receive_message,
     send_message,
 )
-from idempotency import RequestCache
 from store import AssetStore
 
 # Stored next to this script, so the server finds the same data whichever
@@ -57,22 +56,14 @@ ACCEPT_POLL_SECONDS = 1.0
 # and retries first.
 CLIENT_TIMEOUT_SECONDS = 10
 
-# Actions that change data. Repeats of these must not be carried out twice.
-STATE_CHANGING_ACTIONS = ("REGISTER",)
-
-# A uuid4 is 36 characters. The limit stops a client filling the request cache
-# with very long keys.
-MAX_REQUEST_ID_LENGTH = 100
-
 logger = logging.getLogger("asset_server")
 
 
 class ServerContext:
     """The shared state each request needs, passed around as one object."""
 
-    def __init__(self, store: AssetStore, request_cache: RequestCache) -> None:
+    def __init__(self, store: AssetStore) -> None:
         self.store = store
-        self.request_cache = request_cache
 
 
 def error_reply(code: str, detail: str) -> dict:
@@ -148,23 +139,7 @@ def process_request(request: dict, context: ServerContext) -> dict:
     This function does no networking, so the server's rules can be unit tested
     without opening a socket.
     """
-    action = request.get("action")
-
-    # Read-only actions are harmless to repeat, and caching their potentially
-    # large replies would waste memory, so only state changes use the cache.
-    if action not in STATE_CHANGING_ACTIONS:
-        return _execute(request, context)
-
-    # Required rather than optional: without an ID, the server could not keep
-    # its promise that a retried request is not carried out twice.
-    request_id = request.get("request_id")
-    if not isinstance(request_id, str) or not 0 < len(request_id) <= MAX_REQUEST_ID_LENGTH:
-        return error_reply(
-            BAD_REQUEST,
-            f"'request_id' must be a string of 1 to {MAX_REQUEST_ID_LENGTH} characters",
-        )
-
-    return context.request_cache.run_once(request_id, lambda: _execute(request, context))
+    return _execute(request, context)
 
 
 def _read_and_process(conn: socket.socket, addr: tuple, context: ServerContext) -> Optional[dict]:
@@ -332,7 +307,7 @@ def main() -> None:
         logger.info("Asset Management server listening on %s:%s", HOST, PORT)
         logger.info("Press Ctrl+C to stop.")
         try:
-            context = ServerContext(store, RequestCache())
+            context = ServerContext(store)
             run_server(server_sock, context)
         except KeyboardInterrupt:
             logger.info("Server stopped.")
