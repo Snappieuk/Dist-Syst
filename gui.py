@@ -4,16 +4,40 @@ import datetime
 import queue
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
+from typing import Optional
 
-from client_lib import send_request
+from client_lib import LoginError, ServerUnavailableError, login, send_request
+
+
+def ask_for_login(root: tk.Tk) -> Optional[str]:
+    """Keep asking until the login works, and return the session token.
+
+    Returns None if the user cancels. Logging in before the main window exists
+    keeps this simple: the rest of the program can assume it has a token.
+    """
+    while True:
+        username = simpledialog.askstring("Log in", "Username:", parent=root)
+        if username is None:
+            return None
+
+        # show="*" hides the password as it is typed.
+        password = simpledialog.askstring("Log in", "Password:", parent=root, show="*")
+        if password is None:
+            return None
+
+        try:
+            return login(username.strip(), password)
+        except (ServerUnavailableError, LoginError, ValueError) as exc:
+            messagebox.showerror("Could not log in", str(exc), parent=root)
 
 
 class AssetManagementApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, token: str) -> None:
         self.root = root
         self.root.title("Asset Management")
         self.root.minsize(760, 480)
+        self.token = token  # sent with every request to prove who is logged in
         self.results = queue.Queue()
 
         self.fields = {}
@@ -95,12 +119,12 @@ class AssetManagementApp:
 
         def run() -> None:
             try:
-                response = send_request(request)
+                response = send_request(request, token=self.token)
                 assets = None
                 error = None
                 if operation == "register" and response.get("status") == "OK":
                     try:
-                        list_response = send_request({"action": "LIST"})
+                        list_response = send_request({"action": "LIST"}, token=self.token)
                         if list_response.get("status") != "OK":
                             error = list_response.get("detail", "Could not refresh the asset list")
                         else:
@@ -190,7 +214,16 @@ class AssetManagementApp:
 
 def main() -> None:
     root = tk.Tk()
-    AssetManagementApp(root)
+
+    # Hide the main window until the user has logged in.
+    root.withdraw()
+    token = ask_for_login(root)
+    if token is None:
+        root.destroy()
+        return
+
+    root.deiconify()
+    AssetManagementApp(root, token)
     root.mainloop()
 
 
