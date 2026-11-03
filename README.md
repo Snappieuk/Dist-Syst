@@ -1,8 +1,8 @@
 # Asset Management System
 
-A simple distributed prototype: a central server, a registration client and a
-query client, which register and retrieve asset records. They communicate over
-TCP sockets using JSON messages.
+A simple distributed prototype: a central server with a backup, a registration
+client and a query client, which register and retrieve asset records. They
+communicate over TCP sockets using JSON messages.
 
 Each asset has an asset ID, description, category, location, status and
 registration date.
@@ -12,7 +12,8 @@ registration date.
 - `common.py` — shared helpers: sends and receives JSON messages over a TCP
   socket, using a 4-byte length prefix so each message is framed correctly.
 - `server.py` — accepts `REGISTER` and `LIST` requests, and saves assets to
-  `assets.json`.
+  `assets.json`. Run with `--backup`, it acts as the backup server and uses
+  `assets_backup.json`.
 - `send.py` — the registration client: prompts for a new asset and registers it.
 - `receive.py` — the query client: retrieves and prints the current assets.
 - `gui.py` — a Tkinter window that can both register and list assets.
@@ -50,10 +51,23 @@ python gui.py
 if you run them by double-clicking the file, the window stays open long enough
 to read the result.
 
-### Running across two machines
+### Running the backup server
 
-Set `HOST` in `common.py` to the server machine's IP address, on both machines.
-The server's firewall must allow the port.
+The clients work with the primary alone, but for redundancy, start the backup in
+another terminal:
+
+```
+python server.py --backup
+```
+
+Clients always try the primary first, and automatically use the backup if the
+primary can't be reached. Each server copies new assets from the other every two
+seconds, so a server that was down catches up by itself when it restarts.
+
+### Running across several machines
+
+Edit `SERVERS` in `common.py` to list each server's IP address, and use the same
+list on every machine. Each server's firewall must allow its port.
 
 ## Running the tests
 
@@ -61,9 +75,10 @@ The server's firewall must allow the port.
 python -m unittest -v test_system
 ```
 
-The tests run a real server on a spare port with a temporary data file, so they
-do not touch `assets.json`. One test deliberately causes a failed save, so a
-logged error and traceback in the output are expected.
+The tests run real servers on spare ports with temporary data files, so they do
+not touch your data. One of them runs the primary and backup as separate programs
+and stops the primary part-way through. Another deliberately causes a failed save,
+so a logged error and traceback in the output are expected.
 
 ## Messages
 
@@ -97,11 +112,14 @@ Failures look like `{"status": "ERROR", "code": "DUPLICATE_ID", "detail": "..."}
 - **Timeouts and limits:** idle clients are disconnected, clients do not wait
   forever, and message size is capped.
 - **Error handling:** errors have clear codes, and clients show a message instead
-  of a traceback when the server is down.
+  of a traceback when no server can be reached.
+- **Redundancy:** a backup server takes over automatically if the primary is down,
+  and the two servers copy new assets from each other.
 
 ### ACID properties
 
-Each registration has these properties:
+Each registration has these properties on the server that accepts it. Between the
+two servers, data is only eventually consistent (see the limitations below).
 
 | Property | How it is provided |
 |---|---|
@@ -116,8 +134,16 @@ These are outside the project's scope, or were left out to keep the prototype si
 
 - **No authentication or encryption:** anyone who can reach the server can read
   and add assets, and data is sent as plain text. Use it only on a trusted network.
-- **Single point of failure:** there is one server, with no backup or replication.
-  If it stops, clients cannot work until it restarts, although saved data is kept.
+- **A simple backup, not high availability:** full high availability is outside
+  the project's scope, so this backup has limits:
+  - The servers can differ for a couple of seconds. If the primary's disk were
+    destroyed in that time, its newest assets would be lost.
+  - If each server accepts a different asset with the same ID while clients can
+    only reach one or the other, the primary's copy wins. The backup's copy is
+    discarded, even though its client was told the registration succeeded.
+  - Using the backup takes a client a few seconds longer, because it tries the
+    primary first. If both servers are down, clients show an error.
+  - Only one backup is supported, and restarting a failed server is a manual step.
 - **Register and list only:** assets cannot be searched, updated or removed.
 - **No automatic retry:** if the reply to a registration is lost, the user does not
   know whether it worked. Running it again is safe, and shows `DUPLICATE_ID` if
@@ -131,4 +157,5 @@ These are outside the project's scope, or were left out to keep the prototype si
 ## Opportunities for further development
 
 Update and delete actions, search and paging, a database in place of the JSON file,
-login and encryption, and a backup server.
+login and encryption, and stronger replication, where a registration is confirmed
+only after both servers have saved it.
