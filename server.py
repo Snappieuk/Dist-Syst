@@ -1,33 +1,41 @@
 """
-Asset Management System server (STARTER CODE).
+Asset Management System server.
 
-Listens for one connection at a time and understands two request actions:
+Listens for connections and understands two request actions:
 
     {"action": "REGISTER", "asset": {...}}   -> stores the asset, replies with a status
     {"action": "LIST"}                       -> replies with every stored asset
 
-Deliberately basic — this is a starting point, not a finished system:
-  - only one client is served at a time (no threading/concurrency)
-  - there is almost no validation of incoming data
-  - there is no authentication or encryption
-
-Reviewing, extending, testing, and documenting these limitations is part
-of the assignment.
+Each client has its own thread, so a slow client does not delay the others.
+Assets are saved to a file (see store.py).
 """
 
-import os      # used to find the assets file next to this script
-import socket  # provides the networking building blocks (sockets)
+import logging    # records errors without stopping the server
+import os         # used to find the assets file next to this script
+import socket     # provides the networking building blocks (sockets)
+import threading  # gives each connected client its own thread
 
 # Import the shared constants/helpers used by every part of the prototype.
-from common import HOST, PORT, RequestError, receive_message, send_message
+from common import (
+    HOST,
+    PORT,
+    RequestError,
+    receive_message,
+    send_message,
+)
 from store import AssetStore
 
 # Stored next to this script, so the server finds the same data whichever
 # folder it is started from.
 ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.json")
 
+# How often the accept loop wakes up. See the comment in run_server().
+ACCEPT_POLL_SECONDS = 1.0
 
-def handle_client(conn: socket.socket, store: AssetStore) -> None:
+logger = logging.getLogger("asset_server")
+
+
+def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
     # `with conn:` guarantees the connection is closed automatically once
     # this block finishes, even if an error happens inside it.
     with conn:
@@ -69,7 +77,48 @@ def handle_client(conn: socket.socket, store: AssetStore) -> None:
             send_message(conn, {"status": "ERROR", "detail": f"Unknown action: {action!r}"})
 
 
+def run_server(server_sock: socket.socket, store: AssetStore) -> None:
+    """Accept clients until interrupted, giving each one its own thread."""
+    # accept() normally waits forever, and on Windows a thread stuck in it does
+    # not notice Ctrl+C. Waking up regularly lets the interrupt be delivered.
+    server_sock.settimeout(ACCEPT_POLL_SECONDS)
+
+    while True:
+        try:
+            conn, addr = server_sock.accept()
+        except socket.timeout:
+            continue  # nobody connected during this interval; just wait again
+        except OSError:
+            # A connection can fail between arriving and being accepted. That
+            # affects that client only, so keep serving everyone else.
+            logger.exception("Failed to accept a connection")
+            continue
+
+        logger.info("Connection from %s", addr)
+
+        # WHY threads: a server handling one client at a time would stall
+        # everyone whenever one client was slow. Handling is mostly waiting
+        # on the network, and Python threads run concurrently while waiting.
+        #
+        # daemon=True means an unfinished client thread does not stop the
+        # server process from exiting when the operator asks it to stop.
+        thread = threading.Thread(target=handle_client, args=(conn, addr, store), daemon=True)
+        try:
+            thread.start()
+        except RuntimeError:
+            # The operating system refused another thread (too many clients).
+            # Turn away this client rather than stopping the whole server.
+            logger.exception("Could not start a thread for client %s", addr)
+            conn.close()
+
+
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        # threadName in the log makes the concurrent handling visible.
+        format="%(asctime)s %(levelname)s [%(threadName)s] %(message)s",
+    )
+
     store = AssetStore(ASSETS_FILE)
 
     # Create a TCP/IPv4 socket. `with` closes it automatically on exit.
@@ -83,19 +132,12 @@ def main() -> None:
         server_sock.bind((HOST, PORT))
         server_sock.listen()
 
-        print(f"Asset Management server listening on {HOST}:{PORT}")
-        print("Press Ctrl+C to stop.")
-
-        # Serve clients forever, one at a time, until the server is stopped.
-        while True:
-            # Block here until a client connects; `conn` is a new socket
-            # dedicated to that one client, `addr` is their address.
-            conn, addr = server_sock.accept()
-            print(f"Connection from {addr}")
-
-            # Handle this client's single request/response fully before
-            # looping back round to accept() the next one.
-            handle_client(conn, store)
+        logger.info("Asset Management server listening on %s:%s", HOST, PORT)
+        logger.info("Press Ctrl+C to stop.")
+        try:
+            run_server(server_sock, store)
+        except KeyboardInterrupt:
+            logger.info("Server stopped.")
 
 
 # Only run main() if this file is executed directly (not imported).
