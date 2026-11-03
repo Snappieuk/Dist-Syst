@@ -10,6 +10,7 @@ Each client has its own thread, so a slow client does not delay the others.
 Assets are saved to a file (see store.py).
 """
 
+import datetime   # the server stamps each new asset with today's date
 import logging    # records errors without stopping the server
 import os         # used to find the assets file next to this script
 import socket     # provides the networking building blocks (sockets)
@@ -17,6 +18,7 @@ import threading  # gives each connected client its own thread
 
 # Import the shared constants/helpers used by every part of the prototype.
 from common import (
+    BAD_REQUEST,
     HOST,
     PORT,
     RequestError,
@@ -29,10 +31,84 @@ from store import AssetStore
 # folder it is started from.
 ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.json")
 
+# The fields a client must supply when registering an asset.
+REQUIRED_ASSET_FIELDS = ("asset_id", "description", "category", "location", "status")
+
 # How often the accept loop wakes up. See the comment in run_server().
 ACCEPT_POLL_SECONDS = 1.0
 
 logger = logging.getLogger("asset_server")
+
+
+def error_reply(code: str, detail: str) -> dict:
+    """Build an ERROR reply in the one format every client relies on."""
+    return {"status": "ERROR", "code": code, "detail": detail}
+
+
+def validate_new_asset(asset: object) -> dict:
+    """Check a client-supplied asset and return a clean copy ready to store.
+
+    Validation happens on the server even though clients may check too.
+    WHY: the server cannot trust clients. Anyone can write their own program
+    that speaks this protocol, so a check made only in a client is a convenience
+    for its user, not a guarantee about the data.
+    """
+    if not isinstance(asset, dict):
+        raise RequestError(BAD_REQUEST, "'asset' must be an object")
+
+    clean = {}
+    for field in REQUIRED_ASSET_FIELDS:
+        if field not in asset:
+            raise RequestError(BAD_REQUEST, f"Missing required field: {field}")
+
+        value = asset[field]
+        if not isinstance(value, str):
+            raise RequestError(BAD_REQUEST, f"Field must be a string: {field}")
+
+        value = value.strip()
+        if not value:
+            raise RequestError(BAD_REQUEST, f"Field must not be empty: {field}")
+
+        clean[field] = value
+
+    # The date comes from this machine, and any date sent by the client is
+    # ignored. WHY: there is no shared clock in a distributed system. Client
+    # clocks can be wrong or in other time zones, so letting one authority
+    # assign the date keeps records consistent with each other.
+    #
+    # Building `clean` from a fixed field list also means unexpected fields
+    # sent by a client are dropped rather than stored.
+    clean["date_registered"] = datetime.date.today().isoformat()
+    return clean
+
+
+def process_request(request: dict, store: AssetStore) -> dict:
+    """Carry out one decoded request and return the reply.
+
+    This function does no networking, so the server's rules can be unit tested
+    without opening a socket.
+    """
+    action = request.get("action")
+
+    try:
+        if action == "REGISTER":
+            stored = store.register(validate_new_asset(request.get("asset")))
+
+            # Echo back what was stored, because the server may have changed it
+            # (trimmed spaces, added the date). The client should show the
+            # record that really exists, not the one it hoped to create.
+            return {"status": "OK", "stored": stored}
+
+        if action == "LIST":
+            return {"status": "OK", "assets": store.list_all()}
+
+        return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
+
+    except RequestError as exc:
+        # An expected rejection: the server is healthy and the client gets told
+        # why. Unexpected exceptions are deliberately not caught here, and
+        # are handled by handle_client() instead.
+        return error_reply(exc.code, exc.detail)
 
 
 def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
@@ -45,36 +121,10 @@ def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
         except (ConnectionError, ValueError) as exc:
             # ValueError covers JSON that doesn't parse; ConnectionError
             # covers a client that disconnects mid-message.
-            send_message(conn, {"status": "ERROR", "detail": str(exc)})
+            send_message(conn, error_reply(BAD_REQUEST, str(exc)))
             return  # nothing more we can do with this connection
 
-        # Every request must say what it wants done via an "action" field.
-        action = request.get("action")
-
-        if action == "REGISTER":
-            # Pull the asset details out of the request.
-            asset = request.get("asset")
-
-            # TODO (student): validate `asset` properly before storing it
-            # (e.g. required fields present, sensible types) and decide what
-            # should happen if it is invalid.
-            try:
-                stored = store.register(asset)  # saves it to the assets file too
-            except RequestError as exc:
-                send_message(conn, {"status": "ERROR", "code": exc.code, "detail": exc.detail})
-                return
-
-            # Tell the client the registration succeeded, and echo back
-            # what was stored so it can be confirmed on screen.
-            send_message(conn, {"status": "OK", "stored": stored})
-
-        elif action == "LIST":
-            # Send back the full current list of assets as-is.
-            send_message(conn, {"status": "OK", "assets": store.list_all()})
-
-        else:
-            # Any action we don't recognise is treated as an error.
-            send_message(conn, {"status": "ERROR", "detail": f"Unknown action: {action!r}"})
+        send_message(conn, process_request(request, store))
 
 
 def run_server(server_sock: socket.socket, store: AssetStore) -> None:
