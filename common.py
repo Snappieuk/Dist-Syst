@@ -27,6 +27,35 @@ MAX_MESSAGE_BYTES = 1024 * 1024
 HOST = "127.0.0.1"  # "localhost" - server and clients all run on this same machine
 PORT = 65432        # arbitrary unused port number; server and clients must agree on it
 
+# Structured error codes, sent as the "code" field of an ERROR reply.
+#
+# WHY: "detail" is written for humans and may be reworded at any time. Programs
+# need something stable to make decisions on, for example a client can treat
+# DUPLICATE_ID differently from INTERNAL without parsing English sentences.
+# In a distributed system the client and server may be upgraded at different
+# times, so this contract has to stay stable.
+BAD_REQUEST = "BAD_REQUEST"    # the request is malformed or fails validation
+NOT_FOUND = "NOT_FOUND"        # the request names something that does not exist
+DUPLICATE_ID = "DUPLICATE_ID"  # the asset_id is already in use
+UNAUTHORISED = "UNAUTHORISED"  # we do not know who you are (no valid login)
+FORBIDDEN = "FORBIDDEN"        # we know who you are, but your role may not do this
+TOO_LARGE = "TOO_LARGE"        # the message is bigger than MAX_MESSAGE_BYTES
+INTERNAL = "INTERNAL"          # the server failed; the request itself may be fine
+
+
+class RequestError(Exception):
+    """A request cannot be carried out, for a reason the client should be told.
+
+    Code at any depth can raise this with a code and a message. The server's
+    request handling turns it into one ERROR reply, so that formatting logic
+    is not repeated at every point where a request can be rejected.
+    """
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
 
 class ProtocolError(ValueError):
     """The bytes received are not a valid message.
