@@ -6,9 +6,6 @@ server. The server must already be running (start server.py first).
 
     python send.py
 
-Deliberately basic: there is almost no validation of what you type in
-before it is sent. Improving that is part of the assignment.
-
 If you run this by double-clicking the file (rather than from an
 already-open terminal), Windows closes the console the instant the
 script finishes — too fast to read the server's response. The pause at
@@ -17,7 +14,6 @@ running the script from a terminal you already have open does not need
 it.
 """
 
-import datetime  # used to stamp each new asset with today's date
 import socket    # provides the networking building blocks (sockets)
 
 # Import the shared constants/helpers used by every part of the prototype.
@@ -37,19 +33,16 @@ def prompt_for_asset() -> dict:
     location = input("  Location (e.g. Site A - IT Store): ").strip()
     status = input("  Status (e.g. In Use): ").strip()
 
-    # TODO (student): this does not check that the fields above were
-    # actually filled in, or that asset_id is not already in use.
-
-    # Build and return the asset as a dict, matching what the server and
-    # receive.py expect. date_registered is filled in automatically
-    # rather than asked for, using today's date in YYYY-MM-DD format.
+    # Build and return the asset as a dict. The server validates these fields
+    # and rejects anything invalid, because only the server can reliably check
+    # rules such as "this asset_id is not already in use". It also sets
+    # date_registered itself, so that is not sent from here.
     return {
         "asset_id": asset_id,
         "description": description,
         "category": category,
         "location": location,
         "status": status,
-        "date_registered": datetime.date.today().isoformat(),
     }
 
 
