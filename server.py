@@ -8,7 +8,6 @@ Listens for one connection at a time and understands two request actions:
 
 Deliberately basic — this is a starting point, not a finished system:
   - only one client is served at a time (no threading/concurrency)
-  - assets are stored in memory only and are lost when the server stops
   - there is almost no validation of incoming data
   - there is no authentication or encryption
 
@@ -16,15 +15,19 @@ Reviewing, extending, testing, and documenting these limitations is part
 of the assignment.
 """
 
+import os      # used to find the assets file next to this script
 import socket  # provides the networking building blocks (sockets)
 
 # Import the shared constants/helpers used by every part of the prototype.
-from common import HOST, PORT, receive_message, send_message
+from common import HOST, PORT, RequestError, receive_message, send_message
+from store import AssetStore
 
-assets = []  # in-memory "database" of registered assets (a plain list of dicts)
+# Stored next to this script, so the server finds the same data whichever
+# folder it is started from.
+ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.json")
 
 
-def handle_client(conn: socket.socket) -> None:
+def handle_client(conn: socket.socket, store: AssetStore) -> None:
     # `with conn:` guarantees the connection is closed automatically once
     # this block finishes, even if an error happens inside it.
     with conn:
@@ -45,17 +48,21 @@ def handle_client(conn: socket.socket) -> None:
             asset = request.get("asset")
 
             # TODO (student): validate `asset` properly before storing it
-            # (e.g. required fields present, sensible types, no duplicate
-            # asset_id) and decide what should happen if it is invalid.
-            assets.append(asset)  # add it to the in-memory list
+            # (e.g. required fields present, sensible types) and decide what
+            # should happen if it is invalid.
+            try:
+                stored = store.register(asset)  # saves it to the assets file too
+            except RequestError as exc:
+                send_message(conn, {"status": "ERROR", "code": exc.code, "detail": exc.detail})
+                return
 
             # Tell the client the registration succeeded, and echo back
             # what was stored so it can be confirmed on screen.
-            send_message(conn, {"status": "OK", "stored": asset})
+            send_message(conn, {"status": "OK", "stored": stored})
 
         elif action == "LIST":
             # Send back the full current list of assets as-is.
-            send_message(conn, {"status": "OK", "assets": assets})
+            send_message(conn, {"status": "OK", "assets": store.list_all()})
 
         else:
             # Any action we don't recognise is treated as an error.
@@ -63,6 +70,8 @@ def handle_client(conn: socket.socket) -> None:
 
 
 def main() -> None:
+    store = AssetStore(ASSETS_FILE)
+
     # Create a TCP/IPv4 socket. `with` closes it automatically on exit.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
         # Allow the port to be reused immediately after the server stops,
@@ -86,7 +95,7 @@ def main() -> None:
 
             # Handle this client's single request/response fully before
             # looping back round to accept() the next one.
-            handle_client(conn)
+            handle_client(conn, store)
 
 
 # Only run main() if this file is executed directly (not imported).
