@@ -11,7 +11,9 @@ about what counts as a valid message live here rather than being repeated
 """
 
 import json      # used to turn a Python dict into a JSON string, and back
+import os        # used to find the TLS files next to this script
 import socket    # only imported here for the type hints below (socket.socket)
+import ssl       # encrypts connections using TLS
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
@@ -27,6 +29,11 @@ MAX_MESSAGE_BYTES = 1024 * 1024
 HOST = "127.0.0.1"  # "localhost" - server and clients all run on this same machine
 PORT = 65432        # arbitrary unused port number; server and clients must agree on it
 
+# The TLS files, kept next to this script. See the README for how to create them.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+CERT_FILE = os.path.join(_HERE, "cert.pem")  # public: clients need a copy of this
+KEY_FILE = os.path.join(_HERE, "key.pem")    # secret: stays on the server only
+
 # Structured error codes, sent as the "code" field of an ERROR reply.
 #
 # WHY: "detail" is written for humans and may be reworded at any time. Programs
@@ -41,6 +48,34 @@ UNAUTHORISED = "UNAUTHORISED"  # we do not know who you are (no valid login)
 FORBIDDEN = "FORBIDDEN"        # we know who you are, but your role may not do this
 TOO_LARGE = "TOO_LARGE"        # the message is bigger than MAX_MESSAGE_BYTES
 INTERNAL = "INTERNAL"          # the server failed; the request itself may be fine
+
+
+def create_server_tls_context(cert_path: str, key_path: str) -> ssl.SSLContext:
+    """Build the TLS settings the server uses to prove its identity and encrypt."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    # Older protocol versions have known weaknesses, so refuse them.
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+    # The certificate is public. The private key proves that this server owns it.
+    context.load_cert_chain(cert_path, key_path)
+    return context
+
+
+def create_client_tls_context(cert_path: str) -> ssl.SSLContext:
+    """Build TLS settings that trust only the server certificate at `cert_path`.
+
+    WHY NOT TURN VERIFICATION OFF: encryption alone is not enough. Without checking
+    who is at the other end, an attacker could sit in the middle and encrypt
+    traffic to the client using their own key, reading every password. A
+    self-signed certificate has no authority vouching for it, so the client is
+    given a copy in advance and trusts exactly that one.
+    """
+    # PROTOCOL_TLS_CLIENT turns on certificate and host name checking by default.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_verify_locations(cert_path)
+    return context
 
 
 class RequestError(Exception):
