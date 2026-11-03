@@ -12,6 +12,14 @@ Replies always contain "status". Failures look like this:
 
 Each client is handled on its own thread, and assets are saved to a JSON file
 after every change, so they survive a crash or restart.
+
+For redundancy, a second copy can run as a backup:
+
+    python server.py            (the primary)
+    python server.py --backup   (the backup)
+
+Clients use the backup if the primary is down, and the two servers regularly copy
+new assets from each other.
 """
 
 import datetime   # the server stamps each new asset with today's date
@@ -21,6 +29,7 @@ import os         # os.replace() and os.fsync() make saving safe (see save_asset
 import socket     # provides the networking building blocks (sockets)
 import sys        # sys.exit() reports startup failures to the operating system
 import threading  # gives each client a thread, and provides the lock
+import time       # waits between syncs with the other server
 
 # Import the shared constants/helpers used by every part of the prototype.
 from common import (
@@ -31,6 +40,7 @@ from common import (
     TOO_LARGE,
     MessageTooLargeError,
     receive_message,
+    request_from,
     send_message,
 )
 
@@ -47,6 +57,9 @@ REQUIRED_FIELDS = ("asset_id", "description", "category", "location", "status")
 # How long a client may stay silent before the server gives up on it. Without
 # this, an idle client would hold a thread and a connection forever.
 CLIENT_TIMEOUT_SECONDS = 10
+
+# How often each server copies new assets from the other one.
+SYNC_INTERVAL_SECONDS = 2
 
 logger = logging.getLogger("asset_server")
 
@@ -174,6 +187,74 @@ def process_request(request: dict) -> dict:
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
+def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
+    """Add the other server's assets to this one's, returning how many changed.
+
+    Assets are only ever added, never changed or removed, so combining two lists
+    is simple: anything missing is copied across. The one awkward case is when each
+    server accepted a different asset with the same ID while they could not reach
+    each other. Then the backup gives way to the primary (`prefer_peer` is True on
+    the backup), so that the two always end up with identical data.
+    """
+    with assets_lock:
+        # A dict keeps its order and makes each asset quick to find by ID.
+        merged = {asset["asset_id"]: asset for asset in assets}
+
+        changed = 0
+        for peer_asset in peer_assets:
+            my_asset = merged.get(peer_asset["asset_id"])
+            if my_asset is None or (prefer_peer and my_asset != peer_asset):
+                merged[peer_asset["asset_id"]] = peer_asset
+                changed += 1
+
+        if changed:
+            previous = list(assets)
+            assets[:] = merged.values()
+            try:
+                save_assets()
+            except OSError:
+                # Keep memory and disk in agreement, as in register_asset(). The
+                # next sync will simply try again.
+                assets[:] = previous
+                raise
+
+        return changed
+
+
+def sync_with_peer(peer: tuple, prefer_peer: bool) -> None:
+    """Keep copying assets from the other server. Runs on its own thread forever.
+
+    WHY THE SERVER ASKS, RATHER THAN BEING TOLD: each server simply fetches the
+    other's list. A server that was down catches up by itself when it restarts, and
+    a server whose partner is down carries on without having to wait for it.
+
+    The trade-off is that the two can differ for a couple of seconds. This is called
+    eventual consistency. An asset is safe in the file of the server that accepted
+    it, and reaches the other server on the next sync after both are running.
+    """
+    peer_was_reachable = True
+
+    while True:
+        try:
+            reply = request_from(peer, {"action": "LIST"})
+            changed = merge_assets(reply.get("assets", []), prefer_peer)
+            if changed:
+                logger.info("Copied %s asset(s) from the other server", changed)
+            if not peer_was_reachable:
+                logger.info("The other server is back")
+            peer_was_reachable = True
+        except OSError as exc:
+            # Only report the change, not every failed attempt.
+            if peer_was_reachable:
+                logger.warning("Cannot reach the other server: %s", exc)
+            peer_was_reachable = False
+        except Exception:
+            # Anything else, such as an invalid reply, must not stop the syncing.
+            logger.exception("Could not sync with the other server")
+
+        time.sleep(SYNC_INTERVAL_SECONDS)
+
+
 def read_and_process(conn: socket.socket) -> dict:
     """Read one request and work out the reply. Connection failures are left to
     the caller, because no reply can be sent over a failed connection."""
@@ -249,7 +330,8 @@ def run_server(server_sock: socket.socket) -> None:
             # that failed while arriving. Neither stops the server.
             continue
 
-        logger.info("Connection from %s", addr)
+        # Debug level, because the other server connects every couple of seconds.
+        logger.debug("Connection from %s", addr)
 
         # A separate thread means a slow client does not delay the others.
         # daemon=True means these threads do not stop the program from exiting.
@@ -263,6 +345,7 @@ def main() -> None:
     # address and data file it uses.
     is_backup = "--backup" in sys.argv
     address = SERVERS[1] if is_backup else SERVERS[0]
+    peer = SERVERS[0] if is_backup else SERVERS[1]
     if is_backup:
         ASSETS_FILE = BACKUP_ASSETS_FILE
 
@@ -286,6 +369,10 @@ def main() -> None:
         role = "backup" if is_backup else "primary"
         logger.info("Asset Management %s server listening on %s:%s", role, *address)
         logger.info("Press Ctrl+C to stop.")
+
+        # daemon=True means this thread does not stop the program from exiting.
+        threading.Thread(target=sync_with_peer, args=(peer, is_backup), daemon=True).start()
+
         try:
             run_server(server_sock)
         except KeyboardInterrupt:

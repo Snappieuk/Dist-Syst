@@ -12,6 +12,8 @@ import json
 import os
 import socket
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -231,6 +233,42 @@ class SystemTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.load_assets()
 
+    # ---- Merging assets from the other server ----
+
+    def test_merge_copies_only_what_is_missing(self):
+        register(make_asset("AST-1"))
+        stored = common.send_request({"action": "LIST"})["assets"]
+
+        changed = server.merge_assets(stored + [make_asset("AST-2")], prefer_peer=False)
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(list_ids(), ["AST-1", "AST-2"])
+        self.assertEqual(len(server.load_assets()), 2)
+
+    def test_primary_keeps_its_own_copy_in_a_conflict(self):
+        server.merge_assets([make_asset(status="Primary")], prefer_peer=False)
+        changed = server.merge_assets([make_asset(status="Backup")], prefer_peer=False)
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(server.assets[0]["status"], "Primary")
+
+    def test_backup_gives_way_to_the_primary_in_a_conflict(self):
+        server.merge_assets([make_asset(status="Backup")], prefer_peer=False)
+        changed = server.merge_assets([make_asset(status="Primary")], prefer_peer=True)
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(server.assets[0]["status"], "Primary")
+        self.assertEqual(server.load_assets()[0]["status"], "Primary")
+
+    def test_failed_merge_leaves_nothing_behind(self):
+        blocker = server.ASSETS_FILE + ".tmp"
+        os.mkdir(blocker)
+        self.addCleanup(os.rmdir, blocker)
+
+        with self.assertRaises(OSError):
+            server.merge_assets([make_asset()], prefer_peer=False)
+        self.assertEqual(server.assets, [])
+
     # ---- Non-functional requirement: concurrency ----
 
     def run_at_once(self, assets: list) -> list:
@@ -273,6 +311,76 @@ class SystemTest(unittest.TestCase):
 
         self.assertEqual(sum(reply["status"] == "OK" for reply in replies), 1)
         self.assertEqual(list_ids(), ["RACE"])
+
+
+class BackupTest(unittest.TestCase):
+    """Runs the primary and backup as real, separate programs, and stops one."""
+
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.temp_path = temp_dir.name
+
+        self.primary = unused_address()
+        self.backup = unused_address()
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [self.primary, self.backup]
+
+    def start_server(self, *options) -> subprocess.Popen:
+        """Start server.py as its own process, using the test's addresses and files."""
+        code = (
+            "import common\n"
+            f"common.SERVERS = {common.SERVERS!r}\n"
+            "import server\n"
+            f"server.ASSETS_FILE = {os.path.join(self.temp_path, 'primary.json')!r}\n"
+            f"server.BACKUP_ASSETS_FILE = {os.path.join(self.temp_path, 'backup.json')!r}\n"
+            "server.main()\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", code, *options],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        return process
+
+    def wait_until_has(self, address: tuple, asset_id: str) -> None:
+        """Wait for the server at `address` to have an asset, failing after a while."""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                reply = common.request_from(address, {"action": "LIST"})
+                if asset_id in [asset["asset_id"] for asset in reply["assets"]]:
+                    return
+            except OSError:
+                pass  # the server may still be starting
+            time.sleep(0.2)
+        self.fail(f"{address} never received {asset_id}")
+
+    def test_system_keeps_working_when_the_primary_fails(self):
+        primary = self.start_server()
+        self.start_server("--backup")
+        time.sleep(1)  # give both a moment to start listening
+
+        # An asset registered with the primary reaches the backup.
+        self.assertEqual(register(make_asset("BEFORE"))["status"], "OK")
+        self.wait_until_has(self.backup, "BEFORE")
+
+        # With the primary gone, clients carry on using the backup, with nothing lost.
+        primary.kill()
+        primary.wait()
+        self.assertEqual(register(make_asset("DURING"))["status"], "OK")
+        self.assertEqual(sorted(list_ids()), ["BEFORE", "DURING"])
+
+        # The restarted primary catches up, and is used by clients again.
+        self.start_server()
+        self.wait_until_has(self.primary, "DURING")
+        self.wait_until_has(self.primary, "BEFORE")
+        self.assertEqual(register(make_asset("AFTER"))["status"], "OK")
+        self.wait_until_has(self.primary, "AFTER")
+        self.wait_until_has(self.backup, "AFTER")
 
 
 if __name__ == "__main__":
