@@ -1,0 +1,16 @@
+# Python bytecode, regenerated automatically
+__pycache__/
+*.pyc
+
+# Secrets: never commit these. A private key or password hash in git history
+# stays there even if the file is deleted in a later commit.
+key.pem
+users.json
+
+# TLS certificate, generated per deployment (see README)
+cert.pem
+
+# Runtime data and logs, created when the server runs
+assets.json
+*.tmp
+*.log
