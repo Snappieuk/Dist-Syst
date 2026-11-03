@@ -1,5 +1,5 @@
 """
-"Receive" client (STARTER CODE).
+Query client.
 
 Asks the server for the current list of registered assets and prints
 them. The server must already be running (start server.py first).
@@ -14,15 +14,15 @@ script from a terminal you already have open does not need it.
 """
 
 # The shared networking code used by every client.
-from client_lib import ServerUnavailableError, send_request
+from common import send_request
 
 
 def main() -> None:
-    # Ask the server for every asset it currently has stored. The client library
-    # handles timeouts and retries, so a clear message can be shown if it fails.
+    # Ask the server for every asset it currently has stored. If that fails,
+    # show a clear message rather than a traceback.
     try:
         response = send_request({"action": "LIST"})
-    except (ServerUnavailableError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"Could not retrieve the asset list: {exc}")
         return
 

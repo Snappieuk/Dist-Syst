@@ -1,5 +1,5 @@
 """
-"Send" client (STARTER CODE).
+Registration client.
 
 Prompts you for the details of one asset, then registers it with the
 server. The server must already be running (start server.py first).
@@ -15,7 +15,7 @@ it.
 """
 
 # The shared networking code used by every client.
-from client_lib import ServerUnavailableError, send_request
+from common import send_request
 
 
 def prompt_for_asset() -> dict:
@@ -48,11 +48,13 @@ def main() -> None:
     # Ask the user for the asset details.
     new_asset = prompt_for_asset()
 
-    # Send a REGISTER request containing the new asset. send_request() handles
-    # timeouts and retries, so a clear message can be shown if it still fails.
+    # Send a REGISTER request containing the new asset. If that fails, show a
+    # clear message rather than a traceback. There is no automatic retry: the
+    # user can simply run this again, and unique asset IDs stop the same asset
+    # being stored twice.
     try:
         response = send_request({"action": "REGISTER", "asset": new_asset})
-    except (ServerUnavailableError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"Could not register the asset: {exc}")
         return
 

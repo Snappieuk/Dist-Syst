@@ -3,8 +3,8 @@ Tkinter interface for the Asset Management System.
 
 WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
-seconds, especially when retrying, and running it on the main thread would freeze
-the window. So each request runs on a background thread. Tkinter is also not safe
+seconds, and running it on the main thread would freeze the window. So each
+request runs on a background thread. Tkinter is also not safe
 to call from other threads, so that thread puts its result on a queue, and the
 main thread checks the queue regularly and updates the window itself.
 """
@@ -14,7 +14,7 @@ import threading  # runs network requests without freezing the window
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from client_lib import send_request
+from common import send_request
 
 
 class AssetManagementApp:

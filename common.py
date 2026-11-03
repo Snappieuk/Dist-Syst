@@ -11,7 +11,7 @@ about what counts as a valid message live here rather than being repeated
 """
 
 import json      # used to turn a Python dict into a JSON string, and back
-import socket    # only imported here for the type hints below (socket.socket)
+import socket    # provides the networking building blocks (sockets)
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
@@ -26,6 +26,8 @@ MAX_MESSAGE_BYTES = 1024 * 1024
 
 HOST = "127.0.0.1"  # "localhost" - server and clients all run on this same machine
 PORT = 65432        # arbitrary unused port number; server and clients must agree on it
+
+TIMEOUT_SECONDS = 5  # how long a client waits for the server before giving up
 
 # Structured error codes, sent as the "code" field of an ERROR reply.
 #
@@ -166,3 +168,23 @@ def receive_message(sock: socket.socket) -> dict:
         raise ProtocolError("Message must be a JSON object")
 
     return message
+
+
+def send_request(request: dict) -> dict:
+    """Send one request to the server and return its reply. Used by every client.
+
+    Raises ConnectionError with a clear message if the server cannot be reached,
+    and ValueError if its reply is not a valid message.
+    """
+    try:
+        # create_connection() is used because it takes a timeout. Without one, a
+        # stalled server would leave the client waiting forever.
+        with socket.create_connection((HOST, PORT), timeout=TIMEOUT_SECONDS) as sock:
+            send_message(sock, request)
+            return receive_message(sock)
+    except OSError as exc:
+        # OSError covers a refused connection, a timeout and a dropped connection.
+        raise ConnectionError(
+            f"Could not reach the asset server at {HOST}:{PORT} ({exc}).\n"
+            "Check that server.py is running, then try again."
+        ) from exc
