@@ -15,7 +15,7 @@ it.
 """
 
 # The shared networking code used by every client.
-from client_lib import ServerUnavailableError, send_request
+from client_lib import LoginError, ServerUnavailableError, prompt_and_login, send_request
 
 
 def prompt_for_asset() -> dict:
@@ -45,13 +45,20 @@ def prompt_for_asset() -> dict:
 
 
 def main() -> None:
-    # Ask the user for the asset details before we even open a connection.
+    # Log in first, so nobody types out an asset only to find they cannot log in.
+    try:
+        token = prompt_and_login()
+    except (ServerUnavailableError, LoginError, ValueError) as exc:
+        print(f"Could not log in: {exc}")
+        return
+
+    # Ask the user for the asset details.
     new_asset = prompt_for_asset()
 
     # Send a REGISTER request containing the new asset. send_request() handles
     # timeouts and retries, so a clear message can be shown if it still fails.
     try:
-        response = send_request({"action": "REGISTER", "asset": new_asset})
+        response = send_request({"action": "REGISTER", "asset": new_asset}, token=token)
     except (ServerUnavailableError, ValueError) as exc:
         print(f"Could not register the asset: {exc}")
         return

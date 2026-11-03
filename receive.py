@@ -14,15 +14,16 @@ script from a terminal you already have open does not need it.
 """
 
 # The shared networking code used by every client.
-from client_lib import ServerUnavailableError, send_request
+from client_lib import LoginError, ServerUnavailableError, prompt_and_login, send_request
 
 
 def main() -> None:
-    # Ask the server for every asset it currently has stored. send_request()
+    # Ask the server for every asset it currently has stored. The client library
     # handles timeouts and retries, so a clear message can be shown if it fails.
     try:
-        response = send_request({"action": "LIST"})
-    except (ServerUnavailableError, ValueError) as exc:
+        token = prompt_and_login()
+        response = send_request({"action": "LIST"}, token=token)
+    except (ServerUnavailableError, LoginError, ValueError) as exc:
         print(f"Could not retrieve the asset list: {exc}")
         return
 
