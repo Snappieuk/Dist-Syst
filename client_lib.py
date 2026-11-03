@@ -8,11 +8,19 @@ than being copied into send.py, receive.py and gui.py.
 import getpass  # reads a password without showing it on the screen
 import random   # adds jitter to the retry delays (explained below)
 import socket   # provides the networking building blocks (sockets)
+import ssl      # encrypts each connection using TLS
 import time     # time.sleep() waits between retries
 import uuid     # generates a unique ID for each request
 from typing import Optional
 
-from common import HOST, PORT, receive_message, send_message
+from common import (
+    CERT_FILE,
+    HOST,
+    PORT,
+    create_client_tls_context,
+    receive_message,
+    send_message,
+)
 
 # How long to wait for the server before treating an attempt as failed. Without
 # a timeout, a server that has stalled would leave the client waiting forever.
@@ -37,11 +45,13 @@ class LoginError(Exception):
     """The server was reached, but it refused the username or password."""
 
 
-def _attempt(request: dict) -> dict:
+def _attempt(request: dict, tls_context: ssl.SSLContext) -> dict:
     """Make one attempt: connect, send the request and wait for the reply."""
-    with socket.create_connection((HOST, PORT), timeout=TIMEOUT_SECONDS) as sock:
-        send_message(sock, request)
-        return receive_message(sock)
+    with socket.create_connection((HOST, PORT), timeout=TIMEOUT_SECONDS) as raw_sock:
+        # server_hostname is checked against the names listed in the certificate.
+        with tls_context.wrap_socket(raw_sock, server_hostname=HOST) as sock:
+            send_message(sock, request)
+            return receive_message(sock)
 
 
 def send_request(request: dict, token: Optional[str] = None) -> dict:
@@ -71,10 +81,26 @@ def send_request(request: dict, token: Optional[str] = None) -> dict:
     if token is not None:
         request["token"] = token
 
+    try:
+        tls_context = create_client_tls_context(CERT_FILE)
+    except OSError as exc:  # the file is missing, or is not a valid certificate
+        raise ServerUnavailableError(
+            f"Could not load the server's certificate from {CERT_FILE} ({exc}).\n"
+            "See the README for how to set up cert.pem."
+        ) from exc
+
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            return _attempt(request)
+            return _attempt(request, tls_context)
+        except ssl.SSLCertVerificationError as exc:
+            # This must not be retried: a retry would not change the answer, and
+            # the server may be an impostor. It is caught before OSError below
+            # because it is a kind of OSError.
+            raise ServerUnavailableError(
+                f"The server at {HOST}:{PORT} could not be verified ({exc.verify_message}).\n"
+                "Check that cert.pem is the server's certificate and lists this address."
+            ) from exc
         except OSError as exc:  # includes ConnectionError and socket.timeout
             last_error = exc
 
