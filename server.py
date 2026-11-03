@@ -52,6 +52,11 @@ REQUIRED_ASSET_FIELDS = ("asset_id", "description", "category", "location", "sta
 # How often the accept loop wakes up. See the comment in run_server().
 ACCEPT_POLL_SECONDS = 1.0
 
+# How long a client may stay silent before the server gives up on it. This is
+# longer than the client's own timeout, so that a healthy client always gives up
+# and retries first.
+CLIENT_TIMEOUT_SECONDS = 10
+
 # Actions that change data. Repeats of these must not be carried out twice.
 STATE_CHANGING_ACTIONS = ("REGISTER",)
 
@@ -170,6 +175,11 @@ def _read_and_process(conn: socket.socket, addr: tuple, context: ServerContext) 
         # Covers invalid UTF-8, invalid JSON and JSON that is not an object.
         # The connection itself still works, so the client can be told.
         return error_reply(BAD_REQUEST, f"Invalid message: {exc}")
+    except socket.timeout:
+        # An idle client. Dropping it frees this thread for good. The check must
+        # come before OSError below, because socket.timeout is a kind of OSError.
+        logger.warning("Client %s timed out before sending a full request", addr)
+        return None
     except OSError as exc:
         # The connection failed, for example the client crashed or disconnected
         # part-way through. Nobody is left to read a reply, and attempting one
@@ -207,6 +217,15 @@ def handle_client(conn: socket.socket, addr: tuple, context: ServerContext) -> N
         # `with conn:` guarantees the connection is closed automatically once
         # this block finishes, even if an error happens inside it.
         with conn:
+            # WHY: threads stop an idle client from blocking other clients, but
+            # without a timeout it would still hold a thread and a socket forever,
+            # and enough of them would exhaust the server.
+            #
+            # This limits each network operation, not the whole conversation, so
+            # a client sending one byte at a time can still hold a thread for
+            # longer. That is a known limitation.
+            conn.settimeout(CLIENT_TIMEOUT_SECONDS)
+
             try:
                 reply = _read_and_process(conn, addr, context)
             except Exception:
