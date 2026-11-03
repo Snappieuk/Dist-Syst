@@ -3,6 +3,7 @@ Asset Management System server.
 
 Each connection carries one request and one reply:
 
+    {"action": "LOGIN", "username": ..., "password": ...} -> replies with a token
     {"action": "REGISTER", "asset": {...}}   -> validates and stores the asset
     {"action": "LIST"}                       -> replies with every stored asset
 
@@ -28,12 +29,14 @@ import threading  # gives each connected client its own thread
 from typing import Optional
 
 # Import the shared constants/helpers used by every part of the prototype.
+from auth import USERS_FILE, SessionManager, UserStore
 from common import (
     BAD_REQUEST,
     HOST,
     INTERNAL,
     PORT,
     TOO_LARGE,
+    UNAUTHORISED,
     MessageTooLargeError,
     RequestError,
     receive_message,
@@ -70,9 +73,12 @@ logger = logging.getLogger("asset_server")
 class ServerContext:
     """The shared state each request needs, passed around as one object."""
 
-    def __init__(self, store: AssetStore, request_cache: RequestCache) -> None:
+    def __init__(self, store: AssetStore, request_cache: RequestCache,
+                 users: UserStore, sessions: SessionManager) -> None:
         self.store = store
         self.request_cache = request_cache
+        self.users = users
+        self.sessions = sessions
 
 
 def error_reply(code: str, detail: str) -> dict:
@@ -142,12 +148,32 @@ def _execute(request: dict, context: ServerContext) -> dict:
         return error_reply(exc.code, exc.detail)
 
 
+def _login(request: dict, context: ServerContext) -> dict:
+    """Check a username and password, and start a session if they are correct."""
+    username = request.get("username")
+    password = request.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return error_reply(BAD_REQUEST, "'username' and 'password' must be strings")
+
+    role = context.users.authenticate(username, password)
+    if role is None:
+        # The same message whichever part was wrong, so an attacker cannot use
+        # this reply to find out which usernames exist.
+        return error_reply(UNAUTHORISED, "Invalid username or password")
+
+    token = context.sessions.create(username, role)
+    return {"status": "OK", "token": token, "username": username, "role": role}
+
+
 def process_request(request: dict, context: ServerContext) -> dict:
     """Carry out one decoded request and return the reply.
 
     This function does no networking, so the server's rules can be unit tested
     without opening a socket.
     """
+    if request.get("action") == "LOGIN":
+        return _login(request, context)
+
     # Read-only actions are harmless to repeat, and caching their potentially
     # large replies would waste memory, so only state changes use the cache.
     if request.get("action") not in STATE_CHANGING_ACTIONS:
@@ -320,6 +346,13 @@ def main() -> None:
         sys.exit(1)
 
     try:
+        users = UserStore(USERS_FILE)
+    except (OSError, ValueError) as exc:
+        logger.error("Could not load user accounts: %s", exc)
+        logger.error("Create one with: python create_user.py <username> admin")
+        sys.exit(1)
+
+    try:
         server_sock = create_listening_socket(HOST, PORT)
     except OSError as exc:
         logger.error("Could not listen on %s:%s: %s", HOST, PORT, exc)
@@ -330,7 +363,7 @@ def main() -> None:
         logger.info("Asset Management server listening on %s:%s", HOST, PORT)
         logger.info("Press Ctrl+C to stop.")
         try:
-            run_server(server_sock, ServerContext(store, RequestCache()))
+            run_server(server_sock, ServerContext(store, RequestCache(), users, SessionManager()))
         except KeyboardInterrupt:
             logger.info("Server stopped.")
 
