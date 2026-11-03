@@ -23,6 +23,7 @@ import datetime   # the server stamps each new asset with today's date
 import logging    # records errors without stopping the server
 import os         # used to find the assets file next to this script
 import socket     # provides the networking building blocks (sockets)
+import sys        # sys.exit() reports startup failures to the operating system
 import threading  # gives each connected client its own thread
 from typing import Optional
 
@@ -189,6 +190,31 @@ def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
         logger.exception("Unexpected error cleaning up client %s", addr)
 
 
+def create_listening_socket(host: str, port: int) -> socket.socket:
+    """Create the TCP/IPv4 socket that waits for new connections."""
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    try:
+        # The goal is to restart quickly without the port being "in use", while
+        # still getting an error if another server really is running. The
+        # option for this differs by platform: on Windows, SO_REUSEADDR would
+        # let two servers share a port without any error, and clients would
+        # reach one or the other unpredictably. SO_EXCLUSIVEADDRUSE prevents
+        # that. Elsewhere, SO_REUSEADDR does not allow two active listeners.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        server_sock.bind((host, port))
+        server_sock.listen()
+    except OSError:
+        server_sock.close()
+        raise
+
+    return server_sock
+
+
 def run_server(server_sock: socket.socket, store: AssetStore) -> None:
     """Accept clients until interrupted, giving each one its own thread."""
     # accept() normally waits forever, and on Windows a thread stuck in it does
@@ -231,19 +257,23 @@ def main() -> None:
         format="%(asctime)s %(levelname)s [%(threadName)s] %(message)s",
     )
 
-    store = AssetStore(ASSETS_FILE)
+    # Startup failures end the program, because the server cannot work without
+    # its data or its port. The operator gets a clear message, not a traceback.
+    try:
+        store = AssetStore(ASSETS_FILE)
+    except (OSError, ValueError) as exc:
+        logger.error("Could not load %s: %s", ASSETS_FILE, exc)
+        logger.error("Fix or move that file, then start the server again.")
+        sys.exit(1)
 
-    # Create a TCP/IPv4 socket. `with` closes it automatically on exit.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
-        # Allow the port to be reused immediately after the server stops,
-        # instead of Windows/Linux holding on to it for a short while.
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock = create_listening_socket(HOST, PORT)
+    except OSError as exc:
+        logger.error("Could not listen on %s:%s: %s", HOST, PORT, exc)
+        logger.error("Another copy of the server may already be running.")
+        sys.exit(1)
 
-        # Bind the socket to our chosen host/port, then start listening
-        # for incoming connections (this does not accept any yet).
-        server_sock.bind((HOST, PORT))
-        server_sock.listen()
-
+    with server_sock:
         logger.info("Asset Management server listening on %s:%s", HOST, PORT)
         logger.info("Press Ctrl+C to stop.")
         try:
