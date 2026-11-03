@@ -29,9 +29,10 @@ import threading  # gives each connected client its own thread
 from typing import Optional
 
 # Import the shared constants/helpers used by every part of the prototype.
-from auth import USERS_FILE, SessionManager, UserStore
+from auth import ROLE_ADMIN, ROLE_VIEWER, USERS_FILE, SessionManager, UserStore
 from common import (
     BAD_REQUEST,
+    FORBIDDEN,
     HOST,
     INTERNAL,
     PORT,
@@ -59,6 +60,13 @@ ACCEPT_POLL_SECONDS = 1.0
 # longer than the client's own timeout, so that a healthy client always gives up
 # and retries first.
 CLIENT_TIMEOUT_SECONDS = 10
+
+# Which roles may use each action. Keeping the rules in one table makes them easy
+# to read and check. Any action missing from it is rejected.
+ACTION_ROLES = {
+    "LIST": (ROLE_ADMIN, ROLE_VIEWER),
+    "REGISTER": (ROLE_ADMIN,),
+}
 
 # Actions that change data. Repeats of these must not be carried out twice.
 STATE_CHANGING_ACTIONS = ("REGISTER",)
@@ -171,12 +179,28 @@ def process_request(request: dict, context: ServerContext) -> dict:
     This function does no networking, so the server's rules can be unit tested
     without opening a socket.
     """
-    if request.get("action") == "LOGIN":
+    action = request.get("action")
+
+    # LOGIN is the one action that works without a token, because it is how a
+    # client gets one.
+    if action == "LOGIN":
         return _login(request, context)
+
+    # Authentication: do we know who this is? The check is made here, on the
+    # server, because a client program could be modified to skip any check.
+    session = context.sessions.lookup(request.get("token"))
+    if session is None:
+        return error_reply(UNAUTHORISED, "Please log in: the session token is missing or has expired")
+
+    # Authorisation: is this person allowed to do this?
+    if action not in ACTION_ROLES:
+        return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
+    if session.role not in ACTION_ROLES[action]:
+        return error_reply(FORBIDDEN, f"The {session.role} role cannot use {action}")
 
     # Read-only actions are harmless to repeat, and caching their potentially
     # large replies would waste memory, so only state changes use the cache.
-    if request.get("action") not in STATE_CHANGING_ACTIONS:
+    if action not in STATE_CHANGING_ACTIONS:
         return _execute(request, context)
 
     # Required rather than optional: without an ID, the server could not keep
@@ -188,7 +212,11 @@ def process_request(request: dict, context: ServerContext) -> dict:
             f"'request_id' must be a string of 1 to {MAX_REQUEST_ID_LENGTH} characters",
         )
 
-    return context.request_cache.run_once(request_id, lambda: _execute(request, context))
+    # The key includes the username so that one user can never receive the reply
+    # to another user's request by sending the same ID.
+    return context.request_cache.run_once(
+        (session.username, request_id), lambda: _execute(request, context)
+    )
 
 
 def _read_and_process(conn: socket.socket, addr: tuple, context: ServerContext) -> Optional[dict]:

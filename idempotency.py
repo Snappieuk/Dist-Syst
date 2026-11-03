@@ -15,87 +15,44 @@ client sees DUPLICATE_ID instead of the original success reply.
 """
 
 import threading
-import time
 from collections import OrderedDict
-from typing import Callable
+from typing import Callable, Hashable
 
-# The cache needs limits, or a long-running server would slowly run out of memory.
-# Ten minutes is far longer than any client keeps retrying a request.
-DEFAULT_MAX_ENTRIES = 10000
-DEFAULT_TTL_SECONDS = 600
-
-# How long a repeat waits for the original request to finish.
-IN_FLIGHT_WAIT_SECONDS = 30
-
-
-class _Entry:
-    """One request, which is either still running or finished."""
-
-    def __init__(self) -> None:
-        self.created = time.monotonic()
-        self.done = threading.Event()  # set once the original attempt has finished
-        self.reply = None              # stays None if the original attempt failed
+# The cache needs a limit, or a long-running server would slowly run out of memory.
+# Clients only retry for a few seconds, so old entries are soon of no use.
+MAX_ENTRIES = 10000
 
 
 class RequestCache:
-    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES,
-                 ttl_seconds: float = DEFAULT_TTL_SECONDS) -> None:
+    def __init__(self, max_entries: int = MAX_ENTRIES) -> None:
         self._max_entries = max_entries
-        self._ttl_seconds = ttl_seconds
+
+        # An OrderedDict remembers insertion order, so the oldest is easy to find.
+        self._replies = OrderedDict()
         self._lock = threading.Lock()
 
-        # Ordered oldest first, so expired entries are always found at the front.
-        self._entries = OrderedDict()
+    def run_once(self, key: Hashable, operation: Callable[[], dict]) -> dict:
+        """Return the saved reply for `key`, or run `operation` and save its reply.
 
-    def _evict(self) -> None:
-        """Drop expired entries, then the oldest if still full. Caller holds the lock."""
-        now = time.monotonic()
-        while self._entries:
-            oldest = next(iter(self._entries.values()))
-            if (now - oldest.created <= self._ttl_seconds
-                    and len(self._entries) <= self._max_entries):
-                break
-            self._entries.popitem(last=False)
+        The lock is held while the operation runs. WHY: a client can time out and
+        retry while its first attempt is still running. Holding the lock makes the
+        repeat wait, and then it finds the finished reply. Requests that change
+        data already happen one at a time because of the store's lock, so this
+        adds almost no extra waiting and keeps the code simple.
 
-    def run_once(self, key: str, operation: Callable[[], dict]) -> dict:
-        """Return the reply for `key`, calling `operation` only if it is new.
-
-        Rejections such as DUPLICATE_ID are ordinary replies, so they are cached.
-        If `operation` raises, the entry is removed so a retry can try again. A
-        temporary failure, such as a full disk, must not be remembered forever.
+        Rejections such as DUPLICATE_ID are ordinary replies, so they are saved.
+        If `operation` raises an exception, nothing is saved, so that a retry can
+        try again after a temporary failure such as a full disk.
         """
-        while True:
-            with self._lock:
-                entry = self._entries.get(key)
-                is_new = entry is None
-                if is_new:
-                    entry = _Entry()
-                    self._entries[key] = entry
-                    self._evict()
+        with self._lock:
+            if key in self._replies:
+                return self._replies[key]
 
-            if is_new:
-                # The lock is released while the operation runs, so a slow save
-                # for one request does not hold up unrelated requests here.
-                try:
-                    entry.reply = operation()
-                    return entry.reply
-                except BaseException:
-                    with self._lock:
-                        if self._entries.get(key) is entry:
-                            del self._entries[key]
-                    raise
-                finally:
-                    # Always wake any waiting repeats, even after a failure.
-                    entry.done.set()
+            reply = operation()
+            self._replies[key] = reply
 
-            # WHY WAIT: a client can time out and retry while its first attempt is
-            # still running. Checking only for a finished reply would miss that
-            # case and carry out the request a second time.
-            if not entry.done.wait(IN_FLIGHT_WAIT_SECONDS):
-                raise TimeoutError(f"Timed out waiting for the original request {key!r}")
+            # Forget the oldest reply once the cache is full.
+            if len(self._replies) > self._max_entries:
+                self._replies.popitem(last=False)
 
-            if entry.reply is not None:
-                return entry.reply
-
-            # The original attempt failed and removed its entry, so go round the
-            # loop again. This thread, or another repeat, will now carry it out.
+            return reply
