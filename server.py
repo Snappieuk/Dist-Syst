@@ -1,13 +1,22 @@
 """
 Asset Management System server.
 
-Listens for connections and understands two request actions:
+Each connection carries one request and one reply:
 
-    {"action": "REGISTER", "asset": {...}}   -> stores the asset, replies with a status
+    {"action": "REGISTER", "asset": {...}}   -> validates and stores the asset
     {"action": "LIST"}                       -> replies with every stored asset
 
-Each client has its own thread, so a slow client does not delay the others.
-Assets are saved to a file (see store.py).
+Replies always contain "status". Failures look like this:
+
+    {"status": "ERROR", "code": "DUPLICATE_ID", "detail": "..."}
+
+Design goals of this file:
+  - Concurrency: each client has its own thread, so a slow client does not
+    delay the others.
+  - Fault isolation: nothing a client sends, and no failure while handling a
+    client, can stop the server. In a distributed system clients fail
+    independently, so one client's failure must stay that client's problem.
+  - Persistence: see store.py.
 """
 
 import datetime   # the server stamps each new asset with today's date
@@ -15,12 +24,16 @@ import logging    # records errors without stopping the server
 import os         # used to find the assets file next to this script
 import socket     # provides the networking building blocks (sockets)
 import threading  # gives each connected client its own thread
+from typing import Optional
 
 # Import the shared constants/helpers used by every part of the prototype.
 from common import (
     BAD_REQUEST,
     HOST,
+    INTERNAL,
     PORT,
+    TOO_LARGE,
+    MessageTooLargeError,
     RequestError,
     receive_message,
     send_message,
@@ -111,20 +124,69 @@ def process_request(request: dict, store: AssetStore) -> dict:
         return error_reply(exc.code, exc.detail)
 
 
-def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
-    # `with conn:` guarantees the connection is closed automatically once
-    # this block finishes, even if an error happens inside it.
-    with conn:
-        try:
-            # Wait for, and decode, one complete message from this client.
-            request = receive_message(conn)
-        except (ConnectionError, ValueError) as exc:
-            # ValueError covers JSON that doesn't parse; ConnectionError
-            # covers a client that disconnects mid-message.
-            send_message(conn, error_reply(BAD_REQUEST, str(exc)))
-            return  # nothing more we can do with this connection
+def _read_and_process(conn: socket.socket, addr: tuple, store: AssetStore) -> Optional[dict]:
+    """Read one request and return the reply, or None if no reply can be sent."""
+    try:
+        request = receive_message(conn)
+    except MessageTooLargeError as exc:
+        return error_reply(TOO_LARGE, str(exc))
+    except ValueError as exc:
+        # Covers invalid UTF-8, invalid JSON and JSON that is not an object.
+        # The connection itself still works, so the client can be told.
+        return error_reply(BAD_REQUEST, f"Invalid message: {exc}")
+    except OSError as exc:
+        # The connection failed, for example the client crashed or disconnected
+        # part-way through. Nobody is left to read a reply, and attempting one
+        # would simply raise another error, which is what used to crash the
+        # server. All that remains is to record it. (ConnectionError and socket
+        # timeouts are both kinds of OSError.)
+        logger.warning("Client %s disconnected before sending a request: %s", addr, exc)
+        return None
 
-        send_message(conn, process_request(request, store))
+    return process_request(request, store)
+
+
+def _send_reply(conn: socket.socket, addr: tuple, reply: dict) -> None:
+    """Send a reply, accepting that the client may no longer be there."""
+    try:
+        try:
+            send_message(conn, reply)
+        except MessageTooLargeError as exc:
+            # This happens if a reply, such as a very long LIST, exceeds the cap.
+            send_message(conn, error_reply(TOO_LARGE, str(exc)))
+    except OSError as exc:
+        # The work is already done, and only the confirmation failed. This is
+        # the classic distributed systems ambiguity: the client cannot tell
+        # whether its request succeeded.
+        logger.warning("Could not send reply to %s: %s", addr, exc)
+
+
+def handle_client(conn: socket.socket, addr: tuple, store: AssetStore) -> None:
+    """Serve one client from start to finish. Runs on that client's own thread.
+
+    This is the fault isolation boundary: no exception may escape it. On a
+    separate thread an escaped exception would not stop the server, but it would
+    leave no useful record and the client no reply, so failures are handled here.
+    """
+    try:
+        # `with conn:` guarantees the connection is closed automatically once
+        # this block finishes, even if an error happens inside it.
+        with conn:
+            try:
+                reply = _read_and_process(conn, addr, store)
+            except Exception:
+                # Catching everything is deliberate at this one boundary, as
+                # this is a bug or a failure such as a full disk. Log the full
+                # traceback for the operator, but tell the client only that it
+                # failed: internal details can reveal information to attackers.
+                logger.exception("Unexpected error handling client %s", addr)
+                reply = error_reply(INTERNAL, "The server could not complete the request")
+
+            if reply is not None:
+                _send_reply(conn, addr, reply)
+    except Exception:
+        # Last resort, for example if closing the connection fails.
+        logger.exception("Unexpected error cleaning up client %s", addr)
 
 
 def run_server(server_sock: socket.socket, store: AssetStore) -> None:
