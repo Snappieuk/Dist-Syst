@@ -15,64 +15,33 @@ import socket    # provides the networking building blocks (sockets)
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
-# The largest message either side will send or accept (1 MiB).
+# The largest message either side will send or accept (10 MiB). This is enough
+# for a LIST reply with tens of thousands of assets.
 #
 # WHY: the 4-byte header can claim up to 4 GB. The header comes from another
 # machine, so it must be treated as untrusted input. Without a cap, a faulty
-# or malicious client could claim 4 GB and make a server thread try to
-# collect that much data, which is a cheap denial-of-service attack. Checking
-# the claim BEFORE reading the payload means the attacker gets no memory at all.
-MAX_MESSAGE_BYTES = 1024 * 1024
+# client could claim 4 GB and make a server thread try to collect that much data.
+# Checking the claim BEFORE reading the payload means no memory is used for it.
+MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 
 HOST = "127.0.0.1"  # "localhost" - server and clients all run on this same machine
 PORT = 65432        # arbitrary unused port number; server and clients must agree on it
 
 TIMEOUT_SECONDS = 5  # how long a client waits for the server before giving up
 
-# Structured error codes, sent as the "code" field of an ERROR reply.
-#
-# WHY: "detail" is written for humans and may be reworded at any time. Programs
-# need something stable to make decisions on, for example a client can treat
-# DUPLICATE_ID differently from INTERNAL without parsing English sentences.
-# In a distributed system the client and server may be upgraded at different
-# times, so this contract has to stay stable.
+# Error codes, sent as the "code" field of an ERROR reply. "detail" is written
+# for people and may be reworded, so programs should act on the code instead.
 BAD_REQUEST = "BAD_REQUEST"    # the request is malformed or fails validation
-NOT_FOUND = "NOT_FOUND"        # the request names something that does not exist
 DUPLICATE_ID = "DUPLICATE_ID"  # the asset_id is already in use
-UNAUTHORISED = "UNAUTHORISED"  # we do not know who you are (no valid login)
-FORBIDDEN = "FORBIDDEN"        # we know who you are, but your role may not do this
 TOO_LARGE = "TOO_LARGE"        # the message is bigger than MAX_MESSAGE_BYTES
 INTERNAL = "INTERNAL"          # the server failed; the request itself may be fine
 
 
-class RequestError(Exception):
-    """A request cannot be carried out, for a reason the client should be told.
-
-    Code at any depth can raise this with a code and a message. The server's
-    request handling turns it into one ERROR reply, so that formatting logic
-    is not repeated at every point where a request can be rejected.
-    """
-
-    def __init__(self, code: str, detail: str) -> None:
-        super().__init__(detail)
-        self.code = code
-        self.detail = detail
-
-
-class ProtocolError(ValueError):
-    """The bytes received are not a valid message.
-
-    Subclassing ValueError keeps existing `except ValueError` handlers working
-    and matches what json.loads() and bytes.decode() raise for bad data, so
-    callers can treat every kind of malformed message in the same way.
-    """
-
-
-class MessageTooLargeError(ProtocolError):
+class MessageTooLargeError(ValueError):
     """A message is bigger than MAX_MESSAGE_BYTES.
 
-    This is a separate type so the server can reply TOO_LARGE rather than the
-    more general BAD_REQUEST.
+    It has its own type so the server can reply TOO_LARGE. It is a ValueError
+    because that is what the other kinds of invalid message raise too.
     """
 
 
@@ -131,12 +100,9 @@ def _recv_exact(sock: socket.socket, num_bytes: int) -> bytes:
 def receive_message(sock: socket.socket) -> dict:
     """Read one length-prefixed JSON message from `sock`.
 
-    Raises:
-        OSError (including ConnectionError): the connection failed, so no
-            reply can be delivered.
-        MessageTooLargeError: the header claims more than MAX_MESSAGE_BYTES.
-        ValueError (including ProtocolError): the connection is working but
-            the data is invalid, so the sender can be told what was wrong.
+    Raises OSError if the connection fails, so no reply can be delivered. Raises
+    ValueError if the connection works but the data is invalid, so the sender can
+    be told what was wrong.
     """
     # First, read exactly the 4-byte header written by send_message().
     header = _recv_exact(sock, HEADER_LENGTH_BYTES)
@@ -155,17 +121,12 @@ def receive_message(sock: socket.socket) -> dict:
     payload = _recv_exact(sock, length)
 
     # Turn the raw bytes back into text, then parse the JSON.
-    try:
-        message = json.loads(payload.decode("utf-8"))
-    except RecursionError as exc:
-        # Very deeply nested JSON such as [[[[... can fit inside the size limit
-        # but exhaust the parser's stack. That is bad input, not a server fault.
-        raise ProtocolError("Message is too deeply nested") from exc
+    message = json.loads(payload.decode("utf-8"))
 
     # `[1, 2]` and `"hello"` are valid JSON but not valid messages. Checking
     # here means every caller can safely assume it has a dict and call .get().
     if not isinstance(message, dict):
-        raise ProtocolError("Message must be a JSON object")
+        raise ValueError("Message must be a JSON object")
 
     return message
 
