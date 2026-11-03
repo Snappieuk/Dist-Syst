@@ -10,6 +10,8 @@ import hmac     # compare_digest compares secrets without leaking timing informa
 import json     # users are stored as JSON, like the assets
 import os       # os.replace() gives an atomic save, as in store.py
 import secrets  # cryptographically strong randomness, unlike the random module
+import threading  # protects the sessions shared between client threads
+import time     # sessions expire after a fixed time
 from typing import Dict, Optional
 
 ROLE_ADMIN = "admin"
@@ -27,6 +29,11 @@ USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.jso
 PBKDF2_ITERATIONS = 600000
 
 SALT_BYTES = 16
+
+# 32 random bytes cannot realistically be guessed.
+TOKEN_BYTES = 32
+
+SESSION_TTL_SECONDS = 3600  # one hour
 
 
 def hash_password(password: str, salt: Optional[bytes] = None,
@@ -108,3 +115,66 @@ class UserStore:
             return None
 
         return user["role"] if verify_password(password, user) else None
+
+
+class Session:
+    """Who a token belongs to, and when it stops being valid."""
+
+    def __init__(self, username: str, role: str, expires: float) -> None:
+        self.username = username
+        self.role = role
+        self.expires = expires
+
+
+class SessionManager:
+    """Issues and checks the tokens clients use after logging in.
+
+    WHY TOKENS: each request uses a new connection, so the server needs a way to
+    recognise a user between them. Sending the password every time would mean
+    keeping it in client memory and running the slow hash on every request.
+
+    LIMITATION: sessions are held in memory, so users must log in again after a
+    server restart. This also means tokens are never written to disk.
+    """
+
+    def __init__(self, ttl_seconds: float = SESSION_TTL_SECONDS) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._sessions: Dict[str, Session] = {}
+
+        # Client threads create and read sessions at the same time.
+        self._lock = threading.Lock()
+
+    def create(self, username: str, role: str) -> str:
+        """Start a session and return its token."""
+        # secrets, not random: a token acts as a temporary password, so it must
+        # be impossible to guess. The random module's output can be predicted.
+        token = secrets.token_hex(TOKEN_BYTES)
+        now = time.monotonic()
+
+        with self._lock:
+            # Clear out old sessions so memory use cannot grow without limit.
+            for old_token in [t for t, s in self._sessions.items() if s.expires <= now]:
+                del self._sessions[old_token]
+
+            self._sessions[token] = Session(username, role, now + self._ttl_seconds)
+
+        return token
+
+    def lookup(self, token: object) -> Optional[Session]:
+        """Return the session for a token, or None if it is not valid now."""
+        # The token comes from the network, so it could be any JSON type, and
+        # some of those cannot be used as dictionary keys.
+        if not isinstance(token, str):
+            return None
+
+        with self._lock:
+            session = self._sessions.get(token)
+            if session is None:
+                return None
+
+            # A limited lifetime reduces the damage if a token is ever stolen.
+            if session.expires <= time.monotonic():
+                del self._sessions[token]
+                return None
+
+            return session
