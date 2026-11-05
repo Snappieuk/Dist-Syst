@@ -4,10 +4,10 @@ First-time setup and full reset of the Asset Management System.
     python setup.py
     python setup.py --reset
 
-Setup creates the secret the programs share, and asks you to choose the web password.
+Setup creates the secret the programs share, and asks you to create the first web account.
 start.py runs it by itself the first time, so you rarely need to run it directly.
 
-Reset permanently deletes every asset, password and secret on this machine, leaving the
+Reset permanently deletes every asset, account and secret on this machine, leaving the
 system as if it had just been downloaded. It doesn't touch the code or the git history.
 """
 
@@ -21,8 +21,8 @@ import common
 import server
 import web
 
-# How many times to ask for a password before giving up.
-PASSWORD_ATTEMPTS = 3
+# How many times to ask for the first account's details before giving up.
+ACCOUNT_ATTEMPTS = 3
 
 # What must be typed to confirm a reset. Having to type a word rather than just pressing y
 # makes it much harder to delete everything by accident.
@@ -52,22 +52,26 @@ def can_ask_questions() -> bool:
     return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(wintypes.DWORD())))
 
 
+def has_account() -> bool:
+    """Check for an account, or an older password that web.py will convert to one."""
+    return os.path.exists(web.USERS_FILE) or os.path.exists(web.PASSWORD_FILE)
+
+
 def is_set_up() -> bool:
-    has_account = os.path.exists(web.USERS_FILE) or os.path.exists(web.PASSWORD_FILE)
-    return os.path.exists(common.SECRET_FILE) and has_account
+    return os.path.exists(common.SECRET_FILE) and has_account()
 
 
 def run_setup() -> bool:
     """Create whatever is missing, returning whether the system is now set up."""
     common.shared_secret()
 
-    if os.path.exists(web.USERS_FILE) or os.path.exists(web.PASSWORD_FILE):
+    if has_account():
         return True
 
-    print("Choose a password for the web page.")
-    print(f"It must be at least {web.MINIMUM_PASSWORD_LENGTH} characters, and won't show as you type.\n")
-    for _ in range(PASSWORD_ATTEMPTS):
-        if web.set_password_from_prompt():
+    print("Create your account for the web page.")
+    print(f"The password must be at least {web.MINIMUM_PASSWORD_LENGTH} characters, and won't show as you type.\n")
+    for _ in range(ACCOUNT_ATTEMPTS):
+        if web.create_account_from_prompt():
             return True
     return False
 
@@ -129,7 +133,7 @@ def reset() -> bool:
     for path in existing:
         print(f"  {os.path.basename(path)}")
     assets = max(count_assets(server.ASSETS_FILE), count_assets(backup.ASSETS_FILE))
-    print(f"\nThat includes {assets} asset(s), the web password and the shared secret.")
+    print(f"\nThat includes {assets} asset(s), every web account and the shared secret.")
     print("It can't be undone.")
 
     if input(f"Type {RESET_WORD} to continue: ").strip() != RESET_WORD:
@@ -162,7 +166,7 @@ def main() -> None:
 
     if is_set_up():
         print("Already set up. Start the system with: python start.py")
-        print("To change the web password, run: python web.py --set-password")
+        print("To change an account's password, run: python web.py --set-password")
         return
 
     try:

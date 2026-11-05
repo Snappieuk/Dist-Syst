@@ -136,12 +136,6 @@ class PasswordTest(unittest.TestCase):
         self.assertTrue(web.password_matches(record, "correct horse"))
         self.assertFalse(web.password_matches(record, "wrong horse"))
 
-    def test_the_password_itself_is_not_stored(self):
-        web.save_password("correct horse")
-
-        with open(web.PASSWORD_FILE, encoding="utf-8") as file:
-            self.assertNotIn("correct horse", file.read())
-
     def test_identical_passwords_have_different_hashes(self):
         self.assertNotEqual(web.hash_password("same")["hash"], web.hash_password("same")["hash"])
 
@@ -162,7 +156,8 @@ class PasswordTest(unittest.TestCase):
         self.assertEqual(list(web.users), ["admin"])
 
     def test_a_password_from_before_accounts_becomes_the_admin_account(self):
-        web.save_password("my old password")
+        with open(web.PASSWORD_FILE, "w", encoding="utf-8") as file:
+            json.dump(web.hash_password("my old password"), file)
 
         output = self.load_accounts_quietly()
 
@@ -211,18 +206,6 @@ class PasswordTest(unittest.TestCase):
                 self.assertFalse(result)
                 self.assertIn(reason, output)
         self.assertEqual(web.users, {})
-
-    def test_setting_a_password_needs_a_long_enough_match(self):
-        attempts = (
-            (["short", "short"], False),
-            (["long enough 1", "long enough 2"], False),
-            (["long enough", "long enough"], True),
-        )
-        for answers, changes in attempts:
-            with self.subTest(answers=answers):
-                with mock.patch("getpass.getpass", side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
-                    web.set_password_from_prompt()
-                self.assertEqual(os.path.exists(web.PASSWORD_FILE), changes)
 
 
 class AccountStoreTest(unittest.TestCase):

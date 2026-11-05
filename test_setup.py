@@ -79,47 +79,58 @@ class FirstTimeSetupTest(SetupTestCase):
     def test_a_new_install_is_not_set_up(self):
         self.assertFalse(setup.is_set_up())
 
-    def test_setup_creates_the_secret_and_the_chosen_password(self):
-        result, _ = self.run_quietly(setup.run_setup, ["my password", "my password"])
+    def test_setup_creates_the_secret_and_the_chosen_account(self):
+        result, _ = self.run_quietly(setup.run_setup, ["my password", "my password"], ["alex"])
 
         self.assertTrue(result)
         self.assertTrue(setup.is_set_up())
+        web.users.clear()
         self.run_quietly(web.load_accounts)
-        self.assertTrue(web.password_matches(web.users["admin"], "my password"))
+        self.assertTrue(web.password_matches(web.users["alex"], "my password"))
 
-    def test_a_bad_password_can_be_tried_again(self):
-        result, output = self.run_quietly(setup.run_setup, ["short", "my password", "different", "my password", "my password"])
+    def test_bad_details_can_be_tried_again(self):
+        passwords = ["short", "short", "my password", "different", "my password", "my password"]
+
+        result, output = self.run_quietly(setup.run_setup, passwords, ["alex"] * setup.ACCOUNT_ATTEMPTS)
 
         self.assertTrue(result)
         self.assertIn("at least", output)
         self.assertIn("did not match", output)
 
-    def test_setup_gives_up_after_repeated_bad_passwords(self):
-        result, _ = self.run_quietly(setup.run_setup, ["short"] * setup.PASSWORD_ATTEMPTS)
+    def test_setup_gives_up_after_repeated_bad_details(self):
+        result, _ = self.run_quietly(
+            setup.run_setup, ["short"] * 2 * setup.ACCOUNT_ATTEMPTS, ["alex"] * setup.ACCOUNT_ATTEMPTS
+        )
 
         self.assertFalse(result)
         self.assertFalse(setup.is_set_up())
 
-    def test_setup_does_not_replace_an_existing_password(self):
-        web.save_password("original password")
-        with open(web.PASSWORD_FILE, encoding="utf-8") as file:
-            before = file.read()
+    def test_setup_does_not_replace_an_existing_account(self):
+        web.add_account("alex", "original password")
+        before = dict(web.users)
 
         result, _ = self.run_quietly(setup.run_setup)
 
         self.assertTrue(result)
-        with open(web.PASSWORD_FILE, encoding="utf-8") as file:
-            self.assertEqual(file.read(), before)
+        self.assertEqual(web.read_users_file(), before)
+
+    def test_an_older_password_counts_as_being_set_up(self):
+        self.create("web_password.json")
+
+        result, _ = self.run_quietly(setup.run_setup)
+
+        self.assertTrue(result)
+        self.assertTrue(setup.is_set_up())
 
     def test_running_it_when_already_set_up_only_says_so(self):
-        self.run_quietly(setup.run_setup, ["my password", "my password"])
+        self.run_quietly(setup.run_setup, ["my password", "my password"], ["alex"])
 
         _, output = self.run_quietly(setup.main)
 
         self.assertIn("Already set up", output)
 
     def test_cancelling_is_reported_clearly(self):
-        with mock.patch("getpass.getpass", side_effect=KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()) as output:
+        with mock.patch("builtins.input", side_effect=KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()) as output:
             setup.main()
 
         self.assertIn("not finished", output.getvalue())
@@ -271,7 +282,7 @@ class ResetTest(SetupTestCase):
         self.run_quietly(setup.reset, answers=[setup.RESET_WORD])
         self.assertFalse(setup.is_set_up())
 
-        result, _ = self.run_quietly(setup.run_setup, ["new password", "new password"])
+        result, _ = self.run_quietly(setup.run_setup, ["new password", "new password"], ["alex"])
 
         self.assertTrue(result)
         self.assertTrue(setup.is_set_up())

@@ -54,7 +54,8 @@ STATIC_FILES = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
-# Where the hash of the web password is stored.
+# Where the single web password was stored before accounts were added. If this exists, it
+# is converted to an account once, then removed.
 PASSWORD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_password.json")
 
 # How many rounds of hashing a password gets. This is deliberately slow, so that someone
@@ -69,7 +70,7 @@ USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_users
 # Usernames are short and plain, so they are easy to type and safe to display.
 USERNAME_PATTERN = re.compile(r"[a-z0-9._-]{3,32}")
 
-# The account a password from before accounts were added becomes.
+# The username offered during setup, and the account an older password is converted to.
 FIRST_USERNAME = "admin"
 
 # How long a login lasts.
@@ -126,17 +127,6 @@ def password_matches(record: dict, guess: str) -> bool:
     return hmac.compare_digest(attempt["hash"], record["hash"])
 
 
-def save_password(password: str) -> dict:
-    """Store the hash of a new password, and return it. The swap means a crash cannot leave
-    a damaged file, and other users of the machine cannot read it on Linux and macOS."""
-    record = hash_password(password)
-    temp_path = PASSWORD_FILE + ".tmp"
-    with os.fdopen(os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as file:
-        json.dump(record, file)
-    os.replace(temp_path, PASSWORD_FILE)
-    return record
-
-
 def load_accounts() -> None:
     """Load the accounts when the program starts.
 
@@ -179,21 +169,6 @@ def create_account_from_prompt() -> bool:
         return False
 
     print(f"Account {normalise_username(username)} saved. Restart web.py if it is running.")
-    return True
-
-
-def set_password_from_prompt() -> bool:
-    """Ask for a new web password and store it, returning whether that worked."""
-    password = getpass.getpass("New web password: ")
-    if len(password) < MINIMUM_PASSWORD_LENGTH:
-        print(f"Nothing changed: it must be at least {MINIMUM_PASSWORD_LENGTH} characters.")
-        return False
-    if password != getpass.getpass("Type it again: "):
-        print("Nothing changed: the two did not match.")
-        return False
-
-    save_password(password)
-    print("Password saved. Restart web.py if it is running.")
     return True
 
 

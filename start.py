@@ -3,7 +3,7 @@ Starts the whole system with one command, and opens the web page.
 
     python start.py
 
-The first time, this runs setup, which asks you to choose the web password.
+The first time, this runs setup, which asks you to create your web account.
 
 The primary, backup and web interface still run as separate processes, exactly as if
 each had been started in its own terminal. They share this window, so each log line
@@ -34,8 +34,8 @@ WEB_START_SECONDS = 10
 def ensure_set_up() -> bool:
     """Run first-time setup if it's needed, returning whether it's fine to start.
 
-    If there is nobody at a keyboard to ask, it carries on, and web.py creates a random
-    password and prints it instead.
+    If there is nobody at a keyboard to ask, it carries on, and web.py creates an
+    account with a random password and prints it instead.
     """
     if setup.is_set_up() or not setup.can_ask_questions():
         return True
