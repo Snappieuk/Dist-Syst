@@ -1,79 +1,116 @@
 """
-Shared helpers for the Asset Management System prototype.
+Shared helpers for the Asset Management System.
 
 Messages are exchanged as JSON (an external data representation) so that
 the server and client programs do not need to be written in the same
 language, or run on the same type of machine, to understand each other.
 
-This is BASIC starter code. It is not fault tolerant, it does not support
-more than one client at a time, and it does very little to validate what
-it receives. Reviewing, extending, and documenting those limitations is
-part of the assignment.
+This module is the single place that defines the wire format, the protocol
+version, the error codes and how settings are loaded from config.json.
 """
 
-import json      # used to turn a Python dict into a JSON string, and back
-import socket    # only imported here for the type hints below (socket.socket)
+import json      # turns Python dicts into JSON text and back
+import os        # finds config.json next to this file
+import socket    # the networking building blocks (sockets)
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
-HOST = "127.0.0.1"  # "localhost" - server and clients all run on this same machine
-PORT = 65432        # arbitrary unused port number; server and clients must agree on it
+# Every request states which version of the protocol it speaks. The server rejects
+# any other version, so an old client and a new server fail clearly instead of
+# misunderstanding each other.
+PROTOCOL_VERSION = 1
+
+# Stable error codes. Clients check these, never the wording of the message.
+BAD_REQUEST = "BAD_REQUEST"                    # malformed request or invalid data
+UNKNOWN_ACTION = "UNKNOWN_ACTION"              # the action is not one the server supports
+UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"    # missing or unsupported protocol_version
+TOO_LARGE = "TOO_LARGE"                        # the message is over the size limit
+INTERNAL = "INTERNAL"                          # the server failed; the request may be fine
+
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 
-def send_message(sock: socket.socket, message: dict) -> None:
-    """Encode `message` as JSON and send it over `sock`.
+class MessageTooLargeError(ValueError):
+    """A message is bigger than the configured limit."""
 
-    The JSON payload is prefixed with a 4-byte big-endian length so the
-    receiving end knows exactly how many bytes to read for one message,
-    even if TCP delivers the data in more than one chunk. This is a very
-    small example of an external data representation: both ends agree on
-    a byte-level format (length-prefixed UTF-8 JSON) regardless of what
-    language or platform either end is written in.
+
+def load_config(path: str = CONFIG_FILE) -> dict:
+    """Read the settings from config.json.
+
+    Host names, ports and other machine-specific settings live in this file, so the
+    servers and clients can be moved to different machines by editing it rather than
+    the code. File paths in it are relative to the folder that holds the file.
     """
-    # Turn the Python dict into a JSON string, then into raw bytes (UTF-8).
+    with open(path, encoding="utf-8") as file:
+        config = json.load(file)
+    config["folder"] = os.path.dirname(os.path.abspath(path))
+    return config
+
+
+def config_path(config: dict, name: str) -> str:
+    """Return the full path of a file named in the configuration."""
+    return os.path.join(config["folder"], name)
+
+
+def error_reply(code: str, message: str, **context) -> dict:
+    """Build an ERROR reply. Every error has a stable code, a message for people and,
+    where useful, context such as the field or asset ID it concerns."""
+    return {"status": "ERROR", "code": code, "message": message, "context": context}
+
+
+def send_message(sock: socket.socket, message: dict, max_bytes: int) -> None:
+    """Encode `message` as UTF-8 JSON and send it with a 4-byte big-endian length
+    prefix, so the receiver knows exactly where the message ends."""
     payload = json.dumps(message).encode("utf-8")
-
-    # Work out how many bytes `payload` is, and pack that number itself
-    # into exactly 4 bytes (big-endian = most significant byte first).
-    # This is the "header" the receiver will read first.
+    if len(payload) > max_bytes:
+        raise MessageTooLargeError(f"The message is {len(payload)} bytes; the limit is {max_bytes}")
     header = len(payload).to_bytes(HEADER_LENGTH_BYTES, byteorder="big")
-
-    # Send the header immediately followed by the payload in one go.
-    # sendall() keeps sending until every byte has actually gone out.
     sock.sendall(header + payload)
 
 
 def _recv_exact(sock: socket.socket, num_bytes: int) -> bytes:
     """Read exactly `num_bytes` from `sock`, or raise ConnectionError."""
-    chunks = []          # list of byte-chunks received so far
-    remaining = num_bytes  # how many more bytes we still need to read
-
-    # TCP does not guarantee recv() returns everything in one call, so we
-    # keep calling it in a loop until we have collected `num_bytes` bytes.
+    chunks = []
+    remaining = num_bytes
     while remaining > 0:
-        chunk = sock.recv(remaining)  # ask for (at most) the remaining bytes
-
+        chunk = sock.recv(min(remaining, 65536))
         if not chunk:
-            # recv() returning empty bytes means the other end closed the
-            # connection before sending everything it promised to.
             raise ConnectionError("Connection closed before a full message was received")
-
-        chunks.append(chunk)          # remember this piece
-        remaining -= len(chunk)       # we need that many fewer bytes now
-
-    return b"".join(chunks)  # stitch all the pieces back into one bytes object
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
-def receive_message(sock: socket.socket) -> dict:
-    """Read one length-prefixed JSON message from `sock`."""
-    # First, read exactly the 4-byte header written by send_message().
+def receive_message(sock: socket.socket, max_bytes: int) -> dict:
+    """Read one length-prefixed JSON message from `sock`.
+
+    The length in the header is checked before any of the message is read, so a
+    sender claiming a huge size cannot make the receiver allocate memory for it.
+    Raises MessageTooLargeError, or ValueError if the bytes are not a JSON object.
+    """
     header = _recv_exact(sock, HEADER_LENGTH_BYTES)
-
-    # Convert those 4 bytes back into the integer length they represent.
     length = int.from_bytes(header, byteorder="big")
-
-    # Now read exactly `length` bytes - that is the JSON payload itself.
+    if length > max_bytes:
+        raise MessageTooLargeError(f"The message is {length} bytes; the limit is {max_bytes}")
     payload = _recv_exact(sock, length)
+    try:
+        message = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError(f"The message is not valid UTF-8 JSON: {exc}") from exc
+    if not isinstance(message, dict):
+        raise ValueError("The message must be a JSON object")
+    return message
 
-    # Turn the raw bytes back into text, then parse the JSON into a dict.
-    return json.loads(payload.decode("utf-8"))
+
+def send_request(request: dict, config: dict = None) -> dict:
+    """Send one request to the server and return its reply.
+
+    The protocol version is added here, so every client sends it without having to
+    remember to.
+    """
+    config = config or load_config()
+    server = config["servers"]["primary"]
+    message = {**request, "protocol_version": PROTOCOL_VERSION}
+    with socket.create_connection((server["host"], server["port"])) as sock:
+        send_message(sock, message, config["max_message_bytes"])
+        return receive_message(sock, config["max_message_bytes"])

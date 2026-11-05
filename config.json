@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "primary": {"host": "127.0.0.1", "port": 65432}
+  },
+  "max_message_bytes": 1048576,
+  "data_files": {
+    "primary": "assets_primary.json"
+  }
+}

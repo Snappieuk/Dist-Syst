@@ -1,94 +1,124 @@
 """
-Asset Management System server (STARTER CODE).
+Asset Management System server.
 
-Listens for one connection at a time and understands two request actions:
+    python server.py
 
-    {"action": "REGISTER", "asset": {...}}   -> stores the asset, replies with a status
+Understands these actions:
+    {"action": "REGISTER", "asset": {...}}   -> stores the asset, replies with it
     {"action": "LIST"}                       -> replies with every stored asset
 
-Deliberately basic — this is a starting point, not a finished system:
-  - only one client is served at a time (no threading/concurrency)
-  - assets are stored in memory only and are lost when the server stops
-  - there is almost no validation of incoming data
-  - there is no authentication or encryption
-
-Reviewing, extending, testing, and documenting these limitations is part
-of the assignment.
+Every request must include "protocol_version". Every reply has "status": "OK"
+or "status": "ERROR" with a stable "code", a "message" and a "context".
 """
 
-import socket  # provides the networking building blocks (sockets)
+import socket       # provides the networking building blocks (sockets)
+import threading    # lets tests stop the server cleanly
 
-# Import the shared constants/helpers used by every part of the prototype.
-from common import HOST, PORT, receive_message, send_message
+import common
+from common import (
+    BAD_REQUEST,
+    INTERNAL,
+    PROTOCOL_VERSION,
+    TOO_LARGE,
+    UNKNOWN_ACTION,
+    UNSUPPORTED_VERSION,
+    MessageTooLargeError,
+    error_reply,
+    receive_message,
+    send_message,
+)
 
-assets = []  # in-memory "database" of registered assets (a plain list of dicts)
+SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
 
 
-def handle_client(conn: socket.socket) -> None:
-    # `with conn:` guarantees the connection is closed automatically once
-    # this block finishes, even if an error happens inside it.
-    with conn:
-        try:
-            # Wait for, and decode, one complete message from this client.
-            request = receive_message(conn)
-        except (ConnectionError, ValueError) as exc:
-            # ValueError covers JSON that doesn't parse; ConnectionError
-            # covers a client that disconnects mid-message.
-            send_message(conn, {"status": "ERROR", "detail": str(exc)})
-            return  # nothing more we can do with this connection
+class AssetServer:
+    """One asset server: its data and the rules for changing it."""
 
-        # Every request must say what it wants done via an "action" field.
+    def __init__(self, config: dict, role: str = "primary") -> None:
+        self.config = config
+        self.role = role
+        self.address = (config["servers"][role]["host"], config["servers"][role]["port"])
+        self.max_bytes = config["max_message_bytes"]
+        self.assets = []  # registered assets, as a list of dicts
+
+    # ---- Requests -------------------------------------------------------------
+
+    def process(self, request: dict) -> dict:
+        """Carry out one decoded request and return the reply. No networking happens
+        here, so the rules can be tested without a socket."""
+        version = request.get("protocol_version")
+        if version not in SUPPORTED_VERSIONS:
+            return error_reply(
+                UNSUPPORTED_VERSION,
+                f"Protocol version {version!r} is not supported",
+                supported_versions=list(SUPPORTED_VERSIONS),
+            )
+
         action = request.get("action")
-
         if action == "REGISTER":
-            # Pull the asset details out of the request.
             asset = request.get("asset")
+            if not isinstance(asset, dict):
+                return error_reply(BAD_REQUEST, "'asset' must be an object", field="asset")
+            self.assets.append(asset)
+            return {"status": "OK", "stored": asset}
+        if action == "LIST":
+            return {"status": "OK", "assets": list(self.assets)}
+        return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
 
-            # TODO (student): validate `asset` properly before storing it
-            # (e.g. required fields present, sensible types, no duplicate
-            # asset_id) and decide what should happen if it is invalid.
-            assets.append(asset)  # add it to the in-memory list
+    # ---- Networking -----------------------------------------------------------
 
-            # Tell the client the registration succeeded, and echo back
-            # what was stored so it can be confirmed on screen.
-            send_message(conn, {"status": "OK", "stored": asset})
+    def read_and_process(self, conn: socket.socket) -> dict:
+        """Read one request and work out the reply, turning bad input into an error
+        reply instead of an exception."""
+        try:
+            request = receive_message(conn, self.max_bytes)
+        except MessageTooLargeError as exc:
+            return error_reply(TOO_LARGE, str(exc), max_bytes=self.max_bytes)
+        except ValueError as exc:
+            return error_reply(BAD_REQUEST, str(exc))
+        try:
+            return self.process(request)
+        except Exception:
+            return error_reply(INTERNAL, "The server could not complete the request")
 
-        elif action == "LIST":
-            # Send back the full current list of assets as-is.
-            send_message(conn, {"status": "OK", "assets": assets})
+    def handle_connection(self, conn: socket.socket) -> None:
+        """Serve one connection: one request, one reply."""
+        with conn:
+            try:
+                reply = self.read_and_process(conn)
+                send_message(conn, reply, self.max_bytes)
+            except OSError as exc:
+                # The client went away part-way through. There is nobody to reply to.
+                print(f"Lost connection to a client: {exc}")
 
-        else:
-            # Any action we don't recognise is treated as an error.
-            send_message(conn, {"status": "ERROR", "detail": f"Unknown action: {action!r}"})
+    def open_socket(self) -> socket.socket:
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_sock.bind(self.address)
+        server_sock.listen()
+        return server_sock
+
+    def serve(self, stop: threading.Event = None) -> None:
+        """Accept connections until `stop` is set (or forever)."""
+        stop = stop or threading.Event()
+        with self.open_socket() as server_sock:
+            server_sock.settimeout(0.5)  # wake up regularly to check `stop`
+            print(f"Asset Management {self.role} server listening on {self.address[0]}:{self.address[1]}")
+            while not stop.is_set():
+                try:
+                    conn, _addr = server_sock.accept()
+                except socket.timeout:
+                    continue
+                self.handle_connection(conn)
 
 
 def main() -> None:
-    # Create a TCP/IPv4 socket. `with` closes it automatically on exit.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
-        # Allow the port to be reused immediately after the server stops,
-        # instead of Windows/Linux holding on to it for a short while.
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        # Bind the socket to our chosen host/port, then start listening
-        # for incoming connections (this does not accept any yet).
-        server_sock.bind((HOST, PORT))
-        server_sock.listen()
-
-        print(f"Asset Management server listening on {HOST}:{PORT}")
-        print("Press Ctrl+C to stop.")
-
-        # Serve clients forever, one at a time, until the server is stopped.
-        while True:
-            # Block here until a client connects; `conn` is a new socket
-            # dedicated to that one client, `addr` is their address.
-            conn, addr = server_sock.accept()
-            print(f"Connection from {addr}")
-
-            # Handle this client's single request/response fully before
-            # looping back round to accept() the next one.
-            handle_client(conn)
+    server = AssetServer(common.load_config())
+    try:
+        server.serve()
+    except KeyboardInterrupt:
+        print("Server stopped.")
 
 
-# Only run main() if this file is executed directly (not imported).
 if __name__ == "__main__":
     main()

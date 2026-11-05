@@ -13,42 +13,33 @@ main() below keeps the window open until you press Enter; running the
 script from a terminal you already have open does not need it.
 """
 
-import socket  # provides the networking building blocks (sockets)
-
 # Import the shared constants/helpers used by every part of the prototype.
-from common import HOST, PORT, receive_message, send_message
+from common import send_request
 
 
 def main() -> None:
-    # Create a TCP/IPv4 socket. `with` closes it automatically on exit.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        # Connect to the server at the shared HOST/PORT.
-        sock.connect((HOST, PORT))
+    # Ask the server for every asset it currently has stored.
+    try:
+        response = send_request({"action": "LIST"})
+    except (OSError, ValueError) as exc:
+        print(f"Could not retrieve the asset list: {exc}")
+        return
 
-        # Ask the server for every asset it currently has stored.
-        send_message(sock, {"action": "LIST"})
+    # If the server reported an error, show it and stop here.
+    if response.get("status") != "OK":
+        print(f"Server returned an error ({response.get('code')}): {response.get('message')}")
+        return
 
-        # Wait for, and decode, the server's reply.
-        response = receive_message(sock)
+    assets = response.get("assets", [])
+    if not assets:
+        # The list came back empty - nothing has been registered yet.
+        print("No assets registered yet.")
+        return
 
-        # If the server reported an error, show it and stop here.
-        if response.get("status") != "OK":
-            print("Server returned an error:", response.get("detail"))
-            return
-
-        # Otherwise pull the list of assets out of the reply (defaulting
-        # to an empty list if, for some reason, the field is missing).
-        assets = response.get("assets", [])
-
-        if not assets:
-            # The list came back empty - nothing has been registered yet.
-            print("No assets registered yet.")
-            return
-
-        # Print a short summary, then one line per asset record.
-        print(f"{len(assets)} asset(s) registered:\n")
-        for asset in assets:
-            print(asset)
+    # Print a short summary, then one line per asset record.
+    print(f"{len(assets)} asset(s) registered:\n")
+    for asset in assets:
+        print(asset)
 
 
 # Only run this if the file is executed directly (not imported).
