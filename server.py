@@ -113,6 +113,29 @@ def save_assets() -> None:
         os.fsync(file.fileno())
 
     os.replace(temp_path, ASSETS_FILE)
+    flush_data_folder()
+
+
+def flush_data_folder() -> None:
+    """Force the swap made by os.replace() onto the disk, on Linux and macOS.
+
+    There, the swap is recorded in the folder, so a power cut could undo it unless
+    the folder is flushed too. Windows does not allow a folder to be opened this way.
+
+    A failure is only logged, because some file systems do not support this. The
+    new file is already in place by now, so reporting a failed save would be wrong.
+    """
+    if os.name != "posix":
+        return
+
+    try:
+        folder = os.open(os.path.dirname(ASSETS_FILE), os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    except OSError as exc:
+        logger.warning("Could not flush the data folder: %s", exc)
 
 
 def error_reply(code: str, detail: str) -> dict:
