@@ -10,3 +10,4 @@ assets_backup.json
 # Secrets created when the programs run, which must never be shared
 secret.key
 web_password.json
+web_users.json

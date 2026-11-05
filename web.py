@@ -19,7 +19,8 @@ import hmac       # compares password hashes safely
 import json       # the data sent to the browser is JSON
 import logging    # records what happens, including errors, without stopping
 import os         # os.path finds the page's files
-import secrets    # generates the first password
+import re         # checks that a username is acceptable
+import secrets   # generates the first password
 import sys        # sys.argv holds the --set-password option
 import threading  # the lock protects the login data shared between request threads
 import time       # sessions and lockouts expire
@@ -61,6 +62,15 @@ HASH_ITERATIONS = 600_000
 
 MINIMUM_PASSWORD_LENGTH = 8
 
+# Where each account's username and password hash are stored.
+USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_users.json")
+
+# Usernames are short and plain, so they are easy to type and safe to display.
+USERNAME_PATTERN = re.compile(r"[a-z0-9._-]{3,32}")
+
+# The account a password from before accounts were added becomes.
+FIRST_USERNAME = "admin"
+
 # How long a login lasts.
 SESSION_SECONDS = 8 * 60 * 60
 
@@ -93,6 +103,9 @@ sessions = {}
 failed_logins = 0
 locked_until = 0
 login_lock = threading.Lock()  # protects the three values above
+
+users = {}  # each account's password hash, by username
+users_lock = threading.Lock()  # protects `users` and its file
 
 
 def hash_password(password: str, salt: str = None, iterations: int = None) -> dict:
@@ -154,6 +167,54 @@ def set_password_from_prompt() -> bool:
     save_password(password)
     print("Password saved. Restart web.py if it is running.")
     return True
+
+
+def normalise_username(username: str) -> str:
+    """Usernames ignore capitals, so "Alex" and "alex" can't be two different accounts."""
+    return username.strip().lower()
+
+
+def read_users_file() -> dict:
+    """Return the stored accounts, or none if the file doesn't exist yet."""
+    try:
+        with open(USERS_FILE, encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return {}
+
+
+def write_users_file(accounts: dict) -> None:
+    """Store the accounts. The swap means a crash can't leave a damaged file, and other
+    users of the machine can't read it on Linux and macOS."""
+    temp_path = USERS_FILE + ".tmp"
+    with os.fdopen(os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as file:
+        json.dump(accounts, file, indent=2)
+    os.replace(temp_path, USERS_FILE)
+
+
+def add_account(username: str, password: str, replace: bool = False) -> object:
+    """Store an account, returning a message saying why not if it can't be done, or None.
+
+    The slow hash runs outside the lock, so it holds up nobody else. The check for an
+    existing name happens inside the lock, so that two people can't both claim one. The
+    file is read again first, in case the account was changed from the command line.
+    """
+    username = normalise_username(username)
+    if not USERNAME_PATTERN.fullmatch(username):
+        return "A username must be 3 to 32 characters: letters, numbers, dots, dashes or underscores"
+    if len(password) < MINIMUM_PASSWORD_LENGTH:
+        return f"A password must be at least {MINIMUM_PASSWORD_LENGTH} characters"
+
+    record = hash_password(password)
+    with users_lock:
+        accounts = read_users_file()
+        if username in accounts and not replace:
+            return "That username is already taken"
+        accounts[username] = record
+        write_users_file(accounts)
+        users.clear()
+        users.update(accounts)
+    return None
 
 
 def create_session() -> str:

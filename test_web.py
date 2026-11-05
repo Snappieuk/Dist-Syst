@@ -165,6 +165,67 @@ class PasswordTest(unittest.TestCase):
                 self.assertEqual(os.path.exists(web.PASSWORD_FILE), changes)
 
 
+class AccountStoreTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.addCleanup(setattr, web, "USERS_FILE", web.USERS_FILE)
+        self.addCleanup(setattr, web, "HASH_ITERATIONS", web.HASH_ITERATIONS)
+        self.addCleanup(web.users.clear)
+        web.USERS_FILE = os.path.join(temp_dir.name, "web_users.json")
+        web.HASH_ITERATIONS = 1000  # the real number is slow on purpose
+        web.users.clear()
+
+    def test_an_account_is_stored_without_its_password(self):
+        self.assertIsNone(web.add_account("alex", "correct horse"))
+
+        self.assertIn("alex", web.users)
+        with open(web.USERS_FILE, encoding="utf-8") as file:
+            stored = file.read()
+        self.assertIn("alex", stored)
+        self.assertNotIn("correct horse", stored)
+
+    def test_usernames_ignore_capitals_and_spaces(self):
+        web.add_account("  Alex ", "correct horse")
+
+        self.assertEqual(list(web.users), ["alex"])
+        self.assertIn("taken", web.add_account("ALEX", "another password"))
+
+    def test_an_existing_account_is_only_replaced_on_request(self):
+        web.add_account("alex", "first password")
+        before = web.users["alex"]
+
+        web.add_account("alex", "second password")
+        self.assertEqual(web.users["alex"], before)
+
+        self.assertIsNone(web.add_account("alex", "second password", replace=True))
+        self.assertNotEqual(web.users["alex"], before)
+
+    def test_unacceptable_usernames_are_refused(self):
+        for username in ("", "ab", "x" * 33, "has space", "<script>", "café", "a/b"):
+            with self.subTest(username):
+                self.assertIn("username", web.add_account(username, "long enough"))
+        self.assertEqual(web.users, {})
+
+    def test_a_short_password_is_refused(self):
+        self.assertIn("password", web.add_account("alex", "short"))
+        self.assertEqual(web.users, {})
+
+    def test_many_people_claiming_one_name_create_one_account(self):
+        results = []
+        threads = [
+            threading.Thread(target=lambda: results.append(web.add_account("alex", "long enough")))
+            for _ in range(10)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(results.count(None), 1)
+        self.assertEqual(list(web.read_users_file()), ["alex"])
+
+
 class AssetsApiTest(WebTestCase):
     def test_no_assets_gives_an_empty_list(self):
         status, body = self.fetch_json("/api/assets")
