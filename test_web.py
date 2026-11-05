@@ -192,6 +192,9 @@ class PageTest(WebTestCase):
                 self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
                 self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
+    def test_asking_for_a_tab_icon_is_not_an_error(self):
+        self.assertEqual(self.fetch("/favicon.ico")[0], 204)
+
     def test_other_files_cannot_be_reached(self):
         for path in ("/web.py", "/index.html", "/../web.py", "/static/../web.py", "/%2e%2e/web.py", "/assets.json"):
             with self.subTest(path):

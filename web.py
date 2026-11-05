@@ -92,6 +92,10 @@ class WebHandler(BaseHTTPRequestHandler):
             self.send_json(*assets_reply())
         elif path in STATIC_FILES:
             self.send_static_file(*STATIC_FILES[path])
+        elif path == "/favicon.ico":
+            # Browsers ask for a tab icon by themselves. There isn't one, and saying
+            # so stops a "not found" error appearing on every visit.
+            self.send_body(204, "image/x-icon", b"")
         else:
             self.send_json(404, {"error": "There is nothing at this address"})
 
