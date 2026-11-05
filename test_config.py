@@ -8,11 +8,16 @@ processes, because environment variables are read when a program starts.
 """
 
 import os
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
+from unittest import mock
 
 import common
+import node
 
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 
@@ -57,6 +62,54 @@ class ServerListTest(unittest.TestCase):
             {common.SERVERS_VARIABLE: "assets-1:65432,assets-2:65433"}, "import common; print(common.SERVERS)"
         )
         self.assertEqual(result.stdout.strip(), "[('assets-1', 65432), ('assets-2', 65433)]")
+
+
+class ListenAddressTest(unittest.TestCase):
+    def test_a_server_normally_listens_on_its_own_entry(self):
+        with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": ""}):
+            self.assertEqual(node.listening_address(("assets-1", 65432)), ("assets-1", 65432))
+
+    def test_the_host_can_be_replaced_but_not_the_port(self):
+        with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": "0.0.0.0"}):
+            self.assertEqual(node.listening_address(("assets-1", 65432)), ("0.0.0.0", 65432))
+
+    def test_a_server_known_by_a_name_it_cannot_listen_on_still_starts(self):
+        # Other machines would know this server as assets-primary.invalid, a name that
+        # can't exist, so it can only start by listening on the address it is given.
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            port = spare.getsockname()[1]
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        code = (
+            "import server\n"
+            f"server.ASSETS_FILE = {os.path.join(temp_dir.name, 'assets.json')!r}\n"
+            "server.main()\n"
+        )
+        env = {
+            **os.environ,
+            common.SERVERS_VARIABLE: f"assets-primary.invalid:{port}",
+            "ASSET_LISTEN_HOST": "127.0.0.1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        process = subprocess.Popen(
+            [sys.executable, "-c", code], cwd=FOLDER, env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+
+        deadline = time.monotonic() + 20
+        while True:
+            try:
+                reply = common.request_from(("127.0.0.1", port), {"action": "PING"})
+                break
+            except OSError:
+                if time.monotonic() > deadline or process.poll() is not None:
+                    self.fail("the server did not start")
+                time.sleep(0.2)
+
+        self.assertEqual(reply["status"], "OK")
 
 
 if __name__ == "__main__":

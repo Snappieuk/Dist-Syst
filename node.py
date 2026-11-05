@@ -540,6 +540,17 @@ def run_server(server_sock: socket.socket) -> None:
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
 
+def listening_address(address: tuple) -> tuple:
+    """Return the address this server should listen on.
+
+    Normally that is its own entry in SERVERS. Another machine may reach it by a name
+    that this machine can't listen on, such as a name that points at a router or a
+    container. Setting ASSET_LISTEN_HOST=0.0.0.0 then listens on every network
+    connection this machine has, on the same port.
+    """
+    return (os.environ.get("ASSET_LISTEN_HOST") or address[0], address[1])
+
+
 def start_up(address: tuple) -> socket.socket:
     """Set up logging, load this node's data and open its port.
 
@@ -558,6 +569,7 @@ def start_up(address: tuple) -> socket.socket:
         loaded_assets, loaded_deleted, last_seq = load_assets()
         assets.extend(loaded_assets)
         deleted_ids.update(loaded_deleted)
+        address = listening_address(address)
         server_sock = create_listening_socket(*address)
     except (OSError, ValueError) as exc:
         logger.error("Could not start the server: %s", exc)
