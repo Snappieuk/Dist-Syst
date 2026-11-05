@@ -112,6 +112,7 @@ class NodeTestCase(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         server.ASSETS_FILE = os.path.join(self.temp_dir.name, "assets.json")
         server.assets.clear()
+        server.deleted_ids.clear()
         server.ID_PREFIX = "AST-P"
 
 
@@ -195,6 +196,15 @@ class SystemTest(NodeTestCase):
         server.assets.append(make_record("AST-P000002"))
         self.assertEqual(register(make_asset())["stored"]["asset_id"], "AST-P000003")
 
+    def test_a_deleted_id_is_never_issued_again(self):
+        first = register(make_asset("One"))["stored"]["asset_id"]
+        second = register(make_asset("Two"))["stored"]["asset_id"]
+        common.send_request({"action": "DELETE", "asset_id": second})
+
+        third = register(make_asset("Three"))["stored"]["asset_id"]
+
+        self.assertNotIn(third, (first, second))
+
     def test_each_server_issues_ids_from_its_own_range(self):
         server.ID_PREFIX = "AST-B"
         self.assertEqual(register(make_asset())["stored"]["asset_id"], "AST-B000001")
@@ -236,6 +246,14 @@ class SystemTest(NodeTestCase):
         self.assertEqual(common.send_request(request)["code"], common.BAD_REQUEST)
         self.assertEqual(list_descriptions(), ["Dell laptop"])
 
+    def test_repeating_a_registration_cannot_bring_back_a_deleted_asset(self):
+        request = common.new_register_request(make_asset())
+        asset_id = common.send_request(request)["stored"]["asset_id"]
+        common.send_request({"action": "DELETE", "asset_id": asset_id})
+
+        self.assertEqual(common.send_request(request)["code"], common.BAD_REQUEST)
+        self.assertEqual(list_ids(), [])
+
     # ---- Changing an asset's status ----
 
     def test_an_asset_can_be_marked_not_in_use_and_back(self):
@@ -250,7 +268,7 @@ class SystemTest(NodeTestCase):
             self.assertIn(tag, stored["tags"])  # the tags follow the status
 
         self.assertEqual(stored["version"], 3)
-        self.assertEqual(server.load_assets()[0]["status"], common.IN_USE)
+        self.assertEqual(server.load_assets()[0][0]["status"], common.IN_USE)
 
     def test_setting_the_same_status_changes_nothing(self):
         asset_id = register(make_asset())["stored"]["asset_id"]
@@ -309,7 +327,7 @@ class SystemTest(NodeTestCase):
         self.assertTrue(all(reply["status"] == "OK" for reply in replies))
         self.assertEqual(len({reply["stored"]["asset_id"] for reply in replies}), 50)
         self.assertEqual(len(list_ids()), 50)
-        self.assertEqual(len(server.load_assets()), 50)
+        self.assertEqual(len(server.load_assets()[0]), 50)
 
     def use_slow_list(self) -> None:
         """Hold open the gap between checking the data and changing it.
@@ -338,6 +356,47 @@ class SystemTest(NodeTestCase):
         self.assertEqual(len(list_ids()), 1)
 
     # ---- Deleting an asset ----
+
+    def test_a_deleted_asset_is_gone_even_after_a_restart(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        kept_id = register(make_asset("Kept"))["stored"]["asset_id"]
+
+        reply = common.send_request({"action": "DELETE", "asset_id": asset_id})
+        self.assertEqual(reply["deleted"], asset_id)
+        self.assertEqual(list_ids(), [kept_id])
+
+        loaded_assets, loaded_deleted = server.load_assets()
+        self.assertEqual([asset["asset_id"] for asset in loaded_assets], [kept_id])
+        self.assertIn(asset_id, loaded_deleted)
+
+    def test_deleting_twice_is_safe_and_unknown_ids_are_not_found(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        request = {"action": "DELETE", "asset_id": asset_id}
+
+        self.assertEqual(common.send_request(request)["status"], "OK")
+        self.assertEqual(common.send_request(request)["status"], "OK")
+
+        reply = common.send_request({"action": "DELETE", "asset_id": "AST-X"})
+        self.assertEqual(reply["code"], common.NOT_FOUND)
+
+    def test_status_of_a_deleted_asset_is_not_found(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        common.send_request({"action": "DELETE", "asset_id": asset_id})
+
+        reply = common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE})
+        self.assertEqual(reply["code"], common.NOT_FOUND)
+
+    def test_failed_delete_save_leaves_nothing_behind(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        blocker = server.ASSETS_FILE + ".tmp"
+        os.mkdir(blocker)
+        self.addCleanup(os.rmdir, blocker)
+        reply = common.send_request({"action": "DELETE", "asset_id": asset_id})
+
+        self.assertEqual(reply["code"], common.INTERNAL)
+        self.assertEqual(list_ids(), [asset_id])
+        self.assertEqual(server.deleted_ids, {})
 
     # ---- The management client ----
 
@@ -462,6 +521,15 @@ class SystemTest(NodeTestCase):
 
         self.assertEqual(register(make_asset())["code"], common.INTERNAL)
 
+    def test_client_tries_the_other_server_if_an_asset_is_not_found(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        behind = start_fake_server(self, {"status": "ERROR", "code": common.NOT_FOUND, "detail": "no such asset"})
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [behind, common.SERVERS[0]]
+
+        self.assertEqual(common.send_request({"action": "DELETE", "asset_id": asset_id})["status"], "OK")
+        self.assertEqual(common.send_request({"action": "DELETE", "asset_id": "AST-X"})["code"], common.NOT_FOUND)
+
     def test_retry_after_a_lost_reply_stores_one_asset(self):
         request = common.new_register_request(make_asset())
         first = common.send_request(request)
@@ -479,16 +547,22 @@ class SystemTest(NodeTestCase):
     def test_assets_are_on_disk_before_the_reply(self):
         asset_id = register(make_asset())["stored"]["asset_id"]
         with open(server.ASSETS_FILE, encoding="utf-8") as file:
-            self.assertEqual(json.load(file)[0]["asset_id"], asset_id)
+            self.assertEqual(json.load(file)["assets"][0]["asset_id"], asset_id)
 
     def test_assets_are_loaded_after_a_restart(self):
         asset_id = register(make_asset())["stored"]["asset_id"]
 
         # What a restart does: memory is lost, then the file is read.
         server.assets.clear()
-        server.assets.extend(server.load_assets())
+        server.assets.extend(server.load_assets()[0])
 
         self.assertEqual(list_ids(), [asset_id])
+
+    def test_a_file_from_before_delete_was_added_still_loads(self):
+        with open(server.ASSETS_FILE, "w", encoding="utf-8") as file:
+            json.dump([make_record()], file)
+
+        self.assertEqual(server.load_assets(), ([make_record()], {}))
 
     def test_failed_save_leaves_nothing_behind(self):
         register(make_asset("First"))
@@ -501,7 +575,7 @@ class SystemTest(NodeTestCase):
 
         # Neither memory nor the file has the failed asset, and the file is intact.
         self.assertEqual(list_descriptions(), ["First"])
-        self.assertEqual(len(server.load_assets()), 1)
+        self.assertEqual(len(server.load_assets()[0]), 1)
 
         # The same asset works once the problem has gone.
         self.assertEqual(register(make_asset("Second"))["status"], "OK")
@@ -527,7 +601,7 @@ class MergeTest(NodeTestCase):
 
         self.assertEqual(changed, 1)
         self.assertEqual(list_ids(), ["AST-1", "AST-2"])
-        self.assertEqual(len(server.load_assets()), 2)
+        self.assertEqual(len(server.load_assets()[0]), 2)
 
     def test_primary_keeps_its_own_copy_in_a_conflict(self):
         server.merge_assets([make_record(status="Primary")], prefer_peer=False)
@@ -579,6 +653,18 @@ class MergeTest(NodeTestCase):
                 self.assertEqual(server.merge_assets([newer], prefer_peer), 1)
                 self.assertEqual(server.merge_assets([older], prefer_peer), 0)
                 self.assertEqual(server.assets[0]["status"], "New")
+
+    def test_merge_removes_a_deleted_asset_and_keeps_it_deleted(self):
+        server.merge_assets([make_record("AST-1"), make_record("AST-2")], prefer_peer=False)
+
+        # The other server deleted AST-1, and this is saved.
+        self.assertEqual(server.merge_assets([make_record("AST-2")], False, {"AST-1": None}), 1)
+        self.assertEqual(list_ids(), ["AST-2"])
+        self.assertIn("AST-1", server.load_assets()[1])
+
+        # Even a newer copy from somewhere cannot bring it back.
+        self.assertEqual(server.merge_assets([make_record("AST-1", version=9)], True), 0)
+        self.assertEqual(list_ids(), ["AST-2"])
 
 
 class BackupTest(unittest.TestCase):
@@ -649,6 +735,19 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(register(make_asset("AFTER"))["status"], "OK")
         self.wait_until_has(self.primary, "AFTER")
         self.wait_until_has(self.backup, "AFTER")
+
+    def test_a_delete_reaches_the_other_server_and_sticks(self):
+        self.start_server()
+        self.start_server("--backup")
+        time.sleep(1)
+
+        asset_id = register(make_asset("DELETED"))["stored"]["asset_id"]
+        self.wait_until_has(self.backup, "DELETED")
+        self.assertEqual(common.send_request({"action": "DELETE", "asset_id": asset_id})["status"], "OK")
+
+        time.sleep(server.SYNC_INTERVAL_SECONDS * 3)  # long enough for it to come back
+        for address in (self.primary, self.backup):
+            self.assertEqual(common.request_from(address, {"action": "LIST"})["assets"], [])
 
 
 if __name__ == "__main__":

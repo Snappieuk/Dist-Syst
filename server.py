@@ -8,6 +8,9 @@ Each connection carries one request and one reply:
     {"action": "LIST"}                       -> replies with every stored asset
     {"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use"}
                                              -> changes an asset's status
+    {"action": "DELETE", "asset_id": "..."}  -> removes an asset for good
+    {"action": "SYNC"}                       -> used by the other server: every stored
+                                                asset and every deleted ID
 
 Replies always contain "status". Failures look like this:
 
@@ -81,27 +84,41 @@ logger = logging.getLogger("asset_server")
 
 assets = []  # every registered asset, as a plain list of dicts
 
-# One lock protects `assets` and the file, because every client has its own
+# The ID of every deleted asset, and the request that registered it, kept for good.
+# This stops an ID being issued again, stops a late retry restoring the asset, and
+# stops the next sync copying the asset straight back from the other server.
+deleted_ids = {}
+
+# One lock protects `assets`, `deleted_ids` and the file, because every client has its own
 # thread. Without it, two clients could both see that an ID is free and both
 # store it. Holding the lock makes "check, store, save" one indivisible step.
 assets_lock = threading.Lock()
 
 
-def load_assets() -> list:
-    """Read the assets file, or start empty if it does not exist yet.
+def load_assets() -> tuple:
+    """Read the assets file, returning the assets and the deleted IDs. It starts
+    empty if the file does not exist yet.
 
     A corrupt file raises an error rather than starting empty, because the next
     save would then overwrite whatever could still be recovered.
     """
     try:
         with open(ASSETS_FILE, "r", encoding="utf-8") as file:
-            records = json.load(file)
+            data = json.load(file)
     except FileNotFoundError:
-        return []  # normal on the first run
+        return [], {}  # normal on the first run
 
-    if not isinstance(records, list):
-        raise ValueError(f"{ASSETS_FILE} does not contain a list of assets")
-    return records
+    # Files written before delete was added hold just the list of assets.
+    if isinstance(data, list):
+        return data, {}
+
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("assets"), list)
+        or not isinstance(data.get("deleted"), dict)
+    ):
+        raise ValueError(f"{ASSETS_FILE} does not contain assets and deleted IDs")
+    return data["assets"], data["deleted"]
 
 
 def save_assets() -> None:
@@ -114,7 +131,7 @@ def save_assets() -> None:
     """
     temp_path = ASSETS_FILE + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump(assets, file, indent=2)
+        json.dump({"assets": assets, "deleted": deleted_ids}, file, indent=2)
 
         # flush() and fsync() push the data out of memory buffers and onto the
         # disk, so it survives a power cut as well as a program crash.
@@ -196,13 +213,13 @@ def find_asset(asset_id: str) -> object:
 def generate_asset_id() -> str:
     """Return an asset ID that has never been used. The caller must hold the lock.
 
-    Each candidate is checked against every stored ID, and is only issued if it is
+    Each candidate is checked against every stored and deleted ID, and is only issued if it is
     unused. Holding the lock means nothing can take it before it is stored.
 
     Each server issues IDs from its own range (AST-P... or AST-B...). The other server
     may not be reachable to ask, but this means it can never issue the same ID.
     """
-    used = {asset["asset_id"] for asset in assets}
+    used = {asset["asset_id"] for asset in assets} | set(deleted_ids)
     number = len(used) + 1
     while True:
         candidate = f"{ID_PREFIX}{number:06d}"
@@ -226,6 +243,8 @@ def register_asset(clean: dict, request_id: object) -> dict:
     """
     with assets_lock:
         if request_id is not None:
+            if request_id in deleted_ids.values():
+                return error_reply(BAD_REQUEST, "This registration's asset has since been deleted")
             for existing in assets:
                 if existing.get("request_id") == request_id:
                     if any(existing[field] != clean[field] for field in ("description", "category", "location")):
@@ -282,6 +301,33 @@ def set_asset_status(asset_id: str, status: str) -> dict:
     return {"status": "OK", "stored": updated}
 
 
+def delete_asset(asset_id: str) -> dict:
+    """Remove an asset for good and return the reply.
+
+    Deleting something already deleted counts as success. A client whose reply was
+    lost may send this again, and what it asked for is true.
+    """
+    with assets_lock:
+        if asset_id in deleted_ids:
+            return {"status": "OK", "deleted": asset_id}
+
+        index = find_asset(asset_id)
+        if index is None:
+            return error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
+
+        previous = assets.pop(index)
+        deleted_ids[asset_id] = previous.get("request_id")
+        try:
+            save_assets()
+        except OSError:
+            # As in register_asset().
+            assets.insert(index, previous)
+            del deleted_ids[asset_id]
+            raise
+
+    return {"status": "OK", "deleted": asset_id}
+
+
 def process_request(request: dict) -> dict:
     """Carry out one decoded request and return the reply.
 
@@ -313,6 +359,18 @@ def process_request(request: dict) -> dict:
             return error_reply(BAD_REQUEST, str(exc))
         return set_asset_status(asset_id, status)
 
+    if action == "DELETE":
+        try:
+            asset_id = check_text(request.get("asset_id"), "asset_id")
+        except ValueError as exc:
+            return error_reply(BAD_REQUEST, str(exc))
+        return delete_asset(asset_id)
+
+    if action == "SYNC":
+        # Separate from LIST, so that clients are not sent every deleted ID.
+        with assets_lock:
+            return {"status": "OK", "assets": list(assets), "deleted": dict(deleted_ids)}
+
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
@@ -343,11 +401,12 @@ def is_valid_peer_asset(record: object) -> bool:
     )
 
 
-def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
+def merge_assets(peer_assets: list, prefer_peer: bool, peer_deleted: dict = None) -> int:
     """Add the other server's assets to this one's, returning how many changed.
 
     Both servers end up with the same records, possibly in a different order, by
     following the same rules whichever order things happen in:
+      - A deleted asset stays deleted, even if the other server changed it meanwhile.
       - A missing asset is copied across.
       - Of two different copies, the one with the higher version is newer and wins.
       - With equal versions, each server changed the asset while they could not reach
@@ -359,9 +418,13 @@ def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
     with assets_lock:
         # A dict keeps its order and makes each asset quick to find by ID.
         merged = {asset["asset_id"]: asset for asset in assets}
+        newly_deleted = {key: value for key, value in (peer_deleted or {}).items() if key not in deleted_ids}
 
-        changed = 0
+        changed = len(newly_deleted)
         for peer_asset in peer_assets:
+            if peer_asset["asset_id"] in deleted_ids or peer_asset["asset_id"] in newly_deleted:
+                continue
+
             my_asset = merged.get(peer_asset["asset_id"])
             if my_asset is None:
                 peer_is_better = True
@@ -376,38 +439,45 @@ def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
                 merged[peer_asset["asset_id"]] = peer_asset
                 changed += 1
 
+        for asset_id in newly_deleted:
+            merged.pop(asset_id, None)
+
         if changed:
             previous = list(assets)
             assets[:] = merged.values()
+            deleted_ids.update(newly_deleted)
             try:
                 save_assets()
             except OSError:
                 # Keep memory and disk in agreement, as in register_asset(). The
                 # next sync will simply try again.
                 assets[:] = previous
+                for asset_id in newly_deleted:
+                    del deleted_ids[asset_id]
                 raise
 
         return changed
 
 
 def sync_once(peer: tuple, prefer_peer: bool) -> tuple:
-    """Copy assets from the other server once, returning how many records changed
+    """Copy changes from the other server once, returning how many records changed
     and how many invalid ones were skipped.
 
     An ERROR reply raises ValueError rather than counting as an empty list, so a
     sync that is failing does not look like there is simply nothing to copy. One bad
     record is skipped, so that it does not stop all the others being copied.
     """
-    reply = request_from(peer, {"action": "LIST"})
+    reply = request_from(peer, {"action": "SYNC"})
     if reply.get("status") != "OK":
         raise ValueError(f"It replied with an error: {reply.get('detail')}")
 
     records = reply.get("assets")
-    if not isinstance(records, list):
-        raise ValueError("Its reply has no list of assets")
+    deleted = reply.get("deleted")
+    if not isinstance(records, list) or not isinstance(deleted, dict):
+        raise ValueError("Its reply has no list of assets and deleted IDs")
 
     valid_records = [record for record in records if is_valid_peer_asset(record)]
-    return merge_assets(valid_records, prefer_peer), len(records) - len(valid_records)
+    return merge_assets(valid_records, prefer_peer, deleted), len(records) - len(valid_records)
 
 
 def sync_with_peer(peer: tuple, prefer_peer: bool) -> None:
@@ -566,7 +636,9 @@ def main() -> None:
     # The server cannot work without its data and its port, so problems with
     # either end the program, with a clear message rather than a traceback.
     try:
-        assets.extend(load_assets())
+        loaded_assets, loaded_deleted = load_assets()
+        assets.extend(loaded_assets)
+        deleted_ids.update(loaded_deleted)
         server_sock = create_listening_socket(*address)
     except (OSError, ValueError) as exc:
         logger.error("Could not start the server: %s", exc)
