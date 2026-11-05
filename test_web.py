@@ -30,6 +30,7 @@ import web
 logging.getLogger("asset_web").setLevel(logging.ERROR)
 
 
+USERNAME = "tester"
 PASSWORD = "test password"
 
 
@@ -76,14 +77,19 @@ class WebTestCase(unittest.TestCase):
         common.SERVERS = [self.asset_server]
 
         # A cheap hash keeps the tests fast. The real one is slow on purpose.
-        self.addCleanup(setattr, web, "password_record", web.password_record)
-        web.password_record = web.hash_password(PASSWORD, iterations=1000)
+        self.addCleanup(setattr, web, "USERS_FILE", web.USERS_FILE)
+        self.addCleanup(setattr, web, "HASH_ITERATIONS", web.HASH_ITERATIONS)
+        self.addCleanup(web.users.clear)
+        web.USERS_FILE = os.path.join(temp_dir.name, "web_users.json")
+        web.HASH_ITERATIONS = 1000
+        web.users.clear()
+        web.add_account(USERNAME, PASSWORD)
         web.sessions.clear()
         web.failed_logins = 0
         web.locked_until = 0
 
         # Tests start logged in, unless they set this to None.
-        status, headers, _ = self.fetch("/api/login", "POST", {"password": PASSWORD}, cookie=None)
+        status, headers, _ = self.fetch("/api/login", "POST", {"username": USERNAME, "password": PASSWORD}, cookie=None)
         self.assertEqual(status, 200)
         self.cookie = headers["Set-Cookie"].split(";")[0]
 
@@ -116,17 +122,19 @@ class PasswordTest(unittest.TestCase):
         self.addCleanup(temp_dir.cleanup)
         for name, value in (
             ("PASSWORD_FILE", os.path.join(temp_dir.name, "web_password.json")),
+            ("USERS_FILE", os.path.join(temp_dir.name, "web_users.json")),
             ("HASH_ITERATIONS", 1000),  # the real number is slow on purpose
-            ("password_record", None),
         ):
             self.addCleanup(setattr, web, name, getattr(web, name))
             setattr(web, name, value)
+        self.addCleanup(web.users.clear)
+        web.users.clear()
 
     def test_only_the_right_password_matches(self):
-        web.password_record = web.hash_password("correct horse")
+        record = web.hash_password("correct horse")
 
-        self.assertTrue(web.password_matches("correct horse"))
-        self.assertFalse(web.password_matches("wrong horse"))
+        self.assertTrue(web.password_matches(record, "correct horse"))
+        self.assertFalse(web.password_matches(record, "wrong horse"))
 
     def test_the_password_itself_is_not_stored(self):
         web.save_password("correct horse")
@@ -137,20 +145,72 @@ class PasswordTest(unittest.TestCase):
     def test_identical_passwords_have_different_hashes(self):
         self.assertNotEqual(web.hash_password("same")["hash"], web.hash_password("same")["hash"])
 
-    def test_the_first_run_creates_a_password_and_shows_it_once(self):
+    def load_accounts_quietly(self) -> str:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            first = web.load_or_create_password()
-        self.assertIn("web password is:", output.getvalue())
+            web.load_accounts()
+        return output.getvalue()
 
-        web.password_record = first
-        shown = output.getvalue().split("web password is: ")[1].split()[0]
-        self.assertTrue(web.password_matches(shown))
+    def test_a_first_run_with_nobody_to_ask_creates_an_account_and_shows_it_once(self):
+        output = self.load_accounts_quietly()
 
+        shown = output.split("Password: ")[1].split()[0]
+        self.assertIn("Username: admin", output)
+        self.assertTrue(web.password_matches(web.users["admin"], shown))
+
+        self.assertEqual(self.load_accounts_quietly(), "")
+        self.assertEqual(list(web.users), ["admin"])
+
+    def test_a_password_from_before_accounts_becomes_the_admin_account(self):
+        web.save_password("my old password")
+
+        output = self.load_accounts_quietly()
+
+        self.assertIn("admin", output)
+        self.assertTrue(web.password_matches(web.users["admin"], "my old password"))
+        self.assertFalse(os.path.exists(web.PASSWORD_FILE))
+
+        # It only moves once, and it stays moved after a restart.
+        web.users.clear()
+        self.assertEqual(self.load_accounts_quietly(), "")
+        self.assertTrue(web.password_matches(web.users["admin"], "my old password"))
+
+    def create_from_prompt(self, username: str, *passwords) -> tuple:
         output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            self.assertEqual(web.load_or_create_password(), first)
-        self.assertEqual(output.getvalue(), "")
+        with mock.patch("builtins.input", return_value=username), \
+                mock.patch("getpass.getpass", side_effect=list(passwords)), \
+                contextlib.redirect_stdout(output):
+            return web.create_account_from_prompt(), output.getvalue()
+
+    def test_the_command_line_can_create_an_account(self):
+        result, _ = self.create_from_prompt("Alex", "long enough", "long enough")
+
+        self.assertTrue(result)
+        self.assertTrue(web.password_matches(web.users["alex"], "long enough"))
+
+    def test_the_command_line_can_reset_a_lost_password(self):
+        self.create_from_prompt("alex", "first password", "first password")
+
+        result, _ = self.create_from_prompt("alex", "second password", "second password")
+
+        self.assertTrue(result)
+        self.assertTrue(web.password_matches(web.users["alex"], "second password"))
+
+    def test_the_command_line_uses_admin_if_no_username_is_given(self):
+        self.create_from_prompt("", "long enough", "long enough")
+        self.assertEqual(list(web.users), ["admin"])
+
+    def test_the_command_line_refuses_bad_details(self):
+        for username, first, second, reason in (
+            ("alex", "long enough", "different", "did not match"),
+            ("alex", "short", "short", "at least"),
+            ("<bad>", "long enough", "long enough", "username"),
+        ):
+            with self.subTest(reason):
+                result, output = self.create_from_prompt(username, first, second)
+                self.assertFalse(result)
+                self.assertIn(reason, output)
+        self.assertEqual(web.users, {})
 
     def test_setting_a_password_needs_a_long_enough_match(self):
         attempts = (
@@ -443,8 +503,9 @@ class AddAssetTest(WebTestCase):
 
 
 class LoginTest(WebTestCase):
-    def login(self, password: object = PASSWORD, **options) -> tuple:
-        return self.fetch("/api/login", "POST", {"password": password}, cookie=None, **options)
+    def login(self, password: object = PASSWORD, username: object = USERNAME, **options) -> tuple:
+        body = {"username": username, "password": password}
+        return self.fetch("/api/login", "POST", body, cookie=None, **options)
 
     def test_the_asset_list_needs_a_login(self):
         register(make_asset())
@@ -474,8 +535,30 @@ class LoginTest(WebTestCase):
         self.assertEqual(status, 401)
         self.assertIsNone(headers["Set-Cookie"])
 
+    def test_the_username_ignores_capitals(self):
+        self.assertEqual(self.login(username=USERNAME.upper())[0], 200)
+
+    def test_an_unknown_username_looks_the_same_as_a_wrong_password(self):
+        unknown = self.login(username="nobody")
+        wrong = self.login("wrong")
+
+        self.assertEqual(unknown[0], 401)
+        self.assertEqual(unknown[2], wrong[2])
+
+    def test_an_unknown_username_still_does_the_slow_work(self):
+        with mock.patch.object(web, "hash_password", wraps=web.hash_password) as hashing:
+            self.login(username="nobody")
+        hashing.assert_called_once()
+
+    def test_failed_logins_with_different_usernames_all_count(self):
+        for number in range(web.FAILED_LOGIN_LIMIT):
+            self.login("wrong", username=f"user{number}")
+
+        self.assertEqual(self.login()[0], 429)
+
     def test_invalid_login_requests_are_refused(self):
         self.assertEqual(self.login(7)[0], 400)
+        self.assertEqual(self.login(username=7)[0], 400)
 
         for data in (b"not json", b"[1, 2]"):
             with self.subTest(data):

@@ -44,6 +44,8 @@ class SetupTestCase(unittest.TestCase):
         self.patch_value(common, "SECRET_FILE", self.path("secret.key"))
         self.patch_value(common, "_secret", None)
         self.patch_value(web, "PASSWORD_FILE", self.path("web_password.json"))
+        self.patch_value(web, "USERS_FILE", self.path("web_users.json"))
+        self.addCleanup(web.users.clear)
         self.patch_value(web, "HASH_ITERATIONS", 1000)  # the real number is slow on purpose
         self.patch_value(server, "ASSETS_FILE", self.path("assets.json"))
         self.patch_value(backup, "ASSETS_FILE", self.path("assets_backup.json"))
@@ -82,9 +84,8 @@ class FirstTimeSetupTest(SetupTestCase):
 
         self.assertTrue(result)
         self.assertTrue(setup.is_set_up())
-        web.password_record = web.load_or_create_password()
-        self.addCleanup(setattr, web, "password_record", None)
-        self.assertTrue(web.password_matches("my password"))
+        self.run_quietly(web.load_accounts)
+        self.assertTrue(web.password_matches(web.users["admin"], "my password"))
 
     def test_a_bad_password_can_be_tried_again(self):
         result, output = self.run_quietly(setup.run_setup, ["short", "my password", "different", "my password", "my password"])
@@ -101,12 +102,14 @@ class FirstTimeSetupTest(SetupTestCase):
 
     def test_setup_does_not_replace_an_existing_password(self):
         web.save_password("original password")
-        before = web.load_or_create_password()
+        with open(web.PASSWORD_FILE, encoding="utf-8") as file:
+            before = file.read()
 
         result, _ = self.run_quietly(setup.run_setup)
 
         self.assertTrue(result)
-        self.assertEqual(web.load_or_create_password(), before)
+        with open(web.PASSWORD_FILE, encoding="utf-8") as file:
+            self.assertEqual(file.read(), before)
 
     def test_running_it_when_already_set_up_only_says_so(self):
         self.run_quietly(setup.run_setup, ["my password", "my password"])
@@ -155,9 +158,11 @@ class ResetTest(SetupTestCase):
         "assets_backup.json",
         "secret.key",
         "web_password.json",
+        "web_users.json",
         "assets.json.tmp",
         "assets_backup.json.tmp",
         "web_password.json.tmp",
+        "web_users.json.tmp",
     )
 
     def setUp(self):

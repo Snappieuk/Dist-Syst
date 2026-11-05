@@ -9,8 +9,9 @@ to the browser, and the system's own TCP protocol to the servers, exactly as the
 clients do. It therefore needs no knowledge of which server is in charge, and keeps
 working through a failover.
 
-Everything except the login page needs the web password. It listens only on this machine by default, and
-the connection is not encrypted, so the password should not cross a network you don't trust.
+Everything except the login page needs an account. It listens only on this machine by
+default, and the connection is not encrypted, so passwords should not cross a network you
+don't trust.
 """
 
 import getpass    # asks for a new password without showing it on screen
@@ -20,7 +21,7 @@ import json       # the data sent to the browser is JSON
 import logging    # records what happens, including errors, without stopping
 import os         # os.path finds the page's files
 import re         # checks that a username is acceptable
-import secrets   # generates the first password
+import secrets    # generates the first password
 import sys        # sys.argv holds the --set-password option
 import threading  # the lock protects the login data shared between request threads
 import time       # sessions and lockouts expire
@@ -74,8 +75,8 @@ FIRST_USERNAME = "admin"
 # How long a login lasts.
 SESSION_SECONDS = 8 * 60 * 60
 
-# Wrong passwords in a row before logins are refused for a while, to stop someone trying
-# passwords quickly. It applies to everyone, because there is only one password.
+# Failed logins in a row before logins are refused for a while, to stop someone trying
+# passwords quickly. It applies to everyone, so trying other usernames can't get around it.
 FAILED_LOGIN_LIMIT = 5
 LOCKOUT_SECONDS = 60
 
@@ -94,8 +95,6 @@ USER_ERROR_STATUSES = {
 }
 
 logger = logging.getLogger("asset_web")
-
-password_record = None  # the hash of the web password, set when the program starts
 
 # Who is logged in: a random token for each browser, and when its login expires. These are
 # only held in memory, so restarting this program logs everyone out.
@@ -120,11 +119,11 @@ def hash_password(password: str, salt: str = None, iterations: int = None) -> di
     return {"salt": salt, "iterations": iterations, "hash": digest.hex()}
 
 
-def password_matches(guess: str) -> bool:
-    """Check a guess against the stored hash. compare_digest() takes the same time wherever
+def password_matches(record: dict, guess: str) -> bool:
+    """Check a guess against a stored hash. compare_digest() takes the same time wherever
     the values differ, so timing replies reveals nothing."""
-    attempt = hash_password(guess, password_record["salt"], password_record["iterations"])
-    return hmac.compare_digest(attempt["hash"], password_record["hash"])
+    attempt = hash_password(guess, record["salt"], record["iterations"])
+    return hmac.compare_digest(attempt["hash"], record["hash"])
 
 
 def save_password(password: str) -> dict:
@@ -138,20 +137,49 @@ def save_password(password: str) -> dict:
     return record
 
 
-def load_or_create_password() -> dict:
-    """Read the stored password hash. On the first run, create a random password and show
-    it once, because it cannot be recovered from the hash afterwards."""
-    try:
-        with open(PASSWORD_FILE, encoding="utf-8") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        pass
+def load_accounts() -> None:
+    """Load the accounts when the program starts.
 
-    password = secrets.token_urlsafe(12)
-    record = save_password(password)
-    print(f"\n*** The web password is: {password}")
-    print("*** It will not be shown again. To change it, run: python web.py --set-password\n", flush=True)
-    return record
+    A password from before accounts were added becomes the "admin" account, so it keeps
+    working. If there are no accounts at all, for example when started with nobody at a
+    keyboard for setup to ask, one is created with a random password, shown once because
+    it can't be recovered from the hash afterwards.
+    """
+    accounts = read_users_file()
+
+    if not accounts and os.path.exists(PASSWORD_FILE):
+        with open(PASSWORD_FILE, encoding="utf-8") as file:
+            accounts = {FIRST_USERNAME: json.load(file)}
+        write_users_file(accounts)
+        os.remove(PASSWORD_FILE)
+        print(f'\n*** The web password now belongs to an account called "{FIRST_USERNAME}".\n', flush=True)
+
+    users.clear()
+    users.update(accounts)
+
+    if not accounts:
+        password = secrets.token_urlsafe(12)
+        add_account(FIRST_USERNAME, password)
+        print(f'\n*** A web account was created. Username: {FIRST_USERNAME}  Password: {password}')
+        print("*** It will not be shown again. To change it, run: python web.py --set-password\n", flush=True)
+
+
+def create_account_from_prompt() -> bool:
+    """Ask for a username and password, then create that account or change its password,
+    returning whether that worked."""
+    username = input(f"Username [{FIRST_USERNAME}]: ").strip() or FIRST_USERNAME
+    password = getpass.getpass("Password: ")
+    if password != getpass.getpass("Type it again: "):
+        print("Nothing changed: the two did not match.")
+        return False
+
+    problem = add_account(username, password, replace=True)
+    if problem:
+        print(f"Nothing changed: {problem}.")
+        return False
+
+    print(f"Account {normalise_username(username)} saved. Restart web.py if it is running.")
+    return True
 
 
 def set_password_from_prompt() -> bool:
@@ -239,16 +267,30 @@ def end_session(token: object) -> None:
         sessions.pop(token, None)
 
 
-def try_login(guess: str) -> tuple:
-    """Check a password, returning an HTTP status, a JSON body and the new session token,
-    if there is one. The slow hash runs outside the lock, so it holds up nobody else."""
+def try_login(username: str, guess: str) -> tuple:
+    """Check a username and password, returning an HTTP status, a JSON body and the new
+    session token, if there is one. The slow hash runs outside the lock, so it holds up
+    nobody else.
+
+    An unknown username gets the same message and does the same slow work as a wrong
+    password, so neither the reply nor its timing reveals which usernames exist.
+    """
     global failed_logins, locked_until
 
     with login_lock:
         if time.monotonic() < locked_until:
-            return 429, {"error": "Too many wrong passwords. Please wait a minute and try again."}, None
+            return 429, {"error": "Too many failed logins. Please wait a minute and try again."}, None
 
-    if password_matches(guess):
+    with users_lock:
+        record = users.get(normalise_username(username))
+
+    if record is None:
+        hash_password(guess)
+        matched = False
+    else:
+        matched = password_matches(record, guess)
+
+    if matched:
         with login_lock:
             failed_logins = 0
         return 200, {"logged_in": True}, create_session()
@@ -258,8 +300,8 @@ def try_login(guess: str) -> tuple:
         if failed_logins >= FAILED_LOGIN_LIMIT:
             failed_logins = 0
             locked_until = time.monotonic() + LOCKOUT_SECONDS
-            logger.warning("Too many wrong passwords. Refusing logins for %s seconds.", LOCKOUT_SECONDS)
-    return 401, {"error": "That password is not correct"}, None
+            logger.warning("Too many failed logins. Refusing logins for %s seconds.", LOCKOUT_SECONDS)
+    return 401, {"error": "That username or password is not correct"}, None
 
 
 def public_asset(asset: dict) -> dict:
@@ -418,12 +460,12 @@ class WebHandler(BaseHTTPRequestHandler):
         if body is None:
             return
 
-        guess = body.get("password")
-        if not isinstance(guess, str):
-            self.send_json(400, {"error": "A password is needed"})
+        username, guess = body.get("username"), body.get("password")
+        if not isinstance(username, str) or not isinstance(guess, str):
+            self.send_json(400, {"error": "A username and password are needed"})
             return
 
-        status, reply, token = try_login(guess)
+        status, reply, token = try_login(username, guess)
         if token is None:
             self.send_json(status, reply)
         else:
@@ -507,14 +549,12 @@ class WebHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global password_record
-
     if "--set-password" in sys.argv:
-        set_password_from_prompt()
+        create_account_from_prompt()
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [web] %(message)s")
-    password_record = load_or_create_password()
+    load_accounts()
 
     # ThreadingHTTPServer gives each browser request its own thread, so one slow
     # browser does not delay the others.

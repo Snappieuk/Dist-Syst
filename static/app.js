@@ -21,6 +21,7 @@ const headings = [...document.querySelectorAll("thead th")].slice(0, COLUMNS.len
 const loginSection = document.getElementById("login-section");
 const appSection = document.getElementById("app-section");
 const loginForm = document.getElementById("login-form");
+const username = document.getElementById("username");
 const password = document.getElementById("password");
 const loginError = document.getElementById("login-error");
 const logoutButton = document.getElementById("logout");
@@ -184,7 +185,7 @@ function showLogin() {
   appSection.hidden = true;
   logoutButton.hidden = true;
   loginSection.hidden = false;
-  password.focus();
+  username.focus();
 }
 
 function showApp() {
@@ -200,7 +201,7 @@ async function logIn(event) {
     const response = await fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: password.value }),
+      body: JSON.stringify({ username: username.value, password: password.value }),
     });
     const body = await response.json();
     if (!response.ok) {

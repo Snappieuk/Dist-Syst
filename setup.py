@@ -53,14 +53,15 @@ def can_ask_questions() -> bool:
 
 
 def is_set_up() -> bool:
-    return os.path.exists(common.SECRET_FILE) and os.path.exists(web.PASSWORD_FILE)
+    has_account = os.path.exists(web.USERS_FILE) or os.path.exists(web.PASSWORD_FILE)
+    return os.path.exists(common.SECRET_FILE) and has_account
 
 
 def run_setup() -> bool:
     """Create whatever is missing, returning whether the system is now set up."""
     common.shared_secret()
 
-    if os.path.exists(web.PASSWORD_FILE):
+    if os.path.exists(web.USERS_FILE) or os.path.exists(web.PASSWORD_FILE):
         return True
 
     print("Choose a password for the web page.")
@@ -74,8 +75,8 @@ def run_setup() -> bool:
 def generated_files() -> list:
     """Every file the system creates as it runs. A reset deletes only these, by exact name,
     so that it can never remove anything else."""
-    data_and_password = [server.ASSETS_FILE, backup.ASSETS_FILE, web.PASSWORD_FILE]
-    return data_and_password + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_password]
+    data_and_accounts = [server.ASSETS_FILE, backup.ASSETS_FILE, web.USERS_FILE, web.PASSWORD_FILE]
+    return data_and_accounts + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_accounts]
 
 
 def is_running(address: tuple) -> bool:
