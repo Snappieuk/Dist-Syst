@@ -91,8 +91,29 @@ class ServerTestCase(unittest.TestCase):
     def request(self, request: dict) -> dict:
         return common.send_request(request, self.config)
 
-    def register(self, asset: dict) -> dict:
-        return self.request({"action": "REGISTER", "asset": asset})
+    def register(self, asset: dict, request_id: str = None) -> dict:
+        request_id = request_id or common.new_request_id()
+        return self.request({"action": "REGISTER", "request_id": request_id, "asset": asset})
+
+    def edit(self, asset_id: str, version: int, request_id: str = None, **changes) -> dict:
+        return self.request({
+            "action": "EDIT",
+            "request_id": request_id or common.new_request_id(),
+            "asset_id": asset_id,
+            "expected_version": version,
+            "changes": changes,
+        })
+
+    def delete(self, asset_id: str, version: int, request_id: str = None) -> dict:
+        return self.request({
+            "action": "DELETE",
+            "request_id": request_id or common.new_request_id(),
+            "asset_id": asset_id,
+            "expected_version": version,
+        })
+
+    def listed(self) -> list:
+        return self.request({"action": "LIST"})["assets"]
 
     def raw_exchange(self, payload: bytes) -> dict:
         """Send raw bytes to the primary and return its decoded reply."""
@@ -156,7 +177,7 @@ class ProtocolTest(ServerTestCase):
             self.request(huge)
 
     def test_an_invalid_asset_gets_an_error_not_silent_acceptance(self):
-        reply = self.request({"action": "REGISTER", "asset": "laptop"})
+        reply = self.register("laptop")
         self.assertEqual(reply["code"], common.BAD_REQUEST)
         self.assertEqual(reply["context"], {"field": "asset"})
 
@@ -170,6 +191,7 @@ class AssetDataTest(ServerTestCase):
         stored = reply["stored"]
         for field, value in make_asset().items():
             self.assertEqual(stored[field], value)
+        self.assertEqual(stored["version"], 1)
         self.assertRegex(stored["created_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(stored["created_at"], stored["updated_at"])
         self.assertEqual(self.request({"action": "LIST"})["assets"], [stored])
@@ -327,6 +349,132 @@ class ConcurrencyTest(ServerTestCase):
             with self.assertRaises(OSError):
                 common.send_request({"action": "LIST"}, config)
             self.assertLess(time.monotonic() - started, config["client_timeout_seconds"] + 1)
+
+
+
+class ChangeTest(ServerTestCase):
+    """FR10 (soft deletion), FR11, NFR10, NFR11, NFR12."""
+
+    def test_an_asset_can_be_edited_and_the_updated_record_is_returned(self):
+        created = self.register(make_asset())["stored"]
+        time.sleep(1.1)  # so updated_at visibly moves on
+        reply = self.edit("AST-0001", 1, description="Laptop, new battery", location="Site B", status="not in use")
+        self.assertEqual(reply["status"], "OK")
+        stored = reply["stored"]
+        self.assertEqual(
+            (stored["description"], stored["location"], stored["status"], stored["version"]),
+            ("Laptop, new battery", "Site B", "Not In Use", 2),
+        )
+        self.assertEqual(stored["created_at"], created["created_at"])
+        self.assertGreater(stored["updated_at"], created["updated_at"])
+        self.assertEqual(self.listed(), [stored])
+
+    def test_edits_are_validated_like_registrations(self):
+        self.register(make_asset())
+        self.assertEqual(self.edit("AST-0001", 1, status="Lost")["context"]["field"], "status")
+        self.assertEqual(self.edit("AST-0001", 1, description="")["context"]["field"], "description")
+        reply = self.request({
+            "action": "EDIT", "request_id": "id-edit", "asset_id": "AST-0001",
+            "expected_version": 1, "changes": {"asset_id": "AST-9"},
+        })
+        self.assertEqual(reply["context"]["field"], "asset_id")
+        self.assertEqual(self.edit("AST-0001", 1)["context"]["field"], "changes")
+        self.assertEqual(self.listed()[0]["version"], 1)
+
+    def test_an_edit_based_on_an_old_version_is_a_conflict(self):
+        self.register(make_asset())
+        self.edit("AST-0001", 1, location="Site B")
+        reply = self.edit("AST-0001", 1, location="Site C")
+        self.assertEqual(reply["code"], common.CONFLICT)
+        self.assertEqual(reply["context"]["current_version"], 2)
+        self.assertEqual(self.listed()[0]["location"], "Site B")
+
+    def test_only_one_of_many_simultaneous_edits_of_a_version_wins(self):
+        self.register(make_asset())
+        replies = []
+        threads = [
+            threading.Thread(target=lambda n=n: replies.append(self.edit("AST-0001", 1, location=f"Room {n}")))
+            for n in range(20)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(reply["status"] for reply in replies), ["ERROR"] * 19 + ["OK"])
+        self.assertEqual(self.listed()[0]["version"], 2)
+
+    def test_editing_or_deleting_an_unknown_asset_is_not_found(self):
+        self.assertEqual(self.edit("AST-404", 1, location="X")["code"], common.NOT_FOUND)
+        self.assertEqual(self.delete("AST-404", 1)["code"], common.NOT_FOUND)
+
+    def test_a_deleted_asset_is_kept_marked_deleted_and_left_out_of_lists(self):
+        self.register(make_asset("AST-0001"))
+        self.register(make_asset("AST-0002"))
+        reply = self.delete("AST-0001", 1)
+        self.assertEqual(reply["deleted"], "AST-0001")
+        self.assertTrue(reply["stored"]["deleted"])
+        self.assertRegex(reply["stored"]["deleted_at"], r"Z$")
+        self.assertEqual([asset["asset_id"] for asset in self.listed()], ["AST-0002"])
+        with open(self.server.data_file, encoding="utf-8") as file:
+            kept = {asset["asset_id"]: asset for asset in json.load(file)["assets"]}
+        self.assertTrue(kept["AST-0001"]["deleted"])
+
+    def test_a_deleted_asset_cannot_be_edited_and_its_id_is_not_reused(self):
+        self.register(make_asset())
+        self.delete("AST-0001", 1)
+        self.assertEqual(self.edit("AST-0001", 2, location="X")["code"], common.NOT_FOUND)
+        self.assertEqual(self.register(make_asset())["code"], common.DUPLICATE_ASSET)
+
+    def test_a_delete_based_on_an_old_version_is_a_conflict(self):
+        self.register(make_asset())
+        self.edit("AST-0001", 1, location="Site B")
+        self.assertEqual(self.delete("AST-0001", 1)["code"], common.CONFLICT)
+        self.assertEqual(len(self.listed()), 1)
+
+    def test_every_change_needs_a_request_id(self):
+        reply = self.request({"action": "REGISTER", "asset": make_asset()})
+        self.assertEqual(reply["context"]["field"], "request_id")
+        self.assertEqual(self.listed(), [])
+
+    def test_repeating_a_registration_stores_one_asset_and_returns_the_same_reply(self):
+        first = self.register(make_asset(), request_id="retry-1")
+        second = self.register(make_asset(), request_id="retry-1")
+        self.assertEqual(first, second)  # not DUPLICATE_ASSET: it's the same request again
+        self.assertEqual(len(self.listed()), 1)
+
+    def test_repeating_an_edit_or_delete_does_not_repeat_the_change(self):
+        self.register(make_asset())
+        first = self.edit("AST-0001", 1, request_id="edit-1", location="Site B")
+        self.assertEqual(self.edit("AST-0001", 1, request_id="edit-1", location="Site B"), first)
+        self.assertEqual(self.listed()[0]["version"], 2)
+        deleted = self.delete("AST-0001", 2, request_id="delete-1")
+        self.assertEqual(self.delete("AST-0001", 2, request_id="delete-1"), deleted)
+
+    def test_a_request_id_cannot_be_reused_for_a_different_request(self):
+        self.register(make_asset("AST-0001"), request_id="same")
+        reply = self.register(make_asset("AST-0002"), request_id="same")
+        self.assertEqual((reply["code"], reply["context"]["field"]), (common.BAD_REQUEST, "request_id"))
+
+    def test_request_ids_are_remembered_after_a_restart(self):
+        first = self.register(make_asset(), request_id="before-restart")
+        restarted = server.AssetServer(self.config)
+        replay = restarted.process({
+            "action": "REGISTER", "protocol_version": 1, "request_id": "before-restart", "asset": make_asset(),
+        })
+        self.assertEqual(replay, first)
+
+    def test_old_request_ids_are_eventually_forgotten(self):
+        with mock.patch("server.MAX_REMEMBERED_REQUESTS", 3):
+            for n in range(5):
+                self.register(make_asset(f"AST-{n}"), request_id=f"r{n}")
+        self.assertEqual(list(self.server.requests), ["r2", "r3", "r4"])
+
+    def test_a_failed_save_of_an_edit_changes_nothing(self):
+        self.register(make_asset())
+        with mock.patch("server.json.dump", side_effect=OSError("disk full")):
+            self.assertEqual(self.edit("AST-0001", 1, request_id="e", location="X")["code"], common.INTERNAL)
+        self.assertEqual(self.listed()[0]["location"], "Site A")
+        self.assertNotIn("e", self.server.requests)
 
 
 if __name__ == "__main__":

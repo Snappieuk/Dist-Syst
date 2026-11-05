@@ -4,11 +4,15 @@ Asset Management System server.
     python server.py
 
 Understands these actions:
-    {"action": "REGISTER", "asset": {...}}   -> validates and stores the asset, replies with it
-    {"action": "LIST"}                       -> replies with every stored asset
+    {"action": "REGISTER", "request_id": "...", "asset": {...}}
+    {"action": "LIST"}
+    {"action": "EDIT", "request_id": "...", "asset_id": "...", "expected_version": 1,
+     "changes": {"description": "...", "category": "...", "location": "...", "status": "..."}}
+    {"action": "DELETE", "request_id": "...", "asset_id": "...", "expected_version": 1}
 
-Every request must include "protocol_version". Every reply has "status": "OK"
-or "status": "ERROR" with a stable "code", a "message" and a "context".
+Every request must include "protocol_version", and every change must include a
+unique "request_id". Every reply has "status": "OK" or "status": "ERROR" with a
+stable "code", a "message" and a "context".
 """
 
 import datetime     # creates the server's timestamps
@@ -23,8 +27,11 @@ import common
 from common import (
     ASSET_FIELDS,
     BAD_REQUEST,
+    CONFLICT,
     DUPLICATE_ASSET,
+    EDITABLE_FIELDS,
     INTERNAL,
+    NOT_FOUND,
     PROTOCOL_VERSION,
     STATUSES,
     TOO_LARGE,
@@ -44,6 +51,13 @@ ASSET_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
 
 # The longest text accepted in any field.
 MAX_FIELD_LENGTH = 200
+
+# How many recent request IDs are remembered, so that retries are recognised. Old ones
+# are forgotten so the data file can't grow forever; a retry comes within seconds.
+MAX_REMEMBERED_REQUESTS = 1000
+
+# Actions that change the data, and so must carry a request_id.
+CHANGE_ACTIONS = ("REGISTER", "EDIT", "DELETE")
 
 logger = logging.getLogger("asset_server")
 
@@ -87,6 +101,26 @@ def check_status(value: object) -> str:
     raise InvalidRequest(f"status must be one of: {', '.join(STATUSES)}", field="status", allowed=list(STATUSES))
 
 
+def check_version(value: object) -> int:
+    """Return the expected_version a client sent, or raise InvalidRequest."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise InvalidRequest("expected_version must be a whole number of at least 1", field="expected_version")
+    return value
+
+
+def check_request_id(value: object) -> str:
+    """Return a change's request_id, or raise InvalidRequest."""
+    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+        raise InvalidRequest("Every change needs a request_id of 1-64 characters", field="request_id")
+    return value
+
+
+def fingerprint(request: dict) -> str:
+    """What a request asks for, ignoring the parts that may differ between retries."""
+    ignored = ("protocol_version", "request_id", "token")
+    return json.dumps({key: value for key, value in request.items() if key not in ignored}, sort_keys=True)
+
+
 def validate_asset(asset: object) -> dict:
     """Return a clean copy of a client's asset, or raise InvalidRequest.
 
@@ -122,7 +156,8 @@ class AssetServer:
         # step, so they cannot interfere with each other.
         self.lock = threading.Lock()
 
-        self.assets = {}  # every asset, by asset_id
+        self.assets = {}    # every asset, by asset_id, including soft-deleted ones
+        self.requests = {}  # recent request IDs: {request_id: {"fingerprint", "reply"}}
         self.load()
 
     # ---- Storage --------------------------------------------------------------
@@ -141,6 +176,7 @@ class AssetServer:
         if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
             raise ValueError(f"{self.data_file} does not contain valid asset data")
         self.assets = {asset["asset_id"]: asset for asset in data["assets"]}
+        self.requests = data.get("requests", {})
 
     def save(self) -> None:
         """Write all the data to disk. The caller must hold the lock.
@@ -152,7 +188,7 @@ class AssetServer:
         """
         temp_path = self.data_file + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as file:
-            json.dump({"assets": list(self.assets.values())}, file, indent=2)
+            json.dump({"assets": list(self.assets.values()), "requests": self.requests}, file, indent=2)
             file.flush()
             os.fsync(file.fileno())
         os.replace(temp_path, self.data_file)
@@ -183,39 +219,131 @@ class AssetServer:
             )
 
         action = request.get("action")
-        handler = {"REGISTER": self.register, "LIST": self.list_assets}.get(action)
+        handlers = {
+            "REGISTER": self.register,
+            "EDIT": self.edit,
+            "DELETE": self.delete,
+            "LIST": self.list_assets,
+        }
+        handler = handlers.get(action)
         if handler is None:
             return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
         try:
+            if action in CHANGE_ACTIONS:
+                return self.change(request, handler)
             return handler(request)
         except InvalidRequest as exc:
             return error_reply(exc.code, str(exc), **exc.context)
 
-    def register(self, request: dict) -> dict:
-        """Store a new asset, stamped with the server's time."""
-        asset = validate_asset(request.get("asset"))
+    def change(self, request: dict, handler) -> dict:
+        """Apply a change exactly once, however many times the request is sent.
+
+        The handler makes the change in memory and returns its reply and a way to undo
+        it. The request ID and reply are remembered, then both are saved together, so
+        a retry after a lost reply gets the original reply and the change isn't made
+        twice. Everything happens under the lock, so two copies of one request
+        arriving at once can't both be applied.
+        """
+        request_id = check_request_id(request.get("request_id"))
         with self.lock:
-            # IDs are compared ignoring capitals, so AST-1 and ast-1 can't both exist.
-            taken = {asset_id.lower() for asset_id in self.assets}
-            if asset["asset_id"].lower() in taken:
-                raise InvalidRequest(
-                    f"An asset with the ID {asset['asset_id']} already exists",
-                    code=DUPLICATE_ASSET,
-                    field="asset_id",
-                    asset_id=asset["asset_id"],
-                )
-            now = utc_now()
-            asset["created_at"] = now
-            asset["updated_at"] = now
-            self.assets[asset["asset_id"]] = asset
-            self.commit(lambda: self.assets.pop(asset["asset_id"]))
+            previous = self.requests.get(request_id)
+            if previous is not None:
+                if previous["fingerprint"] != fingerprint(request):
+                    raise InvalidRequest("This request_id was already used for a different request", field="request_id")
+                return previous["reply"]
+
+            reply, undo = handler(request)
+
+            def undo_all() -> None:
+                undo()
+                del self.requests[request_id]
+
+            self.requests[request_id] = {"fingerprint": fingerprint(request), "reply": reply}
+            self.commit(undo_all)
+            while len(self.requests) > MAX_REMEMBERED_REQUESTS:
+                del self.requests[next(iter(self.requests))]  # forget the oldest
+        return reply
+
+    def current_asset(self, asset_id: object, expected_version: object) -> dict:
+        """Return the asset a change applies to. The caller must hold the lock.
+
+        The change must name the version the client last saw. If someone else has
+        changed the asset since, it is refused with CONFLICT rather than silently
+        overwriting a change its author never saw (optimistic concurrency control).
+        """
+        asset_id = check_text(asset_id, "asset_id")
+        expected_version = check_version(expected_version)
+        asset = self.assets.get(asset_id)
+        if asset is None or asset.get("deleted"):
+            raise InvalidRequest(f"No asset has the ID {asset_id}", code=NOT_FOUND, asset_id=asset_id)
+        if asset["version"] != expected_version:
+            raise InvalidRequest(
+                f"{asset_id} was changed by someone else. Refresh and try again.",
+                code=CONFLICT,
+                asset_id=asset_id,
+                expected_version=expected_version,
+                current_version=asset["version"],
+            )
+        return asset
+
+    def register(self, request: dict) -> tuple:
+        """Store a new asset, stamped with the server's time. The caller holds the lock."""
+        asset = validate_asset(request.get("asset"))
+        # IDs are compared ignoring capitals, so AST-1 and ast-1 can't both exist. A
+        # deleted asset keeps its ID, so the ID can't be reused for something else.
+        taken = {asset_id.lower() for asset_id in self.assets}
+        if asset["asset_id"].lower() in taken:
+            raise InvalidRequest(
+                f"An asset with the ID {asset['asset_id']} already exists",
+                code=DUPLICATE_ASSET,
+                field="asset_id",
+                asset_id=asset["asset_id"],
+            )
+        now = utc_now()
+        asset.update(version=1, created_at=now, updated_at=now)
+        self.assets[asset["asset_id"]] = asset
         logger.info("Registered %s", asset["asset_id"])
-        return {"status": "OK", "stored": asset}
+        return {"status": "OK", "stored": asset}, lambda: self.assets.pop(asset["asset_id"])
+
+    def edit(self, request: dict) -> tuple:
+        """Change some of an asset's description, category, location and status.
+        The caller holds the lock."""
+        changes = request.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            raise InvalidRequest("changes must be an object with at least one field", field="changes")
+        for field in changes:
+            if field not in EDITABLE_FIELDS:
+                raise InvalidRequest(
+                    f"{field} cannot be edited", field=field, editable=list(EDITABLE_FIELDS)
+                )
+        clean = {field: check_text(value, field) for field, value in changes.items()}
+        if "status" in clean:
+            clean["status"] = check_status(clean["status"])
+
+        previous = self.current_asset(request.get("asset_id"), request.get("expected_version"))
+        # A new record replaces the old one, rather than the old one being edited, so
+        # undoing is just putting the old record back.
+        updated = dict(previous, **clean, version=previous["version"] + 1, updated_at=utc_now())
+        self.assets[updated["asset_id"]] = updated
+        logger.info("Edited %s: %s", updated["asset_id"], ", ".join(clean))
+        return {"status": "OK", "stored": updated}, lambda: self.assets.__setitem__(updated["asset_id"], previous)
+
+    def delete(self, request: dict) -> tuple:
+        """Soft-delete an asset: the record is kept, marked deleted with the server's
+        time, and left out of normal results. The caller holds the lock."""
+        previous = self.current_asset(request.get("asset_id"), request.get("expected_version"))
+        now = utc_now()
+        deleted = dict(previous, deleted=True, deleted_at=now, updated_at=now, version=previous["version"] + 1)
+        self.assets[deleted["asset_id"]] = deleted
+        logger.info("Deleted %s", deleted["asset_id"])
+        reply = {"status": "OK", "deleted": deleted["asset_id"], "stored": deleted}
+        return reply, lambda: self.assets.__setitem__(deleted["asset_id"], previous)
 
     def list_assets(self, request: dict) -> dict:
-        """Return every asset."""
+        """Return every asset that has not been deleted."""
         with self.lock:
-            return {"status": "OK", "assets": list(self.assets.values())}
+            current = [asset for asset in self.assets.values() if not asset.get("deleted")]
+        return {"status": "OK", "assets": current}
 
     # ---- Networking -----------------------------------------------------------
 

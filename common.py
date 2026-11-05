@@ -12,6 +12,7 @@ version, the error codes and how settings are loaded from config.json.
 import json      # turns Python dicts into JSON text and back
 import os        # finds config.json next to this file
 import socket    # the networking building blocks (sockets)
+import uuid      # creates the unique ID sent with every change
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
@@ -27,10 +28,15 @@ UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"    # missing or unsupported protocol
 TOO_LARGE = "TOO_LARGE"                        # the message is over the size limit
 INTERNAL = "INTERNAL"                          # the server failed; the request may be fine
 DUPLICATE_ASSET = "DUPLICATE_ASSET"            # an asset with that asset_id already exists
+NOT_FOUND = "NOT_FOUND"                        # no current asset has that asset_id
+CONFLICT = "CONFLICT"                          # the asset changed since the client read it
 
 # The fields a client supplies for an asset, and the only statuses allowed.
 ASSET_FIELDS = ("asset_id", "description", "category", "location", "status")
 STATUSES = ("In Use", "Not In Use")
+
+# The fields EDIT may change. The asset_id identifies the asset, so it never changes.
+EDITABLE_FIELDS = ("description", "category", "location", "status")
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -105,6 +111,16 @@ def receive_message(sock: socket.socket, max_bytes: int) -> dict:
     if not isinstance(message, dict):
         raise ValueError("The message must be a JSON object")
     return message
+
+
+def new_request_id() -> str:
+    """Return a new unique ID for a state-changing request (REGISTER, EDIT, DELETE).
+
+    If a reply is lost, the client sends the same request again with the same ID, and
+    the server recognises it and returns the original result instead of making the
+    change twice.
+    """
+    return uuid.uuid4().hex
 
 
 def send_request(request: dict, config: dict = None) -> dict:
