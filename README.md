@@ -302,6 +302,29 @@ across the system. A file that reaches 1 MB is renamed to `primary.log.1` and a 
 started, and only the 5 newest old files are kept, so the logs can't fill the disk. A crash
 is recorded with its full error before the program stops.
 
+### Audit logs
+
+Beside its normal log, each program keeps an audit log of who did what:
+`primary-audit.log`, `backup-audit.log` and `web-audit.log`. Each line is one JSON record,
+so a program can read them back, for example:
+
+```
+{"time": "2026-11-05T21:14:03Z", "action": "EDIT", "asset_id": "AST-P000004", "request_id": null, "user": "alex", "server": "primary", "seq": 12}
+```
+
+| Written by | Actions | Fields |
+|---|---|---|
+| A server, for each change it makes | `REGISTER`, `SET_STATUS`, `EDIT`, `DELETE` | `time`, `action`, `asset_id`, `request_id`, `user`, `server`, `seq` |
+| `web.py` | `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `CREATE_ACCOUNT` | `time`, `action`, `user`, and `address`, `reason`, `account` or `role` where they apply |
+
+A change is only recorded once it has been saved, and a request that changes nothing, such
+as a retry or a refused duplicate, isn't recorded. The server that made the change records
+it, which is the backup while it is in charge. The backup doesn't record the copies it
+receives from the primary, so each change is in exactly one audit log. `user` is the web
+user who made the change, which `web.py` sends with each change request. It is `null` for
+the GUI and command-line clients, which have no login. `request_id` is the one the client
+sent, so for a registration it ties the record to the client's retries. Times are UTC.
+
 Passwords and the shared secret are never logged, including the password `web.py` creates
 when nobody is at the keyboard, which is only printed. Anything a user typed, such as a
 description, is logged in quotes with line breaks shown as `\n`, so it can't fake an extra
@@ -381,6 +404,9 @@ has. `query` is found anywhere in the ID, description, category, location or sta
 ignoring capitals. `status` must match exactly. `offset` skips that many matches and `limit`
 returns at most that many, so a client can page through a long list without hitting the
 10 MiB message limit. Both servers answer `LIST`, so the backup can search too.
+
+Any change request may also carry `"user": "..."`, the web user it is made for, which is
+only used in the audit log. `web.py` sends it. The other clients leave it out.
 
 `EDIT` changes any of `description`, `category`, `location` and `status`, and leaves the
 others alone. Each is checked as on registration, the edit is refused with
@@ -568,9 +594,12 @@ Other limitations:
 - There are only two roles. Accounts can't be deleted, and a role can't be changed, from the
   page. Changing a role means editing `web_users.json` and restarting `web.py`.
 - The roles only apply to the web page. Anything with `secret.key` has full access.
-- Only `web.py` knows who made a change, so only changes made on the web page are logged with
-  a name. Changes from the GUI or the command-line clients are logged by the servers, but not
-  who made them.
+- Only `web.py` knows who made a change, so only changes made on the web page are audited
+  with a name. Changes from the GUI or the command-line clients are audited with `user` set
+  to `null`. The servers trust the `user` a program sends, since only programs with
+  `secret.key` can send one.
+- The audit logs are ordinary files, so someone with access to the machine could edit them.
+  They are a record, not tamper-proof evidence.
 - Each machine keeps its own logs. Following an event across machines means collecting
   their files, and their clocks must agree for the times to line up.
 - Accounts belong to `web.py` and are stored beside it. They aren't copied to the backup, so

@@ -7,6 +7,7 @@ Every log here is written to a temporary folder, so your real logs are never tou
 """
 
 import io
+import json
 import logging
 import os
 import socket
@@ -55,12 +56,13 @@ class LogFileTest(LoggingTestCase):
     def setUp(self):
         super().setUp()
         root = logging.getLogger()
-        saved = (root.handlers[:], root.level, sys.excepthook, common.LOG_FOLDER)
+        audit = common.audit_logger
+        saved = (root.handlers[:], root.level, sys.excepthook, common.LOG_FOLDER, audit.handlers[:])
 
         def restore():
-            for handler in root.handlers:
+            for handler in root.handlers + audit.handlers:
                 handler.close()
-            root.handlers[:], level, sys.excepthook, common.LOG_FOLDER = saved
+            root.handlers[:], level, sys.excepthook, common.LOG_FOLDER, audit.handlers[:] = saved
             root.setLevel(level)
 
         self.addCleanup(restore)
@@ -95,9 +97,22 @@ class LogFileTest(LoggingTestCase):
         for number in range(500):
             logging.getLogger("test").info("line %d", number)
 
-        files = sorted(os.listdir(self.logs))
+        files = sorted(name for name in os.listdir(self.logs) if name.startswith("primary.log"))
         self.assertEqual(files, ["primary.log"] + [f"primary.log.{n}" for n in range(1, common.LOG_FILE_COPIES + 1)])
         self.assertIn("line 499", self.read_log("primary.log"))
+
+    def test_audit_records_go_only_to_the_audit_file(self):
+        common.configure_logging("web")
+        common.audit("LOGIN", user="alex", address="127.0.0.1")
+        logging.getLogger("test").info("an everyday message")
+
+        audit_lines = self.read_log("web-audit.log").splitlines()
+        self.assertEqual(len(audit_lines), 1)
+        record = json.loads(audit_lines[0])
+        self.assertEqual((record["action"], record["user"]), ("LOGIN", "alex"))
+        self.assertRegex(record["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertNotIn("LOGIN", self.read_log("web.log"))
+        self.assertNotIn("everyday", self.read_log("web-audit.log"))
 
     def test_a_log_file_that_cannot_be_opened_does_not_stop_the_program(self):
         with open(self.logs, "w"):
@@ -124,6 +139,16 @@ class ProgramLogTest(LoggingTestCase):
             except OSError:
                 pass
             time.sleep(0.2)
+
+        # A change made on the primary is in its audit file, but not the backup's, which
+        # only applied a copy.
+        reply = common.request_from(servers[0], common.new_register_request(
+            {"description": "Audited laptop", "category": "IT", "location": "A", "status": common.IN_USE}))
+        self.assertEqual(reply["status"], "OK")
+        records = [json.loads(line) for line in self.read_log("primary-audit.log").splitlines()]
+        self.assertEqual([(r["action"], r["asset_id"], r["server"]) for r in records],
+                         [("REGISTER", reply["stored"]["asset_id"], "primary")])
+        self.assertEqual(self.read_log("backup-audit.log"), "")
 
         primary, backup = self.read_log("primary.log"), self.read_log("backup.log")
         self.assertIn("[primary]", primary)

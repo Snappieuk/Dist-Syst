@@ -195,11 +195,13 @@ class ResetTest(SetupTestCase):
 
     def test_the_logs_are_deleted_too(self):
         os.mkdir(self.path("logs"))
-        self.create("logs/primary.log", "logs/primary.log.1", "logs/web.log", "logs/start.log")
+        self.create("logs/primary.log", "logs/primary.log.1", "logs/web.log", "logs/start.log",
+                    "logs/primary-audit.log", "logs/web-audit.log.2")
 
         _, output = self.run_quietly(setup.reset, answers=[setup.RESET_WORD])
 
         self.assertIn("primary.log.1", output)
+        self.assertIn("web-audit.log.2", output)
         self.assertNotIn("logs", self.remaining())
 
     def test_other_files_in_the_log_folder_are_kept(self):

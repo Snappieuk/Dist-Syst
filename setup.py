@@ -82,8 +82,8 @@ def generated_files() -> list:
     data_and_accounts = [server.ASSETS_FILE, backup.ASSETS_FILE, web.USERS_FILE, web.PASSWORD_FILE]
     logs = []
     for name in common.LOG_NAMES:
-        current = common.log_path(name)
-        logs += [current] + [f"{current}.{number}" for number in range(1, common.LOG_FILE_COPIES + 1)]
+        for current in (common.log_path(name), common.audit_log_path(name)):
+            logs += [current] + [f"{current}.{number}" for number in range(1, common.LOG_FILE_COPIES + 1)]
     return (data_and_accounts + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_accounts]
             + logs)
 

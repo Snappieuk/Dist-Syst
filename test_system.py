@@ -15,6 +15,7 @@ import datetime
 import io
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -1151,6 +1152,83 @@ class ReplicaTest(NodeTestCase):
         self.assertEqual([asset["asset_id"] for asset in assets], ["AST-P000001"])
         self.assertEqual(deleted, {"AST-B000001": None})
         self.assertEqual(seq, 9)
+
+
+class AuditTest(NodeTestCase):
+    """Every change a server makes is added to its audit log, saying who made it."""
+
+    def audited(self, *requests) -> list:
+        """Run requests through the server's rules, returning the audit records written."""
+        with self.assertLogs(common.audit_logger, "INFO") as logs:
+            common.audit("TEST_START")  # so assertLogs has a record even if nothing else does
+            for request in requests:
+                node.process_request(request)
+        return [json.loads(line.split(":", 2)[2]) for line in logs.output][1:]
+
+    def register_request(self, description="Dell laptop", **extra) -> dict:
+        return {"action": "REGISTER", "request_id": f"req-{description}", "asset": make_asset(description), **extra}
+
+    def test_each_kind_of_change_is_recorded(self):
+        records = self.audited(
+            self.register_request(user="alex"),
+            {"action": "SET_STATUS", "asset_id": "AST-P000001", "status": common.NOT_IN_USE, "user": "alex"},
+            {"action": "EDIT", "asset_id": "AST-P000001", "changes": {"location": "B"}, "user": "sam"},
+            {"action": "DELETE", "asset_id": "AST-P000001", "request_id": "del-1"},
+        )
+
+        self.assertEqual([(r["action"], r["asset_id"], r["user"], r["seq"]) for r in records], [
+            ("REGISTER", "AST-P000001", "alex", 1),
+            ("SET_STATUS", "AST-P000001", "alex", 2),
+            ("EDIT", "AST-P000001", "sam", 3),
+            ("DELETE", "AST-P000001", None, 4),  # from the GUI or command line, which have no login
+        ])
+        self.assertEqual(records[0]["request_id"], "req-Dell laptop")
+        self.assertEqual(records[3]["request_id"], "del-1")
+        self.assertTrue(all(r["server"] == "primary" for r in records))
+        self.assertTrue(all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", r["time"]) for r in records))
+
+    def test_requests_that_change_nothing_are_not_recorded(self):
+        node.process_request(self.register_request())
+        records = self.audited(
+            self.register_request(),  # a retry, which returns the same asset
+            self.register_request("Dell laptop", request_id="other"),  # a duplicate
+            {"action": "SET_STATUS", "asset_id": "AST-P000001", "status": common.IN_USE},  # already true
+            {"action": "EDIT", "asset_id": "AST-P000001", "changes": {"location": "B"}, "expected_version": 9},
+            {"action": "DELETE", "asset_id": "AST-NOPE"},
+            {"action": "LIST"},
+        )
+        self.assertEqual(records, [])
+
+    def test_a_change_that_fails_to_save_is_not_recorded(self):
+        blocker = node.ASSETS_FILE + ".tmp"
+        os.mkdir(blocker)
+        self.addCleanup(os.rmdir, blocker)
+
+        with mock.patch.object(node, "audit") as audit, self.assertRaises(OSError):
+            node.process_request(self.register_request())
+
+        audit.assert_not_called()
+        self.assertEqual(node.assets, [])
+
+    def test_a_bad_user_field_is_refused(self):
+        for user in (7, "", "x" * (node.MAX_USER_LENGTH + 1)):
+            with self.subTest(user=user):
+                reply = node.process_request(self.register_request(user=user))
+                self.assertEqual(reply["code"], common.BAD_REQUEST)
+        self.assertEqual(node.assets, [])
+
+    def test_changes_copied_to_the_backup_are_not_recorded_twice(self):
+        node.accepts_writes = False
+
+        with mock.patch.object(node, "audit") as audit:
+            self.assertEqual(backup.apply_change({"seq": 1, "asset": make_record()})["status"], "OK")
+
+        audit.assert_not_called()
+
+    def test_a_typed_line_break_stays_inside_its_record(self):
+        with self.assertLogs(common.audit_logger, "INFO") as logs:
+            common.audit("LOGIN_FAILED", user="evil\n{\"action\": \"FAKE\"}")
+        self.assertEqual(len(logs.records[0].getMessage().splitlines()), 1)
 
 
 class TimestampTest(NodeTestCase):

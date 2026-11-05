@@ -410,8 +410,34 @@ def log_path(name: str) -> str:
     return os.path.join(LOG_FOLDER, name + ".log")
 
 
+def audit_log_path(name: str) -> str:
+    return os.path.join(LOG_FOLDER, name + "-audit.log")
+
+
+# The audit log records who changed what, one JSON object per line, in its own file beside
+# each program's normal log. It is kept apart so that it holds only these records, in a
+# form a program can read back, and isn't mixed in with everyday messages.
+audit_logger = logging.getLogger("audit")
+audit_logger.propagate = False  # never mixed into the normal log
+
+
+def utc_now() -> str:
+    """The current time in UTC, in ISO 8601 form, such as 2026-11-05T21:14:03Z."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def audit(action: str, **details) -> None:
+    """Add one record to this program's audit log, stamped with the time.
+
+    The record is written as JSON, so a value someone typed, even one with a line break,
+    stays inside its own record and can't fake another.
+    """
+    audit_logger.info(json.dumps({"time": utc_now(), "action": action, **details}))
+
+
 def configure_logging(name: str) -> None:
-    """Send this program's log to the console and to its own file, logs/<name>.log.
+    """Send this program's log to the console and to its own file, logs/<name>.log, and
+    its audit records to logs/<name>-audit.log.
 
     Each program has its own file because they are separate processes. Two processes
     writing to one file can mix up each other's lines, and can't safely take turns
@@ -422,14 +448,27 @@ def configure_logging(name: str) -> None:
     program still runs, logging to the console only.
     """
     handlers = [logging.StreamHandler()]
+    audit_handlers = []
     problem = None
     try:
         os.makedirs(LOG_FOLDER, exist_ok=True)
         handlers.append(logging.handlers.RotatingFileHandler(
             log_path(name), maxBytes=LOG_FILE_BYTES, backupCount=LOG_FILE_COPIES, encoding="utf-8"
         ))
+        audit_handlers.append(logging.handlers.RotatingFileHandler(
+            audit_log_path(name), maxBytes=LOG_FILE_BYTES, backupCount=LOG_FILE_COPIES, encoding="utf-8"
+        ))
     except OSError as exc:
         problem = exc
+
+    # Audit records go only to the audit file, each line exactly as audit() wrote it.
+    for handler in audit_logger.handlers:
+        handler.close()
+    audit_logger.handlers[:] = audit_handlers
+    for handler in audit_handlers:
+        handler.setFormatter(logging.Formatter("%(message)s"))
+    audit_logger.setLevel(logging.INFO)
+    audit_logger.propagate = False
 
     # force=True replaces any earlier set-up, so calling this twice can't log lines twice.
     logging.basicConfig(

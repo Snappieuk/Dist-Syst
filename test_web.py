@@ -936,6 +936,48 @@ class RoleTest(WebTestCase):
         self.assertIn(b'id="account-panel" class="panel add-panel" hidden', page)
 
 
+class AuditFileTest(WebTestCase):
+    """The audit log records logins and every change, with the web user who made it."""
+
+    def audited(self, action) -> list:
+        with self.assertLogs(common.audit_logger, "INFO") as logs:
+            common.audit("TEST_START")
+            action()
+        return [json.loads(record.getMessage()) for record in logs.records][1:]
+
+    def test_logins_failed_logins_and_logouts_are_recorded(self):
+        records = self.audited(lambda: (
+            self.fetch("/api/login", "POST", {"username": USERNAME, "password": PASSWORD}, cookie=None),
+            self.fetch("/api/login", "POST", {"username": "intruder", "password": "secret guess"}, cookie=None),
+            self.fetch("/api/logout", "POST"),
+        ))
+
+        self.assertEqual([(r["action"], r["user"]) for r in records],
+                         [("LOGIN", USERNAME), ("LOGIN_FAILED", "intruder"), ("LOGOUT", USERNAME)])
+        self.assertEqual(records[0]["address"], "127.0.0.1")
+        self.assertNotIn("secret guess", json.dumps(records))
+        self.assertNotIn(PASSWORD, json.dumps(records))
+
+    def test_changes_through_the_page_name_the_web_user(self):
+        body = {"request_id": "web-1", "asset": make_asset()}
+        records = self.audited(lambda: self.fetch("/api/assets", "POST", body))
+        asset_id = records[0]["asset_id"]
+        records += self.audited(lambda: self.fetch(f"/api/assets/{asset_id}", "PATCH",
+                                                   {"version": 1, "changes": {"location": "B"}}))
+        records += self.audited(lambda: self.fetch(f"/api/assets/{asset_id}?version=2", "DELETE"))
+
+        self.assertEqual([(r["action"], r["asset_id"], r["user"]) for r in records], [
+            ("REGISTER", asset_id, USERNAME), ("EDIT", asset_id, USERNAME), ("DELETE", asset_id, USERNAME),
+        ])
+        self.assertEqual(records[0]["request_id"], "web-1")
+
+    def test_creating_an_account_is_recorded(self):
+        records = self.audited(lambda: self.fetch("/api/users", "POST",
+                                                  {"username": "newbie", "password": "a fine password"}))
+        self.assertEqual(records, [dict(records[0], action="CREATE_ACCOUNT", user=USERNAME,
+                                        account="newbie", role=web.USER)])
+
+
 class PageTest(WebTestCase):
     def test_the_page_is_served(self):
         status, headers, body = self.fetch("/")

@@ -36,6 +36,7 @@ from common import (
     CONFLICT,
     DUPLICATE_ASSET,
     NOT_FOUND,
+    audit,
     configure_logging,
     generate_asset_tags,
     send_request,
@@ -414,7 +415,7 @@ def add_asset_reply(body: dict, username: str = "someone") -> tuple:
     """Register an asset for `username`, returning an HTTP status and a JSON body. Only the
     expected values are passed on, so a browser cannot add anything else to the request."""
     status, reply, result = change_reply(
-        {"action": "REGISTER", "request_id": body.get("request_id"), "asset": body.get("asset")}, 201
+        {"action": "REGISTER", "request_id": body.get("request_id"), "asset": body.get("asset"), "user": username}, 201
     )
     if reply is not None:
         stored = reply["stored"]
@@ -437,7 +438,7 @@ def delete_asset_reply(asset_id: str, query: str, username: str = "someone") -> 
         return 400, {"error": "The version of the asset is needed"}
 
     status, reply, result = change_reply(
-        {"action": "DELETE", "asset_id": asset_id, "expected_version": version}, 200
+        {"action": "DELETE", "asset_id": asset_id, "expected_version": version, "user": username}, 200
     )
     if reply is not None:
         logger.info("%s deleted %r, served by the %s", username, asset_id, reply.get("served_by"))
@@ -455,7 +456,8 @@ def edit_asset_reply(asset_id: str, body: dict, username: str = "someone") -> tu
         return 400, {"error": "The version of the asset is needed"}
 
     status, reply, result = change_reply(
-        {"action": "EDIT", "asset_id": asset_id, "changes": body.get("changes"), "expected_version": version}, 200
+        {"action": "EDIT", "asset_id": asset_id, "changes": body.get("changes"), "expected_version": version,
+         "user": username}, 200
     )
     if reply is not None:
         result["asset"] = public_asset(reply["stored"])
@@ -487,6 +489,7 @@ def create_account_reply(body: dict, created_by: str) -> tuple:
 
     username = normalise_username(username)
     logger.info("%s created the account %s, as %s %s", created_by, username, "an" if role == ADMIN else "a", role)
+    audit("CREATE_ACCOUNT", user=created_by, account=username, role=role)
     return 201, {"username": username, "role": role}
 
 
@@ -602,9 +605,11 @@ class WebHandler(BaseHTTPRequestHandler):
             # The password is never logged. The username is shown with %r, and shortened,
             # because it is whatever was typed, which may not be a real username.
             logger.warning("Failed login as %r from %s (%s)", username[:MAX_LOGGED_USERNAME], browser, reply["error"])
+            audit("LOGIN_FAILED", user=username[:MAX_LOGGED_USERNAME], address=browser, reason=reply["error"])
             self.send_json(status, reply)
         else:
             logger.info("%s logged in from %s", reply["username"], browser)
+            audit("LOGIN", user=reply["username"], address=browser)
             self.send_json(status, reply, session_cookie(token, SESSION_SECONDS))
 
     def handle_logout(self) -> None:
@@ -613,6 +618,7 @@ class WebHandler(BaseHTTPRequestHandler):
         end_session(token)
         if username is not None:
             logger.info("%s logged out", username)
+            audit("LOGOUT", user=username)
         self.send_json(200, {}, session_cookie("", 0))
 
     def session_token(self) -> object:

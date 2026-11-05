@@ -42,6 +42,7 @@ from common import (
     UNAUTHORIZED,
     UNSUPPORTED_VERSION,
     MessageTooLargeError,
+    audit,
     configure_logging,
     generate_asset_tags,
     normalise_text,
@@ -109,6 +110,13 @@ last_seq = 0
 # thread. Holding it makes "check, change, save, copy to the backup" one indivisible
 # step, so simultaneous requests take effect strictly one after another.
 assets_lock = threading.Lock()
+
+# The request each thread is working on, so that the audit record of a change can say
+# which request made it and for whom, without passing it through every function.
+current = threading.local()
+
+# The longest web username accepted in a request's "user" field.
+MAX_USER_LENGTH = 64
 
 
 def utc_timestamp() -> str:
@@ -301,6 +309,18 @@ def commit_change(change: dict, undo) -> None:
         last_seq -= 1
         undo()
         raise
+
+    # Recorded once the change is safely saved, so the audit log never lists a change
+    # that didn't happen. Changes copied from the primary aren't recorded again here.
+    request = getattr(current, "request", None) or {}
+    audit(
+        request.get("action", "CHANGE"),
+        asset_id=change["asset"]["asset_id"] if "asset" in change else change.get("deleted"),
+        request_id=request.get("request_id"),
+        user=request.get("user"),
+        server=ROLE,
+        seq=last_seq,
+    )
 
     if on_change is not None:
         on_change(dict(change, seq=last_seq))
@@ -546,8 +566,8 @@ def process_request(request: dict) -> dict:
         # Copy the list while holding the lock. It is searched and sent after the lock
         # is released, so one slow client cannot hold up everyone else.
         with assets_lock:
-            current = list(assets)
-        return {"status": "OK", **search_assets(current, **options)}
+            snapshot = list(assets)
+        return {"status": "OK", **search_assets(snapshot, **options)}
 
     if action == "PING":
         # The heartbeat between servers. It takes no lock, so a server that is busy
@@ -564,6 +584,13 @@ def process_request(request: dict) -> dict:
 
     if action in role_actions:
         return role_actions[action](request)
+
+    # "user" names the web user a change is made for, for the audit log. It is optional,
+    # because the GUI and command-line clients have no login.
+    user = request.get("user")
+    if user is not None and (not isinstance(user, str) or not user.strip() or len(user) > MAX_USER_LENGTH):
+        return error_reply(BAD_REQUEST, f"user must be non-empty text of at most {MAX_USER_LENGTH} characters")
+    current.request = request
 
     try:
         if action == "REGISTER":
@@ -588,6 +615,8 @@ def process_request(request: dict) -> dict:
             return delete_asset(asset_id, check_expected_version(request))
     except ValueError as exc:
         return error_reply(BAD_REQUEST, str(exc))
+    finally:
+        current.request = None  # so nothing done later on this thread is credited to it
 
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
