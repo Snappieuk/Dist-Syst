@@ -34,8 +34,22 @@ PORT_CHECK_SECONDS = 1
 
 def can_ask_questions() -> bool:
     """Check that someone is at a keyboard. Waiting for an answer that can never come would
-    hang the program, for example when it is started by another program."""
-    return sys.stdin is not None and sys.stdin.isatty()
+    hang the program, for example when it is started by another program.
+
+    On Windows, isatty() is also true when input comes from the null device, so Windows
+    is asked directly whether it is a real console.
+    """
+    if sys.stdin is None or not sys.stdin.isatty():
+        return False
+    if os.name != "nt":
+        return True
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(sys.stdin.fileno()))
+    return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(wintypes.DWORD())))
 
 
 def is_set_up() -> bool:

@@ -12,6 +12,8 @@ import io
 import json
 import os
 import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -124,6 +126,27 @@ class FirstTimeSetupTest(SetupTestCase):
             self.assertFalse(setup.can_ask_questions())
         with mock.patch("sys.stdin", io.StringIO()):
             self.assertFalse(setup.can_ask_questions())
+
+
+class NoKeyboardTest(unittest.TestCase):
+    """Uses real processes, because the operating system's answer is what matters here."""
+
+    CHECK = "import setup; print(setup.can_ask_questions())"
+
+    def ask_with_input(self, stdin) -> str:
+        folder = os.path.dirname(os.path.abspath(__file__))
+        result = subprocess.run(
+            [sys.executable, "-c", self.CHECK], cwd=folder, stdin=stdin,
+            capture_output=True, text=True, timeout=30,
+        )
+        return result.stdout.strip()
+
+    def test_the_null_device_is_not_a_keyboard(self):
+        # Windows reports this as a terminal, which once made start.py wait forever.
+        self.assertEqual(self.ask_with_input(subprocess.DEVNULL), "False")
+
+    def test_a_pipe_is_not_a_keyboard(self):
+        self.assertEqual(self.ask_with_input(subprocess.PIPE), "False")
 
 
 class ResetTest(SetupTestCase):
