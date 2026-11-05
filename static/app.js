@@ -16,7 +16,8 @@ const filters = document.getElementById("filters");
 const search = document.getElementById("search");
 const statusFilter = document.getElementById("status-filter");
 
-const headings = document.querySelectorAll("thead th");
+// The last heading is for the Delete buttons, and isn't sortable.
+const headings = [...document.querySelectorAll("thead th")].slice(0, COLUMNS.length);
 const loginSection = document.getElementById("login-section");
 const appSection = document.getElementById("app-section");
 const loginForm = document.getElementById("login-form");
@@ -84,6 +85,45 @@ function makeHeadingsSortable() {
   showSortOrder();
 }
 
+function deleteCell(asset) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "delete";
+  button.textContent = "Delete";
+  button.setAttribute("aria-label", `Delete ${asset.asset_id}`);
+  button.addEventListener("click", () => deleteAsset(asset));
+
+  const cell = document.createElement("td");
+  cell.append(button);
+  return cell;
+}
+
+// The version is the one this page was showing, so if someone else has changed the asset
+// since, the server refuses, and the refresh below shows what is there now.
+async function deleteAsset(asset) {
+  if (!confirm(`Delete ${asset.asset_id} (${asset.description}) for good? This can't be undone.`)) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/assets/${encodeURIComponent(asset.asset_id)}?version=${asset.version}`, {
+      method: "DELETE",
+    });
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error);
+    }
+    showActionResult(`Deleted ${asset.asset_id}`);
+  } catch (error) {
+    showActionResult(`Could not delete ${asset.asset_id}: ${error.message}`, true);
+  }
+  await loadAssets();
+}
+
 function showMessage(visibleCount) {
   const counts = `Showing ${visibleCount} of ${allAssets.length} asset(s)`;
   message.classList.toggle("problem", loadError !== "");
@@ -106,6 +146,7 @@ function showAssets() {
       cell.textContent = cellText(asset, column);
       row.append(cell);
     }
+    row.append(deleteCell(asset));
     return row;
   });
   tableBody.replaceChildren(...rows);
