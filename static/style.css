@@ -7,6 +7,7 @@
   --muted: #5b6573;
   --border: #d8dde3;
   --accent: #1f5fa8;
+  --problem: #b3261e;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,6 +18,7 @@
     --muted: #a0a9b4;
     --border: #363c44;
     --accent: #7db4ee;
+    --problem: #ff9d94;
   }
 }
 
@@ -42,6 +44,11 @@ h1 {
 #message {
   margin: 0 0 16px;
   color: var(--muted);
+}
+
+#message.problem {
+  color: var(--problem);
+  font-weight: 600;
 }
 
 .filters {

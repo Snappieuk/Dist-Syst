@@ -7,6 +7,9 @@
 
 const COLUMNS = ["asset_id", "description", "category", "location", "status", "tags", "date_registered"];
 
+// How often to fetch the list again, so that changes and failovers appear by themselves.
+const REFRESH_MILLISECONDS = 5000;
+
 const tableBody = document.getElementById("assets");
 const message = document.getElementById("message");
 const filters = document.getElementById("filters");
@@ -17,6 +20,7 @@ const headings = document.querySelectorAll("thead th");
 
 let allAssets = [];
 let servedBy = "";
+let loadError = "";
 let sortColumn = "asset_id";
 let sortDirection = 1; // 1 for ascending, -1 for descending
 
@@ -70,6 +74,19 @@ function makeHeadingsSortable() {
   showSortOrder();
 }
 
+function showMessage(visibleCount) {
+  const counts = `Showing ${visibleCount} of ${allAssets.length} asset(s)`;
+  message.classList.toggle("problem", loadError !== "");
+
+  if (!loadError) {
+    message.textContent = `${counts}, from the ${servedBy} server`;
+  } else if (servedBy) {
+    message.textContent = `Could not refresh the list: ${loadError}. ${counts}, as last received.`;
+  } else {
+    message.textContent = `Could not load the assets: ${loadError}`;
+  }
+}
+
 function showAssets() {
   const visible = allAssets.filter(matchesFilters).sort(compareAssets);
   const rows = visible.map((asset) => {
@@ -82,7 +99,7 @@ function showAssets() {
     return row;
   });
   tableBody.replaceChildren(...rows);
-  message.textContent = `Showing ${visible.length} of ${allAssets.length} asset(s), from the ${servedBy} server`;
+  showMessage(visible.length);
 }
 
 // Status is free text, so the choices come from the assets themselves. The current
@@ -104,6 +121,8 @@ function updateStatusChoices() {
   statusFilter.value = chosen;
 }
 
+// A failed refresh keeps the last list on screen, with a warning, because old data is
+// more useful than none during an outage.
 async function loadAssets() {
   try {
     const response = await fetch("/api/assets");
@@ -113,11 +132,21 @@ async function loadAssets() {
     }
     allAssets = body.assets;
     servedBy = body.served_by;
+    loadError = "";
     updateStatusChoices();
-    showAssets();
   } catch (error) {
-    message.textContent = `Could not load the assets: ${error.message}`;
+    loadError = error.message;
   }
+  showAssets();
+}
+
+// The next refresh is only scheduled once this one has finished, so that a slow server
+// cannot build up a queue of requests. A hidden browser tab skips the work.
+async function refreshRepeatedly() {
+  if (!document.hidden) {
+    await loadAssets();
+  }
+  setTimeout(refreshRepeatedly, REFRESH_MILLISECONDS);
 }
 
 search.addEventListener("input", showAssets);
@@ -127,4 +156,4 @@ statusFilter.addEventListener("change", showAssets);
 filters.addEventListener("submit", (event) => event.preventDefault());
 
 makeHeadingsSortable();
-loadAssets();
+refreshRepeatedly();
