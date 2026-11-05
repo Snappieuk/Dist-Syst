@@ -6,3 +6,7 @@ __pycache__/
 assets.json
 assets_backup.json
 *.tmp
+
+# Secrets created when the programs run, which must never be shared
+secret.key
+web_password.json

@@ -555,6 +555,36 @@ class SystemTest(NodeTestCase):
         reply = common.send_request({"action": "EXPLODE"})
         self.assertEqual(reply["code"], common.BAD_REQUEST)
 
+    # ---- Authorization: only programs with the shared secret may use the server ----
+
+    def test_requests_without_the_secret_are_refused(self):
+        register(make_asset())
+        attempts = {
+            "no secret": {"action": "LIST"},
+            "wrong secret": {"action": "LIST", "auth": "wrong"},
+            "not text": {"action": "LIST", "auth": 7},
+            "not plain text": {"action": "LIST", "auth": "é€"},
+            "cannot change data": {"action": "REGISTER", "asset": make_asset("New"), "auth": "wrong"},
+        }
+        for name, request in attempts.items():
+            with self.subTest(name):
+                reply = send_raw(with_header(json.dumps(request).encode("utf-8")))
+                self.assertEqual(reply["code"], common.UNAUTHORIZED)
+                self.assertNotIn("assets", reply)
+        self.assertEqual(len(list_ids()), 1)
+
+    def test_the_secret_is_kept_after_it_is_created(self):
+        self.addCleanup(setattr, common, "SECRET_FILE", common.SECRET_FILE)
+        self.addCleanup(setattr, common, "_secret", common._secret)
+        common.SECRET_FILE = os.path.join(self.temp_dir.name, "secret.key")
+
+        common._secret = None
+        created = common.shared_secret()
+        common._secret = None
+
+        self.assertGreater(len(created), 32)
+        self.assertEqual(common.shared_secret(), created)
+
     # ---- Robustness: bad clients must not affect the server ----
 
     def test_bad_messages_get_a_clear_error(self):

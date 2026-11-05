@@ -11,7 +11,9 @@ about what counts as a valid message live here rather than being repeated
 """
 
 import json         # used to turn a Python dict into a JSON string, and back
-import socket       # provides the networking building blocks (sockets)
+import os           # finds and creates the shared secret file
+import secrets      # generates the shared secret
+import socket      # provides the networking building blocks (sockets)
 import time         # waits while the backup takes over
 import unicodedata  # recognises letters and digits in any language, for tags
 import uuid         # creates the random request ID sent with each registration
@@ -36,6 +38,12 @@ SERVERS = [
     ("127.0.0.1", 65433),  # backup
 ]
 
+# The key every program sends to prove it belongs to this system. It is created the first
+# time any program runs. To use several machines, copy this file to each of them.
+SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret.key")
+
+_secret = None  # the key, once read, so the file is only read once
+
 # How long request_from() waits on each network step before giving up. Clients
 # use it for their requests, and the primary uses it when copying to the backup.
 TIMEOUT_SECONDS = 5
@@ -57,6 +65,7 @@ INTERNAL = "INTERNAL"        # the server failed; the request itself may be fine
 DUPLICATE_ASSET = "DUPLICATE_ASSET"  # the same item is already registered
 CONFLICT = "CONFLICT"        # someone else changed the asset since the client read it
 NOT_PRIMARY = "NOT_PRIMARY"  # this server is on standby; try the other one
+UNAUTHORIZED = "UNAUTHORIZED"  # the request did not include the shared secret
 
 # Error codes used only between the two servers.
 NOT_STANDBY = "NOT_STANDBY"  # the backup has taken over, so it cannot receive copies
@@ -287,12 +296,48 @@ def receive_message(sock: socket.socket) -> dict:
     return message
 
 
+def shared_secret() -> str:
+    """Return the key that proves a program belongs to this system, creating it if this
+    is the first program to run.
+
+    Exclusive creation means that if the servers start at the same moment, only one
+    creates the file. The others wait for it to finish, then read the same key. Other
+    users of the machine cannot read it on Linux and macOS.
+    """
+    global _secret
+
+    if _secret is None:
+        try:
+            file = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            _secret = _read_secret_file()
+        else:
+            _secret = secrets.token_hex(32)
+            with os.fdopen(file, "w") as secret_file:
+                secret_file.write(_secret)
+    return _secret
+
+
+def _read_secret_file() -> str:
+    """Read the secret file, allowing a moment for another program to finish writing it."""
+    for _ in range(50):
+        with open(SECRET_FILE, encoding="utf-8") as file:
+            secret = file.read().strip()
+        if secret:
+            return secret
+        time.sleep(0.1)
+    raise ValueError(f"{SECRET_FILE} is empty")
+
+
 def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS) -> dict:
-    """Send one request to the server at `address` and return its reply."""
+    """Send one request to the server at `address` and return its reply.
+
+    Every request carries the shared secret, because the server refuses any without it.
+    """
     # create_connection() is used because it takes a timeout. Without one, a
     # stalled server would leave the program waiting forever.
     with socket.create_connection(address, timeout=timeout) as sock:
-        send_message(sock, request)
+        send_message(sock, {**request, "auth": shared_secret()})
         return receive_message(sock)
 
 

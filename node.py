@@ -20,7 +20,8 @@ Failures look like this:
 """
 
 import datetime   # the server stamps each new asset with today's date
-import json       # the assets file uses JSON, the same format as the messages
+import hmac       # compares the shared secret safely
+import json      # the assets file uses JSON, the same format as the messages
 import logging    # records what happens, including errors, without stopping
 import os         # os.replace() and os.fsync() make saving safe
 import socket     # provides the networking building blocks (sockets)
@@ -35,11 +36,13 @@ from common import (
     NOT_FOUND,
     NOT_PRIMARY,
     TOO_LARGE,
+    UNAUTHORIZED,
     MessageTooLargeError,
     generate_asset_tags,
     normalise_text,
     receive_message,
     send_message,
+    shared_secret,
 )
 
 # The fields a client must supply when registering an asset.
@@ -430,6 +433,18 @@ def process_request(request: dict) -> dict:
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
+def is_authorized(request: dict) -> bool:
+    """Check that a request carries the shared secret.
+
+    compare_digest() takes the same time wherever the values differ, so timing replies
+    cannot reveal the secret one character at a time.
+    """
+    sent = request.get("auth")
+    if not isinstance(sent, str):
+        return False
+    return hmac.compare_digest(sent.encode("utf-8", "surrogatepass"), shared_secret().encode("utf-8"))
+
+
 def read_and_process(conn: socket.socket) -> dict:
     """Read one request and work out the reply. Connection failures are left to
     the caller, because no reply can be sent over a failed connection."""
@@ -442,6 +457,9 @@ def read_and_process(conn: socket.socket) -> dict:
         # deeply nested that it exhausts the parser. The connection still works,
         # so the client can be told.
         return error_reply(BAD_REQUEST, f"Invalid message: {exc}")
+
+    if not is_authorized(request):
+        return error_reply(UNAUTHORIZED, "This program does not have the system's secret.key file")
 
     try:
         return process_request(request)
