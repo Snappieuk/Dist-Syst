@@ -84,6 +84,32 @@ h1 {
   margin: 0;
 }
 
+.problem:empty,
+#action-message:empty {
+  display: none;
+}
+
+.add-panel {
+  margin-bottom: 16px;
+}
+
+.add-panel summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.add-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+#action-message {
+  margin: 0 0 16px;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;

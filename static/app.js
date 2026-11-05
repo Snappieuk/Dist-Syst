@@ -23,10 +23,14 @@ const loginForm = document.getElementById("login-form");
 const password = document.getElementById("password");
 const loginError = document.getElementById("login-error");
 const logoutButton = document.getElementById("logout");
+const addForm = document.getElementById("add-form");
+const addButton = document.getElementById("add-button");
+const actionMessage = document.getElementById("action-message");
 
 let allAssets = [];
 let servedBy = "";
 let loadError = "";
+let unconfirmedAdd = null; // see addAsset()
 let sortColumn = "asset_id";
 let sortDirection = 1; // 1 for ascending, -1 for descending
 
@@ -133,6 +137,8 @@ function showLogin() {
   allAssets = [];
   servedBy = "";
   loadError = "";
+  unconfirmedAdd = null;
+  showActionResult("");
   tableBody.replaceChildren();
   appSection.hidden = true;
   logoutButton.hidden = true;
@@ -171,6 +177,52 @@ async function logOut() {
     await fetch("/api/logout", { method: "POST" });
   } finally {
     showLogin();
+  }
+}
+
+function showActionResult(text, isProblem = false) {
+  actionMessage.textContent = text;
+  actionMessage.classList.toggle("problem", isProblem);
+}
+
+function newRequestId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// If the last attempt failed, the server may still have saved it, with only the reply
+// being lost. Trying again with the same details sends the same request ID, which cannot
+// create a second copy of the asset.
+async function addAsset(event) {
+  event.preventDefault();
+  const asset = Object.fromEntries(new FormData(addForm));
+  if (!unconfirmedAdd || JSON.stringify(unconfirmedAdd.asset) !== JSON.stringify(asset)) {
+    unconfirmedAdd = { asset, request_id: newRequestId() };
+  }
+
+  addButton.disabled = true;
+  try {
+    const response = await fetch("/api/assets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(unconfirmedAdd),
+    });
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error);
+    }
+    unconfirmedAdd = null;
+    addForm.reset();
+    showActionResult(`Added ${body.asset.asset_id}`);
+    await loadAssets();
+  } catch (error) {
+    showActionResult(`Could not add the asset: ${error.message}`, true);
+  } finally {
+    addButton.disabled = false;
   }
 }
 
@@ -216,6 +268,7 @@ filters.addEventListener("submit", (event) => event.preventDefault());
 
 loginForm.addEventListener("submit", logIn);
 logoutButton.addEventListener("click", logOut);
+addForm.addEventListener("submit", addAsset);
 
 makeHeadingsSortable();
 refreshRepeatedly();

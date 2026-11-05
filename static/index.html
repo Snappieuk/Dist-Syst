@@ -27,6 +27,32 @@
 
     <section id="app-section" hidden>
       <p id="message" role="status">Loading...</p>
+      <details class="panel add-panel">
+        <summary>Add an asset</summary>
+        <form id="add-form" class="add-form">
+          <label>
+            Description
+            <input name="description" required maxlength="1000" placeholder="Dell Latitude 5440 laptop">
+          </label>
+          <label>
+            Category
+            <input name="category" required maxlength="1000" placeholder="IT Equipment">
+          </label>
+          <label>
+            Location
+            <input name="location" required maxlength="1000" placeholder="Site A - IT Store">
+          </label>
+          <label>
+            Status
+            <select name="status">
+              <option>In Use</option>
+              <option>Not In Use</option>
+            </select>
+          </label>
+          <button id="add-button" type="submit">Add asset</button>
+        </form>
+      </details>
+      <p id="action-message" role="alert"></p>
       <form id="filters" class="filters">
         <label>
           Search
