@@ -332,6 +332,7 @@ class SystemTest(NodeTestCase):
             {"asset_id": asset_id, "status": 7},
             {"asset_id": asset_id},
             {"status": common.NOT_IN_USE},
+            {"asset_id": asset_id, "status": common.NOT_IN_USE, "expected_version": "1"},
         )
         for request in requests:
             with self.subTest(request=request):
@@ -351,6 +352,27 @@ class SystemTest(NodeTestCase):
 
     # ---- Simultaneous changes ----
 
+    def test_a_change_based_on_an_old_version_is_rejected(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        # Two people read version 1. The first change works, and takes it to version 2.
+        first = {"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE, "expected_version": 1}
+        self.assertEqual(common.send_request(first)["status"], "OK")
+
+        # The second person has not seen that, so their change must not overwrite it.
+        second = {"action": "SET_STATUS", "asset_id": asset_id, "status": "Broken", "expected_version": 1}
+        self.assertEqual(common.send_request(second)["code"], common.CONFLICT)
+        self.assertEqual(list_assets()[0]["status"], common.NOT_IN_USE)
+
+    def test_a_delete_based_on_an_old_version_is_rejected(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE})
+
+        reply = common.send_request({"action": "DELETE", "asset_id": asset_id, "expected_version": 1})
+
+        self.assertEqual(reply["code"], common.CONFLICT)
+        self.assertEqual(list_ids(), [asset_id])
+
     def run_at_once(self, requests: list) -> list:
         """Send all the requests at the same time, each from its own thread."""
         replies = []
@@ -363,6 +385,28 @@ class SystemTest(NodeTestCase):
         for thread in threads:
             thread.join()
         return replies
+
+    def test_only_one_of_20_simultaneous_changes_to_a_version_wins(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        # Pause just after each version check, to hold open the gap before the change.
+        # Without the lock, every client would pass the check before any had changed it.
+        real_check = node.version_conflict
+
+        def slow_check(asset, expected_version):
+            result = real_check(asset, expected_version)
+            time.sleep(0.05)
+            return result
+
+        with mock.patch.object(node, "version_conflict", slow_check):
+            replies = self.run_at_once([
+                {"action": "SET_STATUS", "asset_id": asset_id, "status": f"Status {n}", "expected_version": 1}
+                for n in range(20)
+            ])
+
+        self.assertEqual(sum(reply["status"] == "OK" for reply in replies), 1)
+        self.assertEqual(sum(reply.get("code") == common.CONFLICT for reply in replies), 19)
+        self.assertEqual(list_assets()[0]["version"], 2)
 
     def test_50_concurrent_clients_lose_nothing_and_get_unique_ids(self):
         replies = self.run_at_once([common.new_register_request(make_asset(f"Asset {n}")) for n in range(50)])

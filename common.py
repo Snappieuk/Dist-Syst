@@ -55,6 +55,7 @@ NOT_FOUND = "NOT_FOUND"      # no asset has that asset_id on this server
 TOO_LARGE = "TOO_LARGE"      # the message is bigger than MAX_MESSAGE_BYTES
 INTERNAL = "INTERNAL"        # the server failed; the request itself may be fine
 DUPLICATE_ASSET = "DUPLICATE_ASSET"  # the same item is already registered
+CONFLICT = "CONFLICT"        # someone else changed the asset since the client read it
 NOT_PRIMARY = "NOT_PRIMARY"  # this server is on standby; try the other one
 
 # Error codes used only between the two servers.

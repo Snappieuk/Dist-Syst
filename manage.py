@@ -15,7 +15,12 @@ from common import IN_USE, NOT_IN_USE, send_request
 
 
 def prompt_for_request(asset: dict) -> object:
-    """Ask the user what to do, returning the request, or None if they cancel."""
+    """Ask the user what to do, returning the request, or None if they cancel.
+
+    The request says which version of the asset the user was shown. If someone else
+    changes it while they decide, the server replies CONFLICT rather than overwriting
+    a change the user has not seen.
+    """
     asset_id = asset["asset_id"]
     print(f"{asset_id}: {asset.get('description')} ({asset.get('status')})")
     print(f"  1. Mark as {NOT_IN_USE}")
@@ -23,7 +28,7 @@ def prompt_for_request(asset: dict) -> object:
     print("  3. Delete it for good")
     choice = input("Choose 1, 2 or 3: ").strip()
 
-    request = {"asset_id": asset_id}
+    request = {"asset_id": asset_id, "expected_version": asset.get("version", 0)}
 
     if choice == "1":
         return {"action": "SET_STATUS", "status": NOT_IN_USE, **request}

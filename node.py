@@ -10,8 +10,8 @@ Requests from clients:
 
     {"action": "REGISTER", "request_id": "...", "asset": {...}}
     {"action": "LIST"}
-    {"action": "SET_STATUS", "asset_id": "...", "status": "..."}
-    {"action": "DELETE", "asset_id": "..."}
+    {"action": "SET_STATUS", "asset_id": "...", "status": "...", "expected_version": 1}
+    {"action": "DELETE", "asset_id": "...", "expected_version": 1}
 
 Replies always contain "status", and "served_by" names the server that answered.
 Failures look like this:
@@ -29,6 +29,7 @@ import threading  # gives each client a thread, and provides the lock
 
 from common import (
     BAD_REQUEST,
+    CONFLICT,
     DUPLICATE_ASSET,
     INTERNAL,
     NOT_FOUND,
@@ -178,6 +179,14 @@ def check_text(value: object, name: str) -> str:
     return value.strip()
 
 
+def check_expected_version(request: dict) -> object:
+    """Return a request's expected_version, or None if it has none."""
+    expected = request.get("expected_version")
+    if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
+        raise ValueError("expected_version must be a whole number")
+    return expected
+
+
 def identity_of(asset: dict) -> tuple:
     """Return what makes an asset the same item as another, ignoring differences in
     capitals, spacing and punctuation."""
@@ -300,7 +309,19 @@ def register_asset(clean: dict, request_id: object) -> dict:
     return {"status": "OK", "stored": asset}
 
 
-def set_asset_status(asset_id: str, status: str) -> dict:
+def version_conflict(asset: dict, expected_version: object) -> object:
+    """Return a CONFLICT reply if the asset has changed since the client read it.
+
+    This is optimistic concurrency control. Without it, two people looking at the
+    same asset could each make a change, and the second would silently overwrite the
+    first without its author ever having seen it.
+    """
+    if expected_version is None or expected_version == asset.get("version", 0):
+        return None
+    return error_reply(CONFLICT, f"{asset['asset_id']} was changed by someone else. Check it and try again.")
+
+
+def set_asset_status(asset_id: str, status: str, expected_version: object = None) -> dict:
     """Change an asset's status and return the reply.
 
     The tags include the status, so they are regenerated. A new record replaces the
@@ -319,6 +340,10 @@ def set_asset_status(asset_id: str, status: str) -> dict:
         if previous["status"] == status:
             return {"status": "OK", "stored": previous}  # nothing to change
 
+        conflict = version_conflict(previous, expected_version)
+        if conflict:
+            return conflict
+
         updated = dict(previous, status=status, version=previous.get("version", 0) + 1)
         updated["tags"] = generate_asset_tags(updated)
 
@@ -328,7 +353,7 @@ def set_asset_status(asset_id: str, status: str) -> dict:
     return {"status": "OK", "stored": updated}
 
 
-def delete_asset(asset_id: str) -> dict:
+def delete_asset(asset_id: str, expected_version: object = None) -> dict:
     """Remove an asset for good and return the reply.
 
     Deleting something already deleted counts as success. A client whose reply was
@@ -344,6 +369,10 @@ def delete_asset(asset_id: str) -> dict:
         index = find_asset(asset_id)
         if index is None:
             return error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
+
+        conflict = version_conflict(assets[index], expected_version)
+        if conflict:
+            return conflict
 
         previous = assets.pop(index)
         request_id = previous.get("request_id")
@@ -390,11 +419,11 @@ def process_request(request: dict) -> dict:
         if action == "SET_STATUS":
             asset_id = check_text(request.get("asset_id"), "asset_id")
             status = check_text(request.get("status"), "status")
-            return set_asset_status(asset_id, status)
+            return set_asset_status(asset_id, status, check_expected_version(request))
 
         if action == "DELETE":
             asset_id = check_text(request.get("asset_id"), "asset_id")
-            return delete_asset(asset_id)
+            return delete_asset(asset_id, check_expected_version(request))
     except ValueError as exc:
         return error_reply(BAD_REQUEST, str(exc))
 

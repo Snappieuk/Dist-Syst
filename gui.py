@@ -44,6 +44,7 @@ class AssetManagementApp:
 
         self.fields = {}  # the form's text boxes, by asset field name
         self.unconfirmed_registration = None  # see register_asset()
+        self.versions = {}  # the version of each asset the table shows, by asset ID
         self._build_ui()
 
         # Start checking for finished requests, then load the table.
@@ -216,7 +217,12 @@ class AssetManagementApp:
         """Change the status of the asset selected in the table."""
         asset_id = self._selected_asset_id()
         if asset_id is not None:
-            self._start_request("set_status", {"action": "SET_STATUS", "asset_id": asset_id, "status": status})
+            self._start_request("set_status", {
+                "action": "SET_STATUS",
+                "asset_id": asset_id,
+                "status": status,
+                "expected_version": self.versions.get(asset_id),
+            })
 
     def delete_selected(self) -> None:
         """Delete the asset selected in the table, once the user has confirmed it."""
@@ -230,7 +236,11 @@ class AssetManagementApp:
             icon=messagebox.WARNING,
             parent=self.root,
         ):
-            self._start_request("delete", {"action": "DELETE", "asset_id": asset_id})
+            self._start_request("delete", {
+                "action": "DELETE",
+                "asset_id": asset_id,
+                "expected_version": self.versions.get(asset_id),
+            })
 
     def _finish_registration(self) -> None:
         """Clear the form after a registration the server has confirmed."""
@@ -266,6 +276,11 @@ class AssetManagementApp:
                     detail = response.get("detail", "The server returned an error.")
                     self.status_label.configure(text="Request failed")
                     messagebox.showerror("Asset server error", detail, parent=self.root)
+
+                    # The table may be out of date, for example if someone else
+                    # changed the asset, so show the user what is there now.
+                    if operation in ("set_status", "delete"):
+                        self.refresh_assets()
                     continue
 
                 # Showing which server answered makes a failover visible.
@@ -289,6 +304,8 @@ class AssetManagementApp:
         """Replace the table's contents with `assets`."""
         for item in self.tree.get_children():
             self.tree.delete(item)
+        self.versions = {asset.get("asset_id"): asset.get("version", 0) for asset in assets}
+
         # Assets saved before tagging was added have no tags, so those are
         # worked out here for display.
         for asset in assets:
