@@ -26,6 +26,8 @@ import common
 import node
 import web
 
+# The project folder, where the real data, accounts and secret live.
+FOLDER = os.path.dirname(os.path.abspath(__file__))
 
 # These tests cause errors on purpose, so the logged warnings are only noise here.
 logging.getLogger("asset_web").setLevel(logging.ERROR)
@@ -78,11 +80,14 @@ class WebTestCase(unittest.TestCase):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = [self.asset_server]
 
-        # A cheap hash keeps the tests fast. The real one is slow on purpose.
+        # A cheap hash keeps the tests fast. The real one is slow on purpose. Both account
+        # files are temporary, so a test can never touch the real ones.
         self.addCleanup(setattr, web, "USERS_FILE", web.USERS_FILE)
+        self.addCleanup(setattr, web, "PASSWORD_FILE", web.PASSWORD_FILE)
         self.addCleanup(setattr, web, "HASH_ITERATIONS", web.HASH_ITERATIONS)
         self.addCleanup(web.users.clear)
         web.USERS_FILE = os.path.join(temp_dir.name, "web_users.json")
+        web.PASSWORD_FILE = os.path.join(temp_dir.name, "web_password.json")
         web.HASH_ITERATIONS = 1000
         web.users.clear()
         web.add_account(USERNAME, PASSWORD)
@@ -815,6 +820,120 @@ class AuditLogTest(WebTestCase):
         text = self.logged(lambda: self.fetch("/api/assets", "POST", body))
 
         self.assertIn(f"{USERNAME} could not add an asset", text)
+
+
+class RoleTest(WebTestCase):
+    """Admins can do everything. Users can view, add and edit, but not delete or create accounts."""
+
+    def setUp(self):
+        super().setUp()
+        web.add_account("worker", "worker password", role=web.USER)
+        _, headers, _ = self.fetch("/api/login", "POST", {"username": "worker", "password": "worker password"},
+                                   cookie=None)
+        self.user_cookie = headers["Set-Cookie"].split(";")[0]
+        self.asset_id = register(make_asset())["stored"]["asset_id"]
+
+    def as_user(self, path: str, method: str = "GET", body: dict = None) -> tuple:
+        status, _, reply = self.fetch(path, method, body, cookie=self.user_cookie)
+        return status, json.loads(reply)
+
+    def test_the_first_account_is_an_admin(self):
+        self.assertEqual(web.role_of(web.users[USERNAME]), web.ADMIN)
+        self.assertEqual(self.fetch_json("/api/assets")[1]["role"], web.ADMIN)
+
+    def test_accounts_from_before_roles_count_as_admins(self):
+        record = web.hash_password("old password")
+        web.write_users_file({"oldtimer": record})
+        web.load_accounts()
+
+        self.assertNotIn("role", web.read_users_file()["oldtimer"])
+        self.assertTrue(web.is_admin("oldtimer"))
+
+    def test_an_older_single_password_becomes_an_admin(self):
+        os.remove(web.USERS_FILE)
+        self.assertNotEqual(os.path.dirname(web.PASSWORD_FILE), FOLDER)  # never the real file
+        with open(web.PASSWORD_FILE, "w", encoding="utf-8") as file:
+            json.dump(web.hash_password("old password"), file)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            web.load_accounts()
+
+        self.assertTrue(web.is_admin(web.FIRST_USERNAME))
+
+    def test_a_user_is_told_their_role(self):
+        self.assertEqual(self.as_user("/api/assets")[1]["role"], web.USER)
+
+    def test_a_user_can_view_add_and_edit(self):
+        self.assertEqual(self.as_user("/api/assets")[0], 200)
+        status, _ = self.as_user("/api/assets", "POST", {"request_id": "u1", "asset": make_asset("HP laptop")})
+        self.assertEqual(status, 201)
+        status, _ = self.as_user(f"/api/assets/{self.asset_id}", "PATCH", {"version": 1, "changes": {"location": "B"}})
+        self.assertEqual(status, 200)
+
+    def test_a_user_cannot_delete(self):
+        with self.assertLogs("asset_web", "WARNING") as logs:
+            status, body = self.as_user(f"/api/assets/{self.asset_id}?version=1", "DELETE")
+
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"], web.ADMIN_ONLY)
+        self.assertEqual(len(node.assets), 1)
+        self.assertIn("worker tried to delete", logs.output[0])
+
+    def test_a_user_cannot_create_accounts(self):
+        status, _ = self.as_user("/api/users", "POST", {"username": "sneaky", "password": "sneaky password",
+                                                        "role": web.ADMIN})
+
+        self.assertEqual(status, 403)
+        self.assertNotIn("sneaky", web.read_users_file())
+
+    def test_an_admin_can_delete(self):
+        status, _, _ = self.fetch(f"/api/assets/{self.asset_id}?version=1", "DELETE")
+        self.assertEqual(status, 200)
+
+    def test_an_admin_creates_users_unless_they_choose_admin(self):
+        for name, chosen, expected in (("plain", None, web.USER), ("second-admin", web.ADMIN, web.ADMIN)):
+            with self.subTest(name):
+                body = {"username": name, "password": "a fine password"}
+                if chosen:
+                    body["role"] = chosen
+                status, _, reply = self.fetch("/api/users", "POST", body)
+                self.assertEqual(status, 201)
+                self.assertEqual(json.loads(reply)["role"], expected)
+                self.assertEqual(web.role_of(web.read_users_file()[name]), expected)
+
+    def test_an_unknown_role_is_refused(self):
+        status, _, _ = self.fetch("/api/users", "POST", {"username": "boss", "password": "a fine password",
+                                                         "role": "owner"})
+        self.assertEqual(status, 400)
+        self.assertNotIn("boss", web.read_users_file())
+
+    def test_a_role_change_takes_effect_at_once(self):
+        accounts = web.read_users_file()
+        accounts["worker"]["role"] = web.ADMIN
+        web.write_users_file(accounts)
+        web.load_accounts()
+
+        status, _ = self.as_user(f"/api/assets/{self.asset_id}?version=1", "DELETE")
+
+        self.assertEqual(status, 200)
+
+    def test_the_command_line_makes_admins_and_keeps_existing_roles(self):
+        with mock.patch("builtins.input", return_value="fresh"), \
+                mock.patch("getpass.getpass", return_value="fresh password"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            web.create_account_from_prompt()
+        with mock.patch("builtins.input", return_value="worker"), \
+                mock.patch("getpass.getpass", return_value="new worker password"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            web.create_account_from_prompt()
+
+        accounts = web.read_users_file()
+        self.assertEqual(web.role_of(accounts["fresh"]), web.ADMIN)
+        self.assertEqual(web.role_of(accounts["worker"]), web.USER)
+
+    def test_the_page_hides_admin_controls_until_it_knows_the_role(self):
+        _, _, page = self.fetch("/", cookie=None)
+        self.assertIn(b'id="account-panel" class="panel add-panel" hidden', page)
 
 
 class PageTest(WebTestCase):

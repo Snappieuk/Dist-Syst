@@ -12,7 +12,7 @@
     <header class="page-header">
       <h1>Asset Browser</h1>
       <div id="account" class="account" hidden>
-        <span>Logged in as <strong id="current-user"></strong></span>
+        <span>Logged in as <strong id="current-user"></strong> <span id="current-role" class="role"></span></span>
         <button id="logout" type="button" class="secondary">Log out</button>
       </div>
     </header>
@@ -65,7 +65,7 @@
           <button id="add-button" type="submit">Add asset</button>
         </form>
       </details>
-      <details class="panel add-panel">
+      <details id="account-panel" class="panel add-panel" hidden>
         <summary>Create an account</summary>
         <form id="account-form" class="add-form">
           <label>
@@ -81,6 +81,13 @@
           <label>
             Type it again
             <input name="confirm" type="password" required autocomplete="new-password">
+          </label>
+          <label>
+            Role
+            <select name="role">
+              <option value="user">User: view, add and edit</option>
+              <option value="admin">Admin: also delete and create accounts</option>
+            </select>
           </label>
           <button id="account-button" type="submit">Create account</button>
         </form>

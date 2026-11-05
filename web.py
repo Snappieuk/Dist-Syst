@@ -87,6 +87,14 @@ USERNAME_TAKEN = "That username is already taken"
 # The username offered during setup, and the account an older password is converted to.
 FIRST_USERNAME = "admin"
 
+# What each account may do. Everyone logged in can view, add and edit assets. Only an admin
+# can also delete assets and create accounts. Accounts saved before roles were added have
+# no role and count as admins, so nobody loses what they could already do.
+ADMIN = "admin"
+USER = "user"
+ROLES = (ADMIN, USER)
+ADMIN_ONLY = "Only an admin can do that"
+
 # How long a login lasts.
 SESSION_SECONDS = 8 * 60 * 60
 
@@ -157,7 +165,7 @@ def load_accounts() -> None:
 
     if not accounts and os.path.exists(PASSWORD_FILE):
         with open(PASSWORD_FILE, encoding="utf-8") as file:
-            accounts = {FIRST_USERNAME: json.load(file)}
+            accounts = {FIRST_USERNAME: dict(json.load(file), role=ADMIN)}
         write_users_file(accounts)
         os.remove(PASSWORD_FILE)
         print(f'\n*** The web password now belongs to an account called "{FIRST_USERNAME}".\n', flush=True)
@@ -167,21 +175,26 @@ def load_accounts() -> None:
 
     if not accounts:
         password = secrets.token_urlsafe(12)
-        add_account(FIRST_USERNAME, password)
+        add_account(FIRST_USERNAME, password, role=ADMIN)
         print(f'\n*** A web account was created. Username: {FIRST_USERNAME}  Password: {password}')
         print("*** It will not be shown again. To change it, run: python web.py --set-password\n", flush=True)
 
 
 def create_account_from_prompt() -> bool:
     """Ask for a username and password, then create that account or change its password,
-    returning whether that worked."""
+    returning whether that worked.
+
+    A new account made here is an admin. Running this needs the machine and its files,
+    which is already full control, so there is nothing to protect by asking. An existing
+    account keeps its role.
+    """
     username = input(f"Username [{FIRST_USERNAME}]: ").strip() or FIRST_USERNAME
     password = getpass.getpass("Password: ")
     if password != getpass.getpass("Type it again: "):
         print("Nothing changed: the two did not match.")
         return False
 
-    problem = add_account(username, password, replace=True)
+    problem = add_account(username, password, replace=True, role=ADMIN, keep_role=True)
     if problem:
         print(f"Nothing changed: {problem}.")
         return False
@@ -213,8 +226,18 @@ def write_users_file(accounts: dict) -> None:
     os.replace(temp_path, USERS_FILE)
 
 
-def add_account(username: str, password: str, replace: bool = False) -> object:
+def role_of(record: dict) -> str:
+    """An account's role. One saved before roles were added counts as an admin."""
+    return record.get("role", ADMIN)
+
+
+def add_account(username: str, password: str, replace: bool = False, role: str = None,
+                keep_role: bool = False) -> object:
     """Store an account, returning a message saying why not if it can't be done, or None.
+
+    The very first account is always an admin, so someone can manage the rest. Otherwise
+    a new account gets `role`, or is a user if none is given. With `keep_role`, an existing
+    account being replaced keeps the role it had.
 
     The slow hash runs outside the lock, so it holds up nobody else. The check for an
     existing name happens inside the lock, so that two people can't both claim one. The
@@ -225,12 +248,20 @@ def add_account(username: str, password: str, replace: bool = False) -> object:
         return "A username must be 3 to 32 characters: letters, numbers, dots, dashes or underscores"
     if len(password) < MINIMUM_PASSWORD_LENGTH:
         return f"A password must be at least {MINIMUM_PASSWORD_LENGTH} characters"
+    if role is not None and role not in ROLES:
+        return f"A role must be one of: {', '.join(ROLES)}"
 
     record = hash_password(password)
     with users_lock:
         accounts = read_users_file()
         if username in accounts and not replace:
             return USERNAME_TAKEN
+        if not accounts:
+            record["role"] = ADMIN
+        elif keep_role and username in accounts:
+            record["role"] = role_of(accounts[username])
+        else:
+            record["role"] = role or USER
         accounts[username] = record
         write_users_file(accounts)
         users.clear()
@@ -257,6 +288,14 @@ def session_username(token: object) -> object:
         if session is None or session["expires"] <= time.monotonic():
             return None
         return session["username"]
+
+
+def is_admin(username: str) -> bool:
+    """Whether an account is an admin, checked on every request, so a change to its role
+    takes effect at once."""
+    with users_lock:
+        record = users.get(username)
+    return record is not None and role_of(record) == ADMIN
 
 
 def end_session(token: object) -> None:
@@ -430,22 +469,25 @@ def edit_asset_reply(asset_id: str, body: dict, username: str = "someone") -> tu
 def create_account_reply(body: dict, created_by: str) -> tuple:
     """Create an account for a logged-in user, returning an HTTP status and a JSON body.
 
-    Only someone already logged in can get here. Open sign-up would let anyone who can
-    reach the page give themselves an account, which would make the login pointless.
+    Only an admin who is logged in can get here. Open sign-up would let anyone who can
+    reach the page give themselves an account, which would make the login pointless. The
+    new account is a user unless the admin chooses admin.
     """
-    username, password = body.get("username"), body.get("password")
+    username, password, role = body.get("username"), body.get("password"), body.get("role", USER)
     if not isinstance(username, str) or not isinstance(password, str):
         return 400, {"error": "A username and password are needed"}
+    if role not in ROLES:
+        return 400, {"error": f"A role must be one of: {', '.join(ROLES)}"}
 
-    problem = add_account(username, password)
+    problem = add_account(username, password, role=role)
     if problem == USERNAME_TAKEN:
         return 409, {"error": problem}
     if problem:
         return 400, {"error": problem}
 
     username = normalise_username(username)
-    logger.info("%s created the account %s", created_by, username)
-    return 201, {"username": username}
+    logger.info("%s created the account %s, as %s %s", created_by, username, "an" if role == ADMIN else "a", role)
+    return 201, {"username": username, "role": role}
 
 
 class WebHandler(BaseHTTPRequestHandler):
@@ -464,6 +506,7 @@ class WebHandler(BaseHTTPRequestHandler):
             else:
                 status, reply = assets_reply()
                 reply["username"] = username  # so the page can say who is logged in
+                reply["role"] = ADMIN if is_admin(username) else USER  # and what they can do
                 self.send_json(status, reply)
         elif path in STATIC_FILES:
             self.send_static_file(*STATIC_FILES[path])
@@ -492,6 +535,11 @@ class WebHandler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "Please log in"})
                 return
 
+            if path == "/api/users" and not is_admin(username):
+                logger.warning("%s tried to create an account, but isn't an admin", username)
+                self.send_json(403, {"error": ADMIN_ONLY})
+                return
+
             body = self.read_json_body()
             if body is None:
                 return
@@ -514,6 +562,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "Please log in"})
                 return
             asset_id = unquote(address.path[len(ASSET_ADDRESS_PREFIX):])
+            if not is_admin(username):
+                logger.warning("%s tried to delete %r, but isn't an admin", username, asset_id)
+                self.send_json(403, {"error": ADMIN_ONLY})
+                return
             self.send_json(*delete_asset_reply(asset_id, address.query, username))
 
     def do_PATCH(self) -> None:

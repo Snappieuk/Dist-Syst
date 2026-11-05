@@ -38,7 +38,14 @@ const editForm = document.getElementById("edit-form");
 const editButton = document.getElementById("edit-button");
 const editCancel = document.getElementById("edit-cancel");
 
+const accountPanel = document.getElementById("account-panel");
+const currentRole = document.getElementById("current-role");
+
 const EDITABLE_FIELDS = ["description", "category", "location", "status"];
+
+// What the logged-in account may do. The server checks this on every request, so hiding
+// buttons here only keeps the page tidy. It isn't what stops a user deleting.
+let role = "";
 let editingAsset = null; // the asset the edit form is showing, as it was when opened
 
 let allAssets = [];
@@ -111,7 +118,7 @@ async function createAccount(event) {
     const response = await fetch("/api/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: details.username, password: details.password }),
+      body: JSON.stringify({ username: details.username, password: details.password, role: details.role }),
     });
     if (response.status === 401) {
       showLogin();
@@ -122,7 +129,7 @@ async function createAccount(event) {
       throw new Error(body.error);
     }
     accountForm.reset();
-    showActionResult(`Created the account ${body.username}`);
+    showActionResult(`Created the account ${body.username}, as ${body.role === "admin" ? "an admin" : "a user"}`);
   } catch (error) {
     showActionResult(`Could not create the account: ${error.message}`, true);
   } finally {
@@ -153,10 +160,10 @@ function actionButton(text, className, label, action) {
 function actionsCell(asset) {
   const cell = document.createElement("td");
   cell.className = "actions";
-  cell.append(
-    actionButton("Edit", "edit secondary", `Edit ${asset.asset_id}`, () => startEdit(asset)),
-    actionButton("Delete", "delete", `Delete ${asset.asset_id}`, () => deleteAsset(asset)),
-  );
+  cell.append(actionButton("Edit", "edit secondary", `Edit ${asset.asset_id}`, () => startEdit(asset)));
+  if (role === "admin") {
+    cell.append(actionButton("Delete", "delete", `Delete ${asset.asset_id}`, () => deleteAsset(asset)));
+  }
   return cell;
 }
 
@@ -331,6 +338,9 @@ function showLogin() {
   appSection.hidden = true;
   account.hidden = true;
   currentUser.textContent = "";
+  currentRole.textContent = "";
+  role = "";
+  accountPanel.hidden = true;
   loginSection.hidden = false;
   username.focus();
 }
@@ -427,6 +437,9 @@ async function loadAssets() {
     showApp();
     const body = await response.json();
     currentUser.textContent = body.username;
+    role = body.role;
+    currentRole.textContent = `(${role})`;
+    accountPanel.hidden = role !== "admin";
     if (!response.ok) {
       throw new Error(body.error);
     }

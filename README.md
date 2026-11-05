@@ -244,10 +244,29 @@ On the web page, everything except the login page itself needs an account. You c
 first one during setup. If `web.py` is started with nobody at the keyboard to do that, it
 creates an `admin` account with a random password and prints it once.
 
+Each web account has a role:
+
+| Role | Can |
+|---|---|
+| `admin` | View, add, edit and delete assets, and create accounts |
+| `user` | View, add and edit assets |
+
+The first account is an admin, and so is any account made with `python web.py
+--set-password`. Accounts from before roles were added count as admins, so nobody lost what
+they could already do. `web.py` checks the role on every request, and refuses a user's
+delete or account creation with `403`. Hiding those buttons on the page is only tidiness,
+not what stops a user.
+
 There is no public sign-up, because that would let anyone who can reach the page give
-themselves an account. Instead, anyone logged in can create more accounts. Creating an
-account can't change an existing one, so only `python web.py --set-password`, run on the
-machine itself, can replace a password.
+themselves an account. Instead, an admin creates accounts on the page, as users unless they
+choose admin. Creating an account can't change an existing one, so only `python web.py
+--set-password`, run on the machine itself, can replace a password. An existing account
+keeps its role when its password is replaced.
+
+**The GUI and the command-line clients (`send.py`, `receive.py`, `manage.py`, `demo.py`)
+are trusted admin tools.** They have no login, because they prove themselves with
+`secret.key` instead, and anything with that file can do everything, including deleting.
+Only give `secret.key` to people who should have admin rights.
 
 Usernames ignore capitals and can only contain letters, numbers, dots, dashes and
 underscores. Passwords must be at least 8 characters. Only a salted PBKDF2 hash is stored,
@@ -330,6 +349,7 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 | Tombstones | Deleted IDs are kept so another server's old copy can't bring an asset back | `node.py`: `deleted_ids` |
 | Independent failure | One client or server failing doesn't bring down the others | `node.py`: `handle_client` |
 | Authentication | Programs prove themselves with a shared secret, and people log in to the web page with a username and password | `node.py`: `is_authorized`, `web.py`: `try_login` |
+| Authorisation | Each web account's role decides what it may do, checked on every request | `web.py`: `is_admin` |
 | Multi-tier architecture | The browser talks to `web.py`, which talks to the servers, so the servers don't need to know about HTTP | `web.py` |
 | Failure transparency | A browser keeps working through a failover without knowing which server is in charge | `web.py`: `assets_reply` |
 | CAP trade-off | In a network split both servers stay available, and the data is made consistent afterwards | See known limitations |
@@ -392,8 +412,8 @@ Requests from the browser to `web.py`, over HTTP:
 | `GET /api/assets` | Lists the assets, who is logged in and which server answered | Yes |
 | `POST /api/assets` with `{"request_id": "...", "asset": {...}}` | Adds an asset | Yes |
 | `PATCH /api/assets/<id>` with `{"version": n, "changes": {...}}` | Edits an asset, if it is still at that version | Yes |
-| `DELETE /api/assets/<id>?version=<n>` | Deletes an asset, if it is still at that version | Yes |
-| `POST /api/users` with `{"username": "...", "password": "..."}` | Creates an account | Yes |
+| `DELETE /api/assets/<id>?version=<n>` | Deletes an asset, if it is still at that version | Yes, as an admin |
+| `POST /api/users` with `{"username": "...", "password": "...", "role": "user"}` | Creates an account. `role` is `user` or `admin`, and `user` if left out | Yes, as an admin |
 
 Errors from the servers look like `{"status": "ERROR", "code": "NOT_FOUND", "detail": "..."}`.
 
@@ -545,8 +565,9 @@ Other limitations:
 - Nothing is encrypted. The shared secret, web passwords and all data cross the network
   as plain text, so someone watching a network could read them. Only run this across a
   trusted network, or add TLS first.
-- Every web account can do everything, including creating more accounts, because there are
-  no roles. Accounts can't be deleted from the page.
+- There are only two roles. Accounts can't be deleted, and a role can't be changed, from the
+  page. Changing a role means editing `web_users.json` and restarting `web.py`.
+- The roles only apply to the web page. Anything with `secret.key` has full access.
 - Only `web.py` knows who made a change, so only changes made on the web page are logged with
   a name. Changes from the GUI or the command-line clients are logged by the servers, but not
   who made them.
@@ -577,5 +598,5 @@ Other limitations:
 
 The scaling steps above come first, especially a third server and a majority vote. Other
 ideas are a serial number to identify items, encryption with TLS, the shared secret supplied through an
-environment variable, account roles including deleting accounts, and sending every
-machine's logs to one place.
+environment variable, deleting accounts and changing roles from the page, and sending
+every machine's logs to one place.
