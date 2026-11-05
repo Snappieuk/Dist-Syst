@@ -41,12 +41,24 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
 | `web.py` | A read-only web interface for browsing assets. It serves the page in `static/` and gets the data from the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
-| `test_system.py`, `test_web.py` | The automated tests. |
+| `start.py` | Starts the primary, backup and web interface with one command. |
+| `test_system.py`, `test_web.py`, `test_start.py` | The automated tests. |
 
 ## Running it
 
-You need Python 3.8 or later. There are no third-party packages to install. Run each
-program in its own terminal:
+You need Python 3.8 or later. There are no third-party packages to install.
+
+The quickest way to start everything is:
+
+```
+python start.py
+```
+
+This starts the primary, the backup and the web interface, opens the web page, and stops
+them all when you press Ctrl+C.
+
+To stop one server on its own, which you need for the demo below, or to use the GUI, run
+each program in its own terminal instead:
 
 ```
 python server.py
@@ -95,7 +107,7 @@ Start both servers and the GUI, and keep the server logs visible.
 ## Tests
 
 ```
-python -m unittest -v test_system test_web
+python -m unittest -v test_system test_web test_start
 ```
 
 The tests start real servers on spare ports and use temporary data files, so your data
