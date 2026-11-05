@@ -30,6 +30,8 @@ const currentUser = document.getElementById("current-user");
 const addForm = document.getElementById("add-form");
 const addButton = document.getElementById("add-button");
 const actionMessage = document.getElementById("action-message");
+const accountForm = document.getElementById("account-form");
+const accountButton = document.getElementById("account-button");
 
 let allAssets = [];
 let servedBy = "";
@@ -86,6 +88,38 @@ function makeHeadingsSortable() {
     heading.replaceChildren(button);
   });
   showSortOrder();
+}
+
+async function createAccount(event) {
+  event.preventDefault();
+  const details = Object.fromEntries(new FormData(accountForm));
+  if (details.password !== details.confirm) {
+    showActionResult("Could not create the account: the two passwords don't match", true);
+    return;
+  }
+
+  accountButton.disabled = true;
+  try {
+    const response = await fetch("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: details.username, password: details.password }),
+    });
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error);
+    }
+    accountForm.reset();
+    showActionResult(`Created the account ${body.username}`);
+  } catch (error) {
+    showActionResult(`Could not create the account: ${error.message}`, true);
+  } finally {
+    accountButton.disabled = false;
+  }
 }
 
 function deleteCell(asset) {
@@ -182,6 +216,8 @@ function showLogin() {
   servedBy = "";
   loadError = "";
   unconfirmedAdd = null;
+  addForm.reset();
+  accountForm.reset();
   showActionResult("");
   tableBody.replaceChildren();
   appSection.hidden = true;
@@ -315,6 +351,7 @@ filters.addEventListener("submit", (event) => event.preventDefault());
 loginForm.addEventListener("submit", logIn);
 logoutButton.addEventListener("click", logOut);
 addForm.addEventListener("submit", addAsset);
+accountForm.addEventListener("submit", createAccount);
 
 makeHeadingsSortable();
 refreshRepeatedly();

@@ -59,6 +59,26 @@
           <button id="add-button" type="submit">Add asset</button>
         </form>
       </details>
+      <details class="panel add-panel">
+        <summary>Create an account</summary>
+        <form id="account-form" class="add-form">
+          <label>
+            Username
+            <input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\-]+"
+                   title="Letters, numbers, dots, dashes or underscores"
+                   autocomplete="off" autocapitalize="none" spellcheck="false">
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" required minlength="8" autocomplete="new-password">
+          </label>
+          <label>
+            Type it again
+            <input name="confirm" type="password" required autocomplete="new-password">
+          </label>
+          <button id="account-button" type="submit">Create account</button>
+        </form>
+      </details>
       <p id="action-message" role="alert"></p>
       <form id="filters" class="filters">
         <label>
