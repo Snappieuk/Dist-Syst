@@ -574,6 +574,31 @@ class SystemTest(NodeTestCase):
                 self.assertNotIn("assets", reply)
         self.assertEqual(len(list_ids()), 1)
 
+    # ---- Protocol version: every request says which message format it uses ----
+
+    def test_requests_without_a_supported_protocol_version_are_refused(self):
+        register(make_asset())
+        for name, version in {"missing": None, "unknown": 99, "text": "1", "true": True, "list": [1]}.items():
+            with self.subTest(name):
+                request = {"action": "LIST", "auth": common.shared_secret()}
+                if version is not None:
+                    request["protocol_version"] = version
+                reply = send_raw(with_header(json.dumps(request).encode("utf-8")))
+                self.assertEqual(reply["code"], common.UNSUPPORTED_VERSION)
+                self.assertEqual(reply["supported_versions"], list(common.SUPPORTED_PROTOCOL_VERSIONS))
+                self.assertNotIn("assets", reply)
+
+    def test_an_unsupported_version_cannot_change_data(self):
+        request = {"action": "REGISTER", "asset": make_asset(), "auth": common.shared_secret(), "protocol_version": 99}
+        reply = send_raw(with_header(json.dumps(request).encode("utf-8")))
+
+        self.assertEqual(reply["code"], common.UNSUPPORTED_VERSION)
+        self.assertEqual(list_ids(), [])
+
+    def test_every_request_is_sent_with_the_current_version(self):
+        request = {"action": "LIST", "auth": common.shared_secret(), "protocol_version": common.PROTOCOL_VERSION}
+        self.assertEqual(send_raw(with_header(json.dumps(request).encode("utf-8")))["status"], "OK")
+
     def test_the_secret_is_kept_after_it_is_created(self):
         self.addCleanup(setattr, common, "SECRET_FILE", common.SECRET_FILE)
         self.addCleanup(setattr, common, "_secret", common._secret)

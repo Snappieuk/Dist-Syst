@@ -36,8 +36,10 @@ from common import (
     INTERNAL,
     NOT_FOUND,
     NOT_PRIMARY,
+    SUPPORTED_PROTOCOL_VERSIONS,
     TOO_LARGE,
     UNAUTHORIZED,
+    UNSUPPORTED_VERSION,
     MessageTooLargeError,
     configure_logging,
     generate_asset_tags,
@@ -475,6 +477,16 @@ def read_and_process(conn: socket.socket) -> dict:
 
     if not is_authorized(request):
         return error_reply(UNAUTHORIZED, "This program does not have the system's secret.key file")
+
+    # Checked after the secret, so only programs of this system learn which versions exist.
+    version = request.get("protocol_version")
+    if isinstance(version, bool) or version not in SUPPORTED_PROTOCOL_VERSIONS:
+        return error_reply(
+            UNSUPPORTED_VERSION,
+            f"protocol_version {version!r} is not supported. This server supports: "
+            f"{', '.join(map(str, SUPPORTED_PROTOCOL_VERSIONS))}",
+            supported_versions=list(SUPPORTED_PROTOCOL_VERSIONS),
+        )
 
     try:
         return process_request(request)

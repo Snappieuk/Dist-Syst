@@ -305,8 +305,12 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 ## Messages
 
 Each message is a 4-byte length followed by JSON. A connection carries one request and
-one reply. Every request also has an `auth` field holding the shared secret, and every reply
-has a `served_by` field naming the server that answered.
+one reply. Every request also has an `auth` field holding the shared secret and a
+`protocol_version` field, currently `1`, and every reply has a `served_by` field naming the
+server that answered. `common.request_from()` adds both fields, so programs using it never
+set them. A server refuses a request whose version is missing or one it doesn't support,
+so a program written for a different message format gets a clear error instead of being
+misunderstood.
 
 Requests from clients:
 
@@ -353,6 +357,7 @@ Errors from the servers look like `{"status": "ERROR", "code": "NOT_FOUND", "det
 | `NOT_FOUND` | No server that replied has an asset with that ID |
 | `NOT_PRIMARY` | This server is on standby. Clients wait and retry while the backup takes over |
 | `UNAUTHORIZED` | The request didn't include the shared secret from `secret.key` |
+| `UNSUPPORTED_VERSION` | The request had no `protocol_version`, or one the server doesn't support. `supported_versions` lists the ones it does |
 | `TOO_LARGE` | The request or reply is over the 10 MiB limit |
 | `INTERNAL` | The server failed, for example because the disk is full |
 | `NOT_STANDBY`, `OUT_OF_SYNC` | Only used between servers. The backup can't take this copy, so the primary sends all its data instead |

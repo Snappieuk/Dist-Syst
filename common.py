@@ -105,6 +105,15 @@ DUPLICATE_ASSET = "DUPLICATE_ASSET"  # the same item is already registered
 CONFLICT = "CONFLICT"        # someone else changed the asset since the client read it
 NOT_PRIMARY = "NOT_PRIMARY"  # this server is on standby; try the other one
 UNAUTHORIZED = "UNAUTHORIZED"  # the request did not include the shared secret
+UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"  # no protocol_version, or one the server doesn't speak
+
+# The version of the message format this program speaks, sent in every request. A
+# server only accepts the versions it knows, so a program written for a different
+# format gets a clear error instead of being misunderstood. Change this, and add the
+# new number to SUPPORTED_PROTOCOL_VERSIONS, whenever requests or replies change in a
+# way older programs couldn't handle.
+PROTOCOL_VERSION = 1
+SUPPORTED_PROTOCOL_VERSIONS = (1,)
 
 # Error codes used only between the two servers.
 NOT_STANDBY = "NOT_STANDBY"  # the backup has taken over, so it cannot receive copies
@@ -420,7 +429,8 @@ def _read_secret_file() -> str:
 def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS) -> dict:
     """Send one request to the server at `address` and return its reply.
 
-    Every request carries the shared secret, because the server refuses any without it.
+    Every request carries the shared secret, because the server refuses any without it,
+    and the version of the message format it uses.
     """
     # The servers only listen on IPv4, so a name is looked up as IPv4 only. Otherwise a
     # name with an IPv6 address too, such as "localhost", is tried over IPv6 first, and
@@ -432,7 +442,7 @@ def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS
     # create_connection() is used because it takes a timeout. Without one, a
     # stalled server would leave the program waiting forever.
     with socket.create_connection(ipv4_address, timeout=timeout) as sock:
-        send_message(sock, {**request, "auth": shared_secret()})
+        send_message(sock, {**request, "auth": shared_secret(), "protocol_version": PROTOCOL_VERSION})
         return receive_message(sock)
 
 
