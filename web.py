@@ -1,14 +1,15 @@
 """
-The web interface of the Asset Management System, for browsing assets.
+The web interface of the Asset Management System, for browsing, adding and deleting assets.
 
     python web.py
+    python web.py --set-password
 
 This is a separate program that sits between a browser and the servers. It speaks HTTP
 to the browser, and the system's own TCP protocol to the servers, exactly as the other
 clients do. It therefore needs no knowledge of which server is in charge, and keeps
 working through a failover.
 
-Viewing the data needs the web password. It listens only on this machine by default, and
+Everything except the login page needs the web password. It listens only on this machine by default, and
 the connection is not encrypted, so the password should not cross a network you don't trust.
 """
 

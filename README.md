@@ -39,7 +39,7 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `receive.py` | Lists the assets with their IDs, statuses and tags. |
 | `manage.py` | Marks an asset as "Not In Use" or "In Use", or deletes it. |
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
-| `web.py` | A read-only web interface for browsing assets. It serves the page in `static/` and gets the data from the servers like any other client. |
+| `web.py` | A web interface for browsing, adding and deleting assets, behind a password. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface with one command. |
 | `test_system.py`, `test_web.py`, `test_start.py` | The automated tests. |
@@ -55,7 +55,9 @@ python start.py
 ```
 
 This starts the primary, the backup and the web interface, opens the web page, and stops
-them all when you press Ctrl+C.
+them all when you press Ctrl+C. **The first time, the web password is printed in that
+window, and it won't be shown again.** To change it or replace a lost one, run
+`python web.py --set-password`.
 
 To stop one server on its own, which you need for the demo below, or to use the GUI, run
 each program in its own terminal instead:
@@ -70,21 +72,21 @@ You can use `python send.py`, `python receive.py` and `python manage.py` instead
 GUI. These wait for you to press Enter before closing, so the window stays open if you
 start them by double-clicking.
 
-To browse the assets in a web browser, run this as well and open http://127.0.0.1:8080:
+To use the web page, run this as well and open http://127.0.0.1:8080:
 
 ```
 python web.py
 ```
 
-You can search, filter by status and sort by clicking a column heading. The page refreshes
-every 5 seconds and says which server answered. It can't change anything, and only this
-machine can open it unless you change `WEB_ADDRESS` in `web.py`.
+After logging in, you can search, filter by status, sort by clicking a column heading, add
+assets and delete them. The page refreshes every 5 seconds and says which server answered.
+Only this machine can open it unless you change `WEB_ADDRESS` in `web.py`.
 
 The system runs without the backup, but it won't survive the primary failing.
 
 To run it across several machines, put each server's IP address in `SERVERS` in
-`common.py` and use the same list on every machine. Each server's firewall must allow
-its port. So far this has only been run as separate processes on one machine.
+`common.py` and use the same list on every machine. Copy `secret.key` to every machine too,
+after it has been created by the first run. Each server's firewall must allow its port. So far this has only been run as separate processes on one machine.
 
 ## Demo
 
@@ -100,9 +102,25 @@ Start both servers and the GUI, and keep the server logs visible.
 4. Open two GUI windows showing the same asset with the status "In Use". Click "Mark Not
    In Use" in one, then "Delete Asset" in the other without refreshing. The delete is
    refused because that window hasn't seen the change.
-5. Run `web.py`, open the page and repeat steps 2 and 3. Without reloading, the page
-   switches to `from the backup server` and back. If you stop both servers, it keeps the
-   last list on screen with a warning.
+5. Run `web.py`, log in and repeat steps 2 and 3. Without reloading, the page switches to
+   `from the backup server` and back, and you can still add and delete assets during the
+   outage. If you stop both servers, it keeps the last list on screen with a warning.
+
+## Authentication
+
+There are two layers, because a login on the web page alone could be bypassed by connecting
+directly to a server's port.
+
+Between programs, every request to a server carries a shared secret from `secret.key`. The
+first program to run creates this file. Servers refuse any request without the right value
+with `UNAUTHORIZED`, including the messages between the servers themselves.
+
+On the web page, one shared password protects everything except the login page itself. Only
+a salted PBKDF2 hash is stored, in `web_password.json`. Logging in gives the browser a
+random session token that lasts 8 hours, in a cookie that scripts can't read and other
+websites can't send. After 5 wrong passwords in a row, logins are refused for a minute.
+
+`secret.key` and `web_password.json` are ignored by git and should never be shared publicly.
 
 ## Tests
 
@@ -136,6 +154,7 @@ logged errors and tracebacks in the output.
 | Optimistic concurrency control | A change names the version it was based on and is refused if that is out of date | `node.py`: `version_conflict` |
 | Tombstones | Deleted IDs are kept so another server's old copy can't bring an asset back | `node.py`: `deleted_ids` |
 | Independent failure | One client or server failing doesn't bring down the others | `node.py`: `handle_client` |
+| Authentication | Programs prove themselves with a shared secret, and people log in to the web page with a password | `node.py`: `is_authorized`, `web.py`: `try_login` |
 | Multi-tier architecture | The browser talks to `web.py`, which talks to the servers, so the servers don't need to know about HTTP | `web.py` |
 | Failure transparency | A browser keeps working through a failover without knowing which server is in charge | `web.py`: `assets_reply` |
 | CAP trade-off | In a network split both servers stay available, and the data is made consistent afterwards | See known limitations |
@@ -143,7 +162,8 @@ logged errors and tracebacks in the output.
 ## Messages
 
 Each message is a 4-byte length followed by JSON. A connection carries one request and
-one reply. Every reply also has a `served_by` field naming the server that answered.
+one reply. Every request also has an `auth` field holding the shared secret, and every reply
+has a `served_by` field naming the server that answered.
 
 Requests from clients:
 
@@ -176,6 +196,7 @@ Errors look like `{"status": "ERROR", "code": "NOT_FOUND", "detail": "..."}`.
 | `CONFLICT` | Someone else changed the asset after the client read it |
 | `NOT_FOUND` | No server that replied has an asset with that ID |
 | `NOT_PRIMARY` | This server is on standby. Clients wait and retry while the backup takes over |
+| `UNAUTHORIZED` | The request didn't include the shared secret from `secret.key` |
 | `TOO_LARGE` | The request or reply is over the 10 MiB limit |
 | `INTERNAL` | The server failed, for example because the disk is full |
 | `NOT_STANDBY`, `OUT_OF_SYNC` | Only used between servers. The backup can't take this copy, so the primary sends all its data instead |
@@ -260,11 +281,15 @@ Other limitations:
 - Duplicates are judged only by description, category and location, because nothing
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
   different items. Status and category are free text.
-- There is no authentication or encryption. Anyone who can reach a server can read and
-  change assets, including by sending the messages meant for the other server, so only use
-  it on a trusted network.
-- The web page can only browse assets. It has no login, so anyone who can open it can see
-  every asset. Don't change `WEB_ADDRESS` to expose it on a network you don't trust.
+- Nothing is encrypted. The shared secret, the web password and all data cross the network
+  as plain text, so someone watching a network could read them. Only run this across a
+  trusted network, or add TLS first.
+- There is one web password and one shared secret, not separate accounts. Everyone who logs
+  in can do everything, and nothing records who made a change.
+- The web page can add and delete assets, but can't change an asset's status. Use the GUI
+  or `manage.py` for that.
+- Don't change `WEB_ADDRESS` to expose the web page on a network you don't trust, because
+  the password would travel unencrypted.
 - The web page fetches the whole list on every refresh and searches it in the browser, so
   this will get slow with a very large number of assets.
 - The servers can't search assets, and only the status can be changed after registration.
@@ -281,4 +306,5 @@ Other limitations:
 
 A third server would let a majority decide which server leads, so a network split couldn't
 leave two leaders. Other ideas are editing assets from the web page, editing more fields, a
-serial number to identify items, search and paging on the servers, a database instead of the JSON file, and login and encryption.
+serial number to identify items, search and paging on the servers, a database instead of the
+JSON file, encryption with TLS, and separate user accounts.
