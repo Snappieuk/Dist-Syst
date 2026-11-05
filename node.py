@@ -29,6 +29,7 @@ import threading  # gives each client a thread, and provides the lock
 
 from common import (
     BAD_REQUEST,
+    DUPLICATE_ASSET,
     INTERNAL,
     NOT_FOUND,
     NOT_PRIMARY,
@@ -257,12 +258,13 @@ def register_asset(clean: dict, request_id: object) -> dict:
     Together with validate_asset() and save_assets(), this gives the ACID
     properties for each change:
       Atomicity:   it is stored and saved, or not stored at all (the undo).
-      Consistency: only valid assets with unique IDs are ever stored.
+      Consistency: only valid assets with unique IDs and identities are ever stored.
       Isolation:   the lock stops simultaneous requests interfering.
       Durability:  the reply is only sent after the save has reached the disk.
 
-    A repeat of the same request (same request_id) is a client retrying, so it gets
-    the asset already stored rather than a second copy.
+    Two checks stop duplicates. A repeat of the same request (same request_id) is a
+    client retrying, so it gets the asset already stored. A different request for the
+    same item is rejected as a duplicate.
     """
     with assets_lock:
         if not accepts_writes:
@@ -278,6 +280,14 @@ def register_asset(clean: dict, request_id: object) -> dict:
                     if identity_of(existing) != identity:
                         return error_reply(BAD_REQUEST, "This request_id was already used for a different asset")
                     return {"status": "OK", "stored": existing}
+
+        for existing in assets:
+            if identity_of(existing) == identity:
+                return error_reply(
+                    DUPLICATE_ASSET,
+                    f"This item is already registered as {existing['asset_id']}",
+                    existing_id=existing["asset_id"],
+                )
 
         asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id, version=1)
         asset["tags"] = generate_asset_tags(asset)

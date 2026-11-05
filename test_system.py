@@ -223,6 +223,38 @@ class SystemTest(NodeTestCase):
 
     # ---- Duplicates ----
 
+    def test_the_same_item_cannot_be_registered_twice(self):
+        first = register(make_asset())["stored"]["asset_id"]
+
+        reply = register(make_asset())
+
+        self.assertEqual(reply["code"], common.DUPLICATE_ASSET)
+        self.assertEqual(reply["existing_id"], first)
+        self.assertEqual(list_ids(), [first])
+
+    def test_capitals_spacing_and_punctuation_do_not_hide_a_duplicate(self):
+        register(make_asset("Dell laptop"))
+        reply = register(make_asset("  DELL-laptop ", location="site  a", category="it equipment"))
+        self.assertEqual(reply["code"], common.DUPLICATE_ASSET)
+
+    def test_a_different_status_does_not_hide_a_duplicate(self):
+        register(make_asset())
+        reply = register(make_asset(status=common.NOT_IN_USE))
+        self.assertEqual(reply["code"], common.DUPLICATE_ASSET)
+
+    def test_a_different_location_is_a_different_item(self):
+        register(make_asset())
+        self.assertEqual(register(make_asset(location="Site B"))["status"], "OK")
+
+    def test_a_deleted_item_can_be_registered_again_with_a_new_id(self):
+        first = register(make_asset())["stored"]["asset_id"]
+        common.send_request({"action": "DELETE", "asset_id": first})
+
+        reply = register(make_asset())
+
+        self.assertEqual(reply["status"], "OK")
+        self.assertNotEqual(reply["stored"]["asset_id"], first)
+
     def test_invalid_request_ids_are_rejected(self):
         for request_id in (7, "", "   ", "x" * (node.MAX_FIELD_LENGTH + 1)):
             with self.subTest(request_id=request_id):
@@ -365,6 +397,15 @@ class SystemTest(NodeTestCase):
         replies = self.run_at_once([request] * 20)
 
         self.assertTrue(all(reply["status"] == "OK" for reply in replies))
+        self.assertEqual(len(list_ids()), 1)
+
+    def test_20_clients_racing_to_register_one_item_store_one_asset(self):
+        self.use_slow_list()
+
+        replies = self.run_at_once([common.new_register_request(make_asset()) for _ in range(20)])
+
+        self.assertEqual(sum(reply["status"] == "OK" for reply in replies), 1)
+        self.assertEqual(sum(reply.get("code") == common.DUPLICATE_ASSET for reply in replies), 19)
         self.assertEqual(len(list_ids()), 1)
 
     # ---- Deleting an asset ----
@@ -687,6 +728,15 @@ class ReconcileTest(NodeTestCase):
         self.assertEqual(server.merge_state([make_record("AST-P000001", version=9)], {}), 0)
         self.assertEqual(node.assets, [])
 
+    def test_the_same_item_on_both_servers_keeps_the_primarys_record(self):
+        node.assets.append(make_record("AST-P000005", description="Same item"))
+
+        changed = server.merge_state([make_record("AST-B000001", description="Same item")], {})
+
+        self.assertEqual(changed, 2)  # one copied across, then removed as a duplicate
+        self.assertEqual([asset["asset_id"] for asset in node.assets], ["AST-P000005"])
+        self.assertIn("AST-B000001", node.deleted_ids)
+
     def test_invalid_records_from_the_backup_are_recognised(self):
         for record in ({"no_id": 1}, {"asset_id": "JUNK"}, [1], make_record(tags=7), make_record(version="1")):
             with self.subTest(record=record):
@@ -922,6 +972,33 @@ class DistributedTest(unittest.TestCase):
         self.assertEqual(self.descriptions_on(self.backup), ["ALONE"])
         self.assertEqual(register(make_asset("BOTH"))["status"], "OK")
         self.assertEqual(self.descriptions_on(self.backup), ["ALONE", "BOTH"])
+
+    def test_two_servers_that_each_took_changes_alone_are_reconciled(self):
+        # Each server runs alone in turn, as they would if the network split. They
+        # issue IDs at the same time without being able to ask each other.
+        same_item = common.new_register_request(make_asset("ON BOTH"))
+
+        primary = self.start_primary()
+        self.wait_until(lambda: self.assets_on(self.primary) == [], "saw the primary start")
+        kept_id = common.request_from(self.primary, same_item)["stored"]["asset_id"]
+        self.assertEqual(common.request_from(self.primary, common.new_register_request(make_asset("PRIMARY ONLY")))["status"], "OK")
+        self.stop(primary)
+
+        self.start_backup()
+        self.wait_until_taken_over()
+        self.assertEqual(common.request_from(self.backup, same_item)["status"], "OK")
+        self.assertEqual(common.request_from(self.backup, common.new_register_request(make_asset("BACKUP ONLY")))["status"], "OK")
+
+        # When the two can reach each other, each ends up with one record of each item.
+        self.start_primary()
+        self.wait_until_in_sync()
+        expected = ["BACKUP ONLY", "ON BOTH", "PRIMARY ONLY"]
+        self.assertEqual(self.descriptions_on(self.primary), expected)
+        self.assertEqual(self.descriptions_on(self.backup), expected)
+
+        ids = [asset["asset_id"] for asset in self.assets_on(self.primary)]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn(kept_id, ids)
 
     def test_deleted_assets_stay_deleted_through_a_restart_of_both(self):
         primary = self.start_primary()

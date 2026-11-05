@@ -72,6 +72,7 @@ def merge_state(peer_assets: list, peer_deleted: dict) -> int:
       - A missing asset is copied across.
       - Of two different copies, the one with the higher version wins.
       - With equal versions, each server made one change. The primary's copy wins.
+      - If each server registered the same item, the primary's record is kept.
     """
     newly_deleted = {key: value for key, value in peer_deleted.items() if key not in node.deleted_ids}
     all_deleted = {**node.deleted_ids, **newly_deleted}
@@ -89,6 +90,17 @@ def merge_state(peer_assets: list, peer_deleted: dict) -> int:
         if my_asset is None or peer_asset.get("version", 0) > my_asset.get("version", 0):
             merged[asset_id] = peer_asset
             changed += 1
+
+    # The same item registered on both servers, such as a client retrying on the
+    # backup after losing the primary's reply. This server's own IDs sort first.
+    by_preference = sorted(merged, key=lambda asset_id: (not asset_id.startswith(node.ID_PREFIX), asset_id))
+    identities = set()
+    for asset_id in by_preference:
+        identity = node.identity_of(merged[asset_id])
+        if identity in identities:
+            all_deleted[asset_id] = merged.pop(asset_id).get("request_id")
+            changed += 1
+        identities.add(identity)
 
     node.assets[:] = merged.values()
     node.deleted_ids.clear()
