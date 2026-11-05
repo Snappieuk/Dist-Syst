@@ -1,20 +1,35 @@
 """
-First-time setup of the Asset Management System.
+First-time setup and full reset of the Asset Management System.
 
     python setup.py
+    python setup.py --reset
 
-This creates the secret the programs share, and asks you to choose the web password.
-start.py runs this by itself the first time, so you rarely need to run it directly.
+Setup creates the secret the programs share, and asks you to choose the web password.
+start.py runs it by itself the first time, so you rarely need to run it directly.
+
+Reset permanently deletes every asset, password and secret on this machine, leaving the
+system as if it had just been downloaded. It doesn't touch the code or the git history.
 """
 
-import os  # checks which files already exist
-import sys  # checks whether there is someone to ask
+import json    # reads how many assets a reset would delete
+import os      # checks which files exist, and deletes them
+import socket  # checks whether any part of the system is running
+import sys     # sys.argv holds the --reset option; checks whether there is someone to ask
 
+import backup
 import common
+import server
 import web
 
 # How many times to ask for a password before giving up.
 PASSWORD_ATTEMPTS = 3
+
+# What must be typed to confirm a reset. Having to type a word rather than just pressing y
+# makes it much harder to delete everything by accident.
+RESET_WORD = "RESET"
+
+# How long to wait when checking whether a program is running.
+PORT_CHECK_SECONDS = 1
 
 
 def can_ask_questions() -> bool:
@@ -42,7 +57,94 @@ def run_setup() -> bool:
     return False
 
 
+def generated_files() -> list:
+    """Every file the system creates as it runs. A reset deletes only these, by exact name,
+    so that it can never remove anything else."""
+    data_and_password = [server.ASSETS_FILE, backup.ASSETS_FILE, web.PASSWORD_FILE]
+    return data_and_password + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_password]
+
+
+def is_running(address: tuple) -> bool:
+    try:
+        socket.create_connection(address, timeout=PORT_CHECK_SECONDS).close()
+        return True
+    except OSError:
+        return False
+
+
+def running_programs() -> list:
+    """Return the name of each part of the system that is currently running."""
+    addresses = {"server.py": common.SERVERS[0], "web.py": web.WEB_ADDRESS}
+    if len(common.SERVERS) > 1:
+        addresses["backup.py"] = common.SERVERS[1]
+    return [name for name, address in addresses.items() if is_running(address)]
+
+
+def count_assets(path: str) -> int:
+    """Return how many assets a data file holds, or 0 if it can't be read. A damaged file
+    must not stop a reset, which may be just what is needed to recover from it."""
+    try:
+        with open(path, encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, ValueError):
+        return 0
+    assets = data.get("assets", []) if isinstance(data, dict) else data
+    return len(assets) if isinstance(assets, list) else 0
+
+
+def reset() -> bool:
+    """Delete everything the system has generated, once the user confirms. Returns whether
+    anything was deleted.
+
+    It refuses while the system is running. A running server holds its data in memory and
+    would simply save it all again, and it syncs with the other server.
+    """
+    running = running_programs()
+    if running:
+        print(f"Nothing was deleted, because these are still running: {', '.join(running)}")
+        print("Stop them first, on every machine, then run this again.")
+        return False
+
+    existing = [path for path in generated_files() if os.path.exists(path)]
+    if not existing:
+        print("Nothing to reset: the system is already bare.")
+        return False
+
+    print("This will permanently delete:")
+    for path in existing:
+        print(f"  {os.path.basename(path)}")
+    assets = max(count_assets(server.ASSETS_FILE), count_assets(backup.ASSETS_FILE))
+    print(f"\nThat includes {assets} asset(s), the web password and the shared secret.")
+    print("It can't be undone.")
+
+    if input(f"Type {RESET_WORD} to continue: ").strip() != RESET_WORD:
+        print("Nothing was deleted.")
+        return False
+
+    failed = []
+    for path in existing:
+        try:
+            os.remove(path)
+        except OSError as exc:
+            failed.append(f"{os.path.basename(path)} ({exc})")
+
+    if failed:
+        print("These could not be deleted, so the reset is not complete:")
+        for item in failed:
+            print(f"  {item}")
+    else:
+        print("\nReset complete. To set the system up again, run: python start.py")
+    return True
+
+
 def main() -> None:
+    if "--reset" in sys.argv:
+        try:
+            reset()
+        except (EOFError, KeyboardInterrupt):
+            print("\nNothing was deleted.")
+        return
+
     if is_set_up():
         print("Already set up. Start the system with: python start.py")
         print("To change the web password, run: python web.py --set-password")
