@@ -100,7 +100,7 @@ python -m unittest -v test_system test_web
 
 The tests start real servers on spare ports and use temporary data files, so your data
 isn't touched. `test_web.py` makes real HTTP requests but doesn't run the page's script in
-a browser, so that part was checked by hand in Microsoft Edge. `DistributedTest` runs `server.py` and `backup.py` as separate programs
+a browser, so that part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and `backup.py` as separate programs
 and kills them partway through. Some tests make a save fail on purpose, so you will see
 logged errors and tracebacks in the output.
 
