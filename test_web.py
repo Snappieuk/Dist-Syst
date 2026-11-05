@@ -692,6 +692,55 @@ class LoginTest(WebTestCase):
         self.assertEqual(status, 200)
 
 
+class AuditLogTest(WebTestCase):
+    """The web log records who did what, but never a password."""
+
+    def logged(self, action) -> str:
+        with self.assertLogs("asset_web", "INFO") as logs:
+            action()
+        return "\n".join(logs.output)
+
+    def test_logins_are_recorded_with_who_and_where_from(self):
+        body = {"username": USERNAME, "password": PASSWORD}
+        text = self.logged(lambda: self.fetch("/api/login", "POST", body, cookie=None))
+
+        self.assertIn(f"{USERNAME} logged in from 127.0.0.1", text)
+        self.assertNotIn(PASSWORD, text)
+
+    def test_failed_logins_are_recorded_without_the_password(self):
+        body = {"username": "intruder", "password": "a guessed password"}
+        text = self.logged(lambda: self.fetch("/api/login", "POST", body, cookie=None))
+
+        self.assertIn("Failed login as 'intruder' from 127.0.0.1", text)
+        self.assertNotIn("a guessed password", text)
+
+    def test_logging_out_is_recorded(self):
+        text = self.logged(lambda: self.fetch("/api/logout", "POST"))
+        self.assertIn(f"{USERNAME} logged out", text)
+
+    def test_adding_and_deleting_say_who_did_it(self):
+        body = {"request_id": "r1", "asset": make_asset("Line one\nFAKE LOG LINE")}
+        added = {}
+
+        def add():
+            added.update(json.loads(self.fetch("/api/assets", "POST", body)[2])["asset"])
+
+        text = self.logged(add)
+        self.assertIn(f"{USERNAME} added {added['asset_id']}", text)
+        self.assertIn(r"'Line one\nFAKE LOG LINE'", text)  # kept on one line
+
+        text = self.logged(lambda: self.fetch(f"/api/assets/{added['asset_id']}?version=1", "DELETE"))
+        self.assertIn(f"{USERNAME} deleted '{added['asset_id']}'", text)
+
+    def test_a_refused_change_is_recorded(self):
+        register(make_asset())
+        body = {"request_id": "r2", "asset": make_asset()}
+
+        text = self.logged(lambda: self.fetch("/api/assets", "POST", body))
+
+        self.assertIn(f"{USERNAME} could not add an asset", text)
+
+
 class PageTest(WebTestCase):
     def test_the_page_is_served(self):
         status, headers, body = self.fetch("/")

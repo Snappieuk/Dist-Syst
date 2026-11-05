@@ -29,7 +29,15 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from common import BAD_REQUEST, CONFLICT, DUPLICATE_ASSET, NOT_FOUND, generate_asset_tags, send_request
+from common import (
+    BAD_REQUEST,
+    CONFLICT,
+    DUPLICATE_ASSET,
+    NOT_FOUND,
+    configure_logging,
+    generate_asset_tags,
+    send_request,
+)
 
 # Where the web interface listens. 127.0.0.1 means only this machine can open it.
 WEB_ADDRESS = ("127.0.0.1", 8080)
@@ -98,6 +106,10 @@ USER_ERROR_STATUSES = {
 }
 
 logger = logging.getLogger("asset_web")
+
+# How much of a typed username a failed login records, so pasting something huge can't
+# flood the log. Usernames are at most 32 characters, so a real one is never cut short.
+MAX_LOGGED_USERNAME = 32
 
 # Who is logged in: a random token for each browser, with its username and when its login
 # expires. These are only held in memory, so restarting this program logs everyone out.
@@ -355,29 +367,39 @@ def change_reply(request: dict, success_status: int) -> tuple:
     return 503, None, {"error": "The asset server could not make the change. Please try again."}
 
 
-def add_asset_reply(body: dict) -> tuple:
-    """Register an asset, returning an HTTP status and a JSON body. Only the expected
-    values are passed on, so a browser cannot add anything else to the request."""
+def add_asset_reply(body: dict, username: str = "someone") -> tuple:
+    """Register an asset for `username`, returning an HTTP status and a JSON body. Only the
+    expected values are passed on, so a browser cannot add anything else to the request."""
     status, reply, result = change_reply(
         {"action": "REGISTER", "request_id": body.get("request_id"), "asset": body.get("asset")}, 201
     )
     if reply is not None:
-        result["asset"] = public_asset(reply["stored"])
+        stored = reply["stored"]
+        result["asset"] = public_asset(stored)
+        # %r shows exactly what was typed, so a line break in it can't fake a log line.
+        logger.info("%s added %s %r, served by the %s",
+                    username, stored.get("asset_id"), stored.get("description"), reply.get("served_by"))
+    else:
+        logger.info("%s could not add an asset: %s", username, result.get("error"))
     return status, result
 
 
-def delete_asset_reply(asset_id: str, query: str) -> tuple:
-    """Delete an asset, returning an HTTP status and a JSON body. The address's ?version=
-    says which version the user was looking at, and is required, so that an asset someone
-    else has just changed can't be deleted by accident."""
+def delete_asset_reply(asset_id: str, query: str, username: str = "someone") -> tuple:
+    """Delete an asset for `username`, returning an HTTP status and a JSON body. The
+    address's ?version= says which version the user was looking at, and is required, so
+    that an asset someone else has just changed can't be deleted by accident."""
     try:
         version = int(parse_qs(query)["version"][0])
     except (KeyError, ValueError):
         return 400, {"error": "The version of the asset is needed"}
 
-    status, _, result = change_reply(
+    status, reply, result = change_reply(
         {"action": "DELETE", "asset_id": asset_id, "expected_version": version}, 200
     )
+    if reply is not None:
+        logger.info("%s deleted %r, served by the %s", username, asset_id, reply.get("served_by"))
+    else:
+        logger.info("%s could not delete %r: %s", username, asset_id, result.get("error"))
     return status, result
 
 
@@ -450,7 +472,7 @@ class WebHandler(BaseHTTPRequestHandler):
             if body is None:
                 return
             if path == "/api/assets":
-                self.send_json(*add_asset_reply(body))
+                self.send_json(*add_asset_reply(body, username))
             else:
                 self.send_json(*create_account_reply(body, username))
 
@@ -462,11 +484,13 @@ class WebHandler(BaseHTTPRequestHandler):
         address = urlsplit(self.path)
         if not address.path.startswith(ASSET_ADDRESS_PREFIX) or address.path == ASSET_ADDRESS_PREFIX:
             self.send_json(404, {"error": "There is nothing at this address"})
-        elif not self.is_logged_in():
-            self.send_json(401, {"error": "Please log in"})
         else:
+            username = session_username(self.session_token())
+            if username is None:
+                self.send_json(401, {"error": "Please log in"})
+                return
             asset_id = unquote(address.path[len(ASSET_ADDRESS_PREFIX):])
-            self.send_json(*delete_asset_reply(asset_id, address.query))
+            self.send_json(*delete_asset_reply(asset_id, address.query, username))
 
     def handle_login(self) -> None:
         body = self.read_json_body()
@@ -479,13 +503,22 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         status, reply, token = try_login(username, guess)
+        browser = self.client_address[0]
         if token is None:
+            # The password is never logged. The username is shown with %r, and shortened,
+            # because it is whatever was typed, which may not be a real username.
+            logger.warning("Failed login as %r from %s (%s)", username[:MAX_LOGGED_USERNAME], browser, reply["error"])
             self.send_json(status, reply)
         else:
+            logger.info("%s logged in from %s", reply["username"], browser)
             self.send_json(status, reply, session_cookie(token, SESSION_SECONDS))
 
     def handle_logout(self) -> None:
-        end_session(self.session_token())
+        token = self.session_token()
+        username = session_username(token)
+        end_session(token)
+        if username is not None:
+            logger.info("%s logged out", username)
         self.send_json(200, {}, session_cookie("", 0))
 
     def session_token(self) -> object:
@@ -566,7 +599,9 @@ def main() -> None:
         create_account_from_prompt()
         return
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [web] %(message)s")
+    # The log goes to the console and to logs/web.log. It records who logged in and what
+    # each account added or deleted, but never a password.
+    configure_logging("web")
     load_accounts()
 
     # ThreadingHTTPServer gives each browser request its own thread, so one slow
