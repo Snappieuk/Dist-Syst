@@ -41,8 +41,9 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
 | `web.py` | A web interface for browsing, adding and deleting assets, behind a password. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
-| `start.py` | Starts the primary, backup and web interface with one command. |
-| `test_system.py`, `test_web.py`, `test_start.py` | The automated tests. |
+| `start.py` | Starts the primary, backup and web interface with one command, running setup first if needed. |
+| `setup.py` | First-time setup, and a full reset with `--reset`. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py` | The automated tests. |
 
 ## Running it
 
@@ -54,10 +55,22 @@ The quickest way to start everything is:
 python start.py
 ```
 
-This starts the primary, the backup and the web interface, opens the web page, and stops
-them all when you press Ctrl+C. **The first time, the web password is printed in that
-window, and it won't be shown again.** To change it or replace a lost one, run
+The first time, this asks you to choose a password for the web page. It then starts the
+primary, the backup and the web interface, opens the web page, and stops them all when you
+press Ctrl+C. To change the password or replace a lost one, run
 `python web.py --set-password`.
+
+To put everything back to a fresh install, stop the system and run:
+
+```
+python setup.py --reset
+```
+
+**This permanently deletes every asset, the web password and the shared secret on this
+machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
+the code or the git history. If you use several machines, reset each of them, because a
+server that still has the data would copy it straight back. The next `python start.py` runs
+setup again.
 
 To stop one server on its own, which you need for the demo below, or to use the GUI, run
 each program in its own terminal instead:
@@ -115,7 +128,9 @@ Between programs, every request to a server carries a shared secret from `secret
 first program to run creates this file. Servers refuse any request without the right value
 with `UNAUTHORIZED`, including the messages between the servers themselves.
 
-On the web page, one shared password protects everything except the login page itself. Only
+On the web page, one shared password, chosen during setup, protects everything except the
+login page itself. If `web.py` is started with nobody at the keyboard to choose one, it
+creates a random password and prints it once. Only
 a salted PBKDF2 hash is stored, in `web_password.json`. Logging in gives the browser a
 random session token that lasts 8 hours, in a cookie that scripts can't read and other
 websites can't send. After 5 wrong passwords in a row, logins are refused for a minute.
@@ -125,7 +140,7 @@ websites can't send. After 5 wrong passwords in a row, logins are refused for a 
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start
+python -m unittest -v test_system test_web test_start test_setup
 ```
 
 The tests start real servers on spare ports and use temporary data files, so your data
