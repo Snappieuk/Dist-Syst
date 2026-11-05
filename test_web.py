@@ -153,5 +153,26 @@ class AssetsApiTest(WebTestCase):
         self.assertEqual(len(node.assets), 1)
 
 
+class PageTest(WebTestCase):
+    def test_the_page_is_served(self):
+        status, headers, body = self.fetch("/")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn(b"Asset Browser", body)
+
+    def test_security_headers_are_sent(self):
+        for path in ("/", "/api/assets", "/nothing-here"):
+            with self.subTest(path):
+                _, headers, _ = self.fetch(path)
+                self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+                self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+
+    def test_other_files_cannot_be_reached(self):
+        for path in ("/web.py", "/index.html", "/../web.py", "/static/../web.py", "/%2e%2e/web.py", "/assets.json"):
+            with self.subTest(path):
+                self.assertEqual(self.fetch(path)[0], 404)
+
+
 if __name__ == "__main__":
     unittest.main()

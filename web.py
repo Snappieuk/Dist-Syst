@@ -14,6 +14,7 @@ it listens only on this machine by default.
 
 import json       # the data sent to the browser is JSON
 import logging    # records what happens, including errors, without stopping
+import os         # os.path finds the page's files
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -29,6 +30,16 @@ BROWSER_TIMEOUT_SECONDS = 10
 # The asset fields a browser may see. Anything else a server stores, such as the
 # request_id, is internal to the system.
 PUBLIC_FIELDS = ("asset_id", "description", "category", "location", "status", "date_registered")
+
+# The folder holding the page's files, found relative to this script so that it works
+# whichever folder the program is started from.
+STATIC_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Every file a browser may request, by address. Using a fixed list means no address can
+# ever reach another file on this machine, however it is written.
+STATIC_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+}
 
 logger = logging.getLogger("asset_web")
 
@@ -68,20 +79,36 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         # Only the path matters, so anything after a "?" is ignored.
-        if urlsplit(self.path).path == "/api/assets":
-            status, body = assets_reply()
+        path = urlsplit(self.path).path
+
+        if path == "/api/assets":
+            self.send_json(*assets_reply())
+        elif path in STATIC_FILES:
+            self.send_static_file(*STATIC_FILES[path])
         else:
-            status, body = 404, {"error": "There is nothing at this address"}
-        self.send_json(status, body)
+            self.send_json(404, {"error": "There is nothing at this address"})
+
+    def send_static_file(self, file_name: str, content_type: str) -> None:
+        with open(os.path.join(STATIC_FOLDER, file_name), "rb") as file:
+            self.send_body(200, content_type, file.read())
 
     def send_json(self, status: int, body: dict) -> None:
-        payload = json.dumps(body).encode("utf-8")
+        self.send_body(status, "application/json", json.dumps(body).encode("utf-8"))
+
+    def send_body(self, status: int, content_type: str, payload: bytes) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
 
         # The data changes, so a browser must not keep an old copy.
         self.send_header("Cache-Control", "no-store")
+
+        # The page only needs its own files. Asset details are typed in by people, so
+        # this limits the damage if one ever got treated as code. It also stops the
+        # browser guessing file types, and stops other sites embedding the page.
+        self.send_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+
         self.end_headers()
         self.wfile.write(payload)
 
