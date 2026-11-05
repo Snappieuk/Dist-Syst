@@ -1,3 +1,7 @@
 # Python bytecode, regenerated automatically
 __pycache__/
 *.pyc
+
+# Data and temporary files created when the server runs
+assets_*.json
+*.tmp

@@ -15,7 +15,13 @@ import threading
 import time
 import unittest
 
+import contextlib
+import io
+from unittest import mock
+
 import common
+import receive
+import send
 import server
 
 
@@ -38,6 +44,18 @@ def make_config(folder: str) -> dict:
     with open(path, "w", encoding="utf-8") as file:
         json.dump(config, file)
     return common.load_config(path)
+
+
+def make_asset(asset_id: str = "AST-0001", **changes) -> dict:
+    asset = {
+        "asset_id": asset_id,
+        "description": f"Laptop {asset_id}",
+        "category": "IT Equipment",
+        "location": "Site A",
+        "status": "In Use",
+    }
+    asset.update(changes)
+    return asset
 
 
 class ServerTestCase(unittest.TestCase):
@@ -73,6 +91,9 @@ class ServerTestCase(unittest.TestCase):
     def request(self, request: dict) -> dict:
         return common.send_request(request, self.config)
 
+    def register(self, asset: dict) -> dict:
+        return self.request({"action": "REGISTER", "asset": asset})
+
     def raw_exchange(self, payload: bytes) -> dict:
         """Send raw bytes to the primary and return its decoded reply."""
         with socket.create_connection(self.server.address, timeout=5) as sock:
@@ -90,7 +111,7 @@ class ProtocolTest(ServerTestCase):
         self.assertEqual(self.server.address[1], self.config["servers"]["primary"]["port"])
 
     def test_register_and_list_are_accepted(self):
-        reply = self.request({"action": "REGISTER", "asset": {"description": "Laptop"}})
+        reply = self.register(make_asset())
         self.assertEqual(reply["status"], "OK")
         self.assertEqual(self.request({"action": "LIST"})["status"], "OK")
 
@@ -140,6 +161,114 @@ class ProtocolTest(ServerTestCase):
         self.assertEqual(reply["context"], {"field": "asset"})
 
 
+class AssetDataTest(ServerTestCase):
+    """FR01, FR02, FR05, FR06, FR07, NFR03, NFR12, NFR13."""
+
+    def test_a_registered_asset_is_stored_and_returned_with_server_timestamps(self):
+        reply = self.register(make_asset())
+        self.assertEqual(reply["status"], "OK")
+        stored = reply["stored"]
+        for field, value in make_asset().items():
+            self.assertEqual(stored[field], value)
+        self.assertRegex(stored["created_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(stored["created_at"], stored["updated_at"])
+        self.assertEqual(self.request({"action": "LIST"})["assets"], [stored])
+
+    def test_timestamps_and_unknown_fields_from_the_client_are_ignored(self):
+        asset = make_asset(created_at="1999-01-01T00:00:00Z", date_registered="1999-01-01", owner="me")
+        stored = self.register(asset)["stored"]
+        self.assertNotEqual(stored["created_at"], "1999-01-01T00:00:00Z")
+        self.assertNotIn("date_registered", stored)
+        self.assertNotIn("owner", stored)
+
+    def test_missing_fields_are_rejected(self):
+        for field in common.ASSET_FIELDS:
+            asset = make_asset()
+            del asset[field]
+            reply = self.register(asset)
+            self.assertEqual((reply["code"], reply["context"]["field"]), (common.BAD_REQUEST, field))
+
+    def test_wrong_types_empty_and_overlong_values_are_rejected(self):
+        for bad in (42, None, ["a"], "", "   ", "x" * (server.MAX_FIELD_LENGTH + 1)):
+            reply = self.register(make_asset(description=bad))
+            self.assertEqual(reply["code"], common.BAD_REQUEST, bad)
+            self.assertEqual(reply["context"]["field"], "description")
+
+    def test_invalid_asset_ids_are_rejected(self):
+        for bad in ("-AST", "AST 1", "AST/1", "A" * 33):
+            self.assertEqual(self.register(make_asset(bad))["context"]["field"], "asset_id", bad)
+
+    def test_only_the_allowed_statuses_are_accepted(self):
+        reply = self.register(make_asset(status="Broken"))
+        self.assertEqual(reply["code"], common.BAD_REQUEST)
+        self.assertEqual(reply["context"]["allowed"], list(common.STATUSES))
+        self.assertEqual(self.register(make_asset(status="  not in USE "))["stored"]["status"], "Not In Use")
+
+    def test_a_duplicate_asset_id_is_rejected_ignoring_capitals(self):
+        self.register(make_asset("AST-0001"))
+        reply = self.register(make_asset("ast-0001", description="Something else"))
+        self.assertEqual(reply["code"], common.DUPLICATE_ASSET)
+        self.assertEqual(reply["context"]["asset_id"], "ast-0001")
+        self.assertEqual(len(self.request({"action": "LIST"})["assets"]), 1)
+
+    def test_an_asset_is_on_disk_before_the_client_is_told(self):
+        self.register(make_asset())
+        with open(self.server.data_file, encoding="utf-8") as file:
+            self.assertEqual([a["asset_id"] for a in json.load(file)["assets"]], ["AST-0001"])
+
+    def test_assets_are_loaded_again_after_a_restart(self):
+        stored = self.register(make_asset())["stored"]
+        restarted = server.AssetServer(self.config)
+        self.assertEqual(list(restarted.assets.values()), [stored])
+
+    def test_a_failed_save_leaves_the_old_file_whole_and_nothing_in_memory(self):
+        self.register(make_asset("AST-0001"))
+        with mock.patch("server.json.dump", side_effect=OSError("disk full")):
+            reply = self.register(make_asset("AST-0002"))
+        self.assertEqual(reply["code"], common.INTERNAL)
+        self.assertEqual([a["asset_id"] for a in self.request({"action": "LIST"})["assets"]], ["AST-0001"])
+        with open(self.server.data_file, encoding="utf-8") as file:
+            self.assertEqual(len(json.load(file)["assets"]), 1)
+
+    def test_a_damaged_data_file_stops_the_server_instead_of_being_overwritten(self):
+        with open(self.server.data_file, "w", encoding="utf-8") as file:
+            file.write("{broken")
+        with self.assertRaises(ValueError):
+            server.AssetServer(self.config)
+
+    def test_the_registration_client_prompts_for_each_field_and_registers(self):
+        answers = iter(["AST-0009", "Projector", "AV", "Room 2", "3", "2"])
+        prompts = []
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return next(answers)
+
+        output = io.StringIO()
+        with mock.patch("builtins.input", fake_input), contextlib.redirect_stdout(output):
+            send.main(self.config)
+        for word in ("Asset ID", "Description", "Category", "Location", "Status"):
+            self.assertTrue(any(word in prompt for prompt in prompts), word)
+        self.assertIn("Registered AST-0009", output.getvalue())
+        self.assertIn("Please type a number", output.getvalue())  # "3" was not a valid choice
+        self.assertEqual(self.request({"action": "LIST"})["assets"][0]["status"], "Not In Use")
+
+    def test_the_query_client_says_when_there_are_no_assets(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receive.main(self.config)
+        self.assertIn("No assets registered yet.", output.getvalue())
+
+    def test_the_query_client_shows_every_asset(self):
+        self.register(make_asset("AST-0001"))
+        self.register(make_asset("AST-0002"))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receive.main(self.config)
+        self.assertIn("2 asset(s) registered", output.getvalue())
+        self.assertIn("AST-0002 | Laptop AST-0002 | IT Equipment | Site A | In Use", output.getvalue())
+
+
 
 class ConcurrencyTest(ServerTestCase):
     """NFR05, NFR07, NFR08, NFR20."""
@@ -150,7 +279,7 @@ class ConcurrencyTest(ServerTestCase):
 
         def register(n: int) -> None:
             try:
-                replies.append(self.request({"action": "REGISTER", "asset": {"description": f"Asset {n}"}}))
+                replies.append(self.register(make_asset(f"AST-{n}")))
             except Exception as exc:  # any failure must fail the test, not vanish in a thread
                 errors.append(exc)
 
@@ -162,8 +291,8 @@ class ConcurrencyTest(ServerTestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual([reply["status"] for reply in replies], ["OK"] * 50)
-        stored = sorted(asset["description"] for asset in self.request({"action": "LIST"})["assets"])
-        self.assertEqual(stored, sorted(f"Asset {n}" for n in range(50)))
+        stored = sorted(asset["asset_id"] for asset in self.request({"action": "LIST"})["assets"])
+        self.assertEqual(stored, sorted(f"AST-{n}" for n in range(50)))
 
     def test_an_idle_client_does_not_block_others_and_is_disconnected(self):
         idle = socket.create_connection(self.server.address)

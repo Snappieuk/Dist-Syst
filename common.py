@@ -26,6 +26,11 @@ UNKNOWN_ACTION = "UNKNOWN_ACTION"              # the action is not one the serve
 UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"    # missing or unsupported protocol_version
 TOO_LARGE = "TOO_LARGE"                        # the message is over the size limit
 INTERNAL = "INTERNAL"                          # the server failed; the request may be fine
+DUPLICATE_ASSET = "DUPLICATE_ASSET"            # an asset with that asset_id already exists
+
+# The fields a client supplies for an asset, and the only statuses allowed.
+ASSET_FIELDS = ("asset_id", "description", "category", "location", "status")
+STATUSES = ("In Use", "Not In Use")
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
