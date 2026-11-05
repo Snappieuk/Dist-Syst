@@ -44,6 +44,34 @@ h1 {
   color: var(--muted);
 }
 
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 200px;
+  max-width: 400px;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.filters input,
+.filters select {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
 /* A wide table scrolls inside this box, so a phone's page itself does not scroll sideways. */
 .table-wrap {
   overflow-x: auto;

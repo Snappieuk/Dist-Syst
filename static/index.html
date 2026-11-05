@@ -11,6 +11,18 @@
   <main>
     <h1>Asset Browser</h1>
     <p id="message" role="status">Loading...</p>
+    <form id="filters" class="filters">
+      <label>
+        Search
+        <input id="search" type="search" placeholder="Description, location, tags...">
+      </label>
+      <label>
+        Status
+        <select id="status-filter">
+          <option value="">All statuses</option>
+        </select>
+      </label>
+    </form>
     <div class="table-wrap">
       <table>
         <thead>
