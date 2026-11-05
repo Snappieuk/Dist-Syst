@@ -7,9 +7,12 @@ These run short stand-in programs rather than the real servers, so they do not n
 system's ports and never touch your data.
 """
 
+import contextlib
+import io
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 import start
 
@@ -41,6 +44,37 @@ class StartTest(unittest.TestCase):
         start.stop_all(self.processes)
 
         self.assertTrue(all(process.poll() is not None for process in self.processes.values()))
+
+
+class FirstStartTest(unittest.TestCase):
+    def ensure(self, set_up: bool, at_keyboard: bool, setup_result: object = True) -> tuple:
+        """Run the check with setup replaced, returning its result, whether setup ran, and
+        whether any programs were started."""
+        effect = setup_result if isinstance(setup_result, type) else None
+        with mock.patch.object(start.setup, "is_set_up", return_value=set_up), \
+                mock.patch.object(start.setup, "can_ask_questions", return_value=at_keyboard), \
+                mock.patch.object(start.setup, "run_setup", return_value=setup_result, side_effect=effect) as run_setup, \
+                contextlib.redirect_stdout(io.StringIO()):
+            return start.ensure_set_up(), run_setup.called
+
+    def test_setup_runs_on_a_first_start(self):
+        self.assertEqual(self.ensure(False, True), (True, True))
+
+    def test_setup_is_skipped_once_it_is_done(self):
+        self.assertEqual(self.ensure(True, True), (True, False))
+
+    def test_with_no_keyboard_it_starts_without_asking(self):
+        self.assertEqual(self.ensure(False, False), (True, False))
+
+    def test_unfinished_setup_stops_the_start(self):
+        self.assertEqual(self.ensure(False, True, False), (False, True))
+        self.assertEqual(self.ensure(False, True, KeyboardInterrupt), (False, True))
+
+    def test_nothing_is_started_if_setup_is_not_finished(self):
+        with mock.patch.object(start, "ensure_set_up", return_value=False), \
+                mock.patch.object(start, "start_programs") as start_programs:
+            start.main()
+        start_programs.assert_not_called()
 
 
 if __name__ == "__main__":

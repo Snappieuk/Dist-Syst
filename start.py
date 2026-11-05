@@ -3,6 +3,8 @@ Starts the whole system with one command, and opens the web page.
 
     python start.py
 
+The first time, this runs setup, which asks you to choose the web password.
+
 The primary, backup and web interface still run as separate processes, exactly as if
 each had been started in its own terminal. They share this window, so each log line
 says which one wrote it. Press Ctrl+C to stop them all.
@@ -18,6 +20,7 @@ import sys         # sys.executable is the Python running this script
 import time        # waits between checks
 import webbrowser  # opens the web page
 
+import setup
 from web import WEB_ADDRESS
 
 PROGRAMS = ("server.py", "backup.py", "web.py")
@@ -26,6 +29,25 @@ FOLDER = os.path.dirname(os.path.abspath(__file__))
 
 # How long to wait for the web interface before opening the browser anyway.
 WEB_START_SECONDS = 10
+
+
+def ensure_set_up() -> bool:
+    """Run first-time setup if it's needed, returning whether it's fine to start.
+
+    If there is nobody at a keyboard to ask, it carries on, and web.py creates a random
+    password and prints it instead.
+    """
+    if setup.is_set_up() or not setup.can_ask_questions():
+        return True
+
+    try:
+        if setup.run_setup():
+            print()
+            return True
+    except (EOFError, KeyboardInterrupt):
+        pass
+    print("\nSetup was not finished, so nothing was started. Run this again to retry.")
+    return False
 
 
 def start_programs(programs: tuple) -> dict:
@@ -79,6 +101,9 @@ def stop_all(processes: dict) -> None:
 
 
 def main() -> None:
+    if not ensure_set_up():
+        return
+
     processes = start_programs(PROGRAMS)
     try:
         wait_for_web(processes)
