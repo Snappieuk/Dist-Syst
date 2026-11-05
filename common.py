@@ -13,6 +13,7 @@ about what counts as a valid message live here rather than being repeated
 import json         # used to turn a Python dict into a JSON string, and back
 import socket       # provides the networking building blocks (sockets)
 import unicodedata  # recognises letters and digits in any language, for tags
+import uuid         # creates the random request ID sent with each registration
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
@@ -41,7 +42,6 @@ TIMEOUT_SECONDS = 5
 # Error codes, sent as the "code" field of an ERROR reply. "detail" is written
 # for people and may be reworded, so programs should act on the code instead.
 BAD_REQUEST = "BAD_REQUEST"    # the request is malformed or fails validation
-DUPLICATE_ID = "DUPLICATE_ID"  # the asset_id is already in use
 TOO_LARGE = "TOO_LARGE"        # the message is bigger than MAX_MESSAGE_BYTES
 INTERNAL = "INTERNAL"          # the server failed; the request itself may be fine
 
@@ -148,6 +148,16 @@ def format_asset_tags(tags: list) -> str:
     if not tags:
         return ""
     return ", ".join(str(tag) for tag in tags)
+
+
+def new_register_request(asset: dict) -> dict:
+    """Build a REGISTER request with a new random request ID.
+
+    The server stores the request ID with the asset. If the request is sent again, the
+    server recognises it and replies with that asset, rather than storing a second
+    copy, which makes retrying safe. To retry, send the same request again.
+    """
+    return {"action": "REGISTER", "request_id": uuid.uuid4().hex, "asset": asset}
 
 
 def include_asset(assets: list, stored: object) -> list:
@@ -265,7 +275,7 @@ def send_request(request: dict) -> dict:
     This is failover: if the primary is down, the client moves on to the backup
     without the user having to do anything. Trying a REGISTER again on the backup
     is safe even if the primary did the work and only its reply was lost, because
-    the servers later match assets up by their unique IDs.
+    the server recognises a repeated request.
 
     The next server is also tried after an INTERNAL reply, such as when one server's
     disk is full. That is safe because a server undoes a change it could not save.

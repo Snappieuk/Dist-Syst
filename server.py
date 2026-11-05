@@ -3,12 +3,13 @@ Asset Management System server.
 
 Each connection carries one request and one reply:
 
-    {"action": "REGISTER", "asset": {...}}   -> validates and stores the asset
+    {"action": "REGISTER", "request_id": "...", "asset": {...}}
+                                             -> validates and stores the asset, creating its ID
     {"action": "LIST"}                       -> replies with every stored asset
 
 Replies always contain "status". Failures look like this:
 
-    {"status": "ERROR", "code": "DUPLICATE_ID", "detail": "..."}
+    {"status": "ERROR", "code": "BAD_REQUEST", "detail": "..."}
 
 Each client is handled on its own thread, and assets are saved to a JSON file
 after every change, so they survive a crash or restart.
@@ -34,7 +35,6 @@ import time       # waits between syncs with the other server
 # Import the shared constants/helpers used by every part of the prototype.
 from common import (
     BAD_REQUEST,
-    DUPLICATE_ID,
     INTERNAL,
     SERVERS,
     TOO_LARGE,
@@ -53,7 +53,13 @@ ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.j
 BACKUP_ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets_backup.json")
 
 # The fields a client must supply when registering an asset.
-REQUIRED_FIELDS = ("asset_id", "description", "category", "location", "status")
+CLIENT_FIELDS = ("description", "category", "location", "status")
+
+# The fields every stored asset must have.
+STORED_FIELDS = ("asset_id",) + CLIENT_FIELDS
+
+# The range of asset IDs this server may issue. The backup has its own.
+ID_PREFIX = "AST-P"
 
 # The longest value allowed in each of those fields, in characters. There is no
 # delete, so without a cap a single huge asset would push every LIST reply over
@@ -154,8 +160,8 @@ def check_text(value: object, name: str) -> str:
 
 
 def validate_asset(asset: object) -> dict:
-    """Return a clean copy of a client's asset with its date and tags added, or
-    raise ValueError if it is invalid.
+    """Return a clean copy of a client's asset with its date added, or raise
+    ValueError if it is invalid.
 
     This happens on the server even if a client also checks, because anyone can
     write a program that speaks this protocol. Only the server can guarantee it.
@@ -163,22 +169,38 @@ def validate_asset(asset: object) -> dict:
     if not isinstance(asset, dict):
         raise ValueError("'asset' must be an object")
 
-    # Copying only the expected fields means any extra fields are dropped.
+    # Copying only the expected fields means any extra fields are dropped, including
+    # any asset_id the client sent.
     clean = {}
-    for field in REQUIRED_FIELDS:
+    for field in CLIENT_FIELDS:
         clean[field] = check_text(asset.get(field), field)
 
     # The date comes from the server, and anything the client sent is ignored,
     # because client clocks can be wrong or in other time zones.
     clean["date_registered"] = datetime.date.today().isoformat()
-
-    # Tags come from the server too, so every client's assets are tagged the same way.
-    clean["tags"] = generate_asset_tags(clean)
     return clean
 
 
-def register_asset(asset: dict) -> dict:
-    """Store a validated asset and return the reply.
+def generate_asset_id() -> str:
+    """Return an asset ID that has never been used. The caller must hold the lock.
+
+    Each candidate is checked against every stored ID, and is only issued if it is
+    unused. Holding the lock means nothing can take it before it is stored.
+
+    Each server issues IDs from its own range (AST-P... or AST-B...). The other server
+    may not be reachable to ask, but this means it can never issue the same ID.
+    """
+    used = {asset["asset_id"] for asset in assets}
+    number = len(used) + 1
+    while True:
+        candidate = f"{ID_PREFIX}{number:06d}"
+        if candidate not in used:
+            return candidate
+        number += 1
+
+
+def register_asset(clean: dict, request_id: object) -> dict:
+    """Store a validated asset under a new ID and return the reply.
 
     Together with validate_asset() and save_assets(), this gives the ACID
     properties for each registration:
@@ -186,10 +208,22 @@ def register_asset(asset: dict) -> dict:
       Consistency: only valid assets with unique IDs are ever stored.
       Isolation:   the lock stops concurrent registrations interfering.
       Durability:  the reply is only sent after the save has reached the disk.
+
+    A repeat of the same request is a client retrying, so it gets the asset already
+    stored rather than a second copy.
     """
     with assets_lock:
-        if any(existing["asset_id"] == asset["asset_id"] for existing in assets):
-            return error_reply(DUPLICATE_ID, f"Asset ID {asset['asset_id']!r} is already registered")
+        if request_id is not None:
+            for existing in assets:
+                if existing.get("request_id") == request_id:
+                    if any(existing[field] != clean[field] for field in ("description", "category", "location")):
+                        return error_reply(BAD_REQUEST, "This request_id was already used for a different asset")
+                    return {"status": "OK", "stored": existing}
+
+        asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id)
+
+        # Tags come from the server too, so every client's assets are tagged the same way.
+        asset["tags"] = generate_asset_tags(asset)
 
         assets.append(asset)
         try:
@@ -200,8 +234,8 @@ def register_asset(asset: dict) -> dict:
             assets.pop()
             raise
 
-    # Echo back what was stored, because the server may have changed it (trimmed
-    # spaces, dropped extra fields, added the date and tags).
+    # Echo back what was stored, because the server changed it (trimmed spaces,
+    # dropped extra fields, added the ID, date and tags).
     return {"status": "OK", "stored": asset}
 
 
@@ -214,10 +248,13 @@ def process_request(request: dict) -> dict:
 
     if action == "REGISTER":
         try:
-            asset = validate_asset(request.get("asset"))
+            clean = validate_asset(request.get("asset"))
+            request_id = request.get("request_id")
+            if request_id is not None:
+                request_id = check_text(request_id, "request_id")
         except ValueError as exc:
             return error_reply(BAD_REQUEST, str(exc))
-        return register_asset(asset)
+        return register_asset(clean, request_id)
 
     if action == "LIST":
         # Copy the list while holding the lock. It is sent after the lock is
@@ -238,7 +275,7 @@ def is_valid_peer_asset(record: object) -> bool:
         return False
 
     try:
-        for field in REQUIRED_FIELDS:
+        for field in STORED_FIELDS:
             check_text(record.get(field), field)
     except ValueError:
         return False
@@ -442,7 +479,7 @@ def run_server(server_sock: socket.socket) -> None:
 
 
 def main() -> None:
-    global ASSETS_FILE
+    global ASSETS_FILE, ID_PREFIX
 
     # The primary and backup are the same program. This option only decides which
     # address and data file it uses, which server it syncs with, and that the
@@ -452,6 +489,7 @@ def main() -> None:
     peer = SERVERS[0] if is_backup else SERVERS[1]
     if is_backup:
         ASSETS_FILE = BACKUP_ASSETS_FILE
+        ID_PREFIX = "AST-B"
 
     logging.basicConfig(
         level=logging.INFO,

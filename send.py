@@ -15,7 +15,7 @@ it.
 """
 
 # The shared networking code used by every client.
-from common import send_request
+from common import new_register_request, send_request
 
 
 def prompt_for_asset() -> dict:
@@ -25,18 +25,15 @@ def prompt_for_asset() -> dict:
     # input() prints the given prompt, waits for the user to type a line
     # and press Enter, then returns what they typed as a string.
     # .strip() removes any accidental leading/trailing spaces.
-    asset_id = input("  Asset ID (e.g. AST-0001): ").strip()
     description = input("  Description (e.g. Dell Latitude 5440 laptop): ").strip()
     category = input("  Category (e.g. IT Equipment): ").strip()
     location = input("  Location (e.g. Site A - IT Store): ").strip()
     status = input("  Status (e.g. In Use): ").strip()
 
-    # Build and return the asset as a dict. The server validates these fields
-    # and rejects anything invalid, because only the server can reliably check
-    # rules such as "this asset_id is not already in use". It also sets
-    # date_registered and tags itself, so those are not sent from here.
+    # Build and return the asset as a dict. The server validates these fields and
+    # rejects anything invalid. It also creates the asset_id, date_registered and
+    # tags itself, so those are not sent from here.
     return {
-        "asset_id": asset_id,
         "description": description,
         "category": category,
         "location": location,
@@ -50,10 +47,10 @@ def main() -> None:
 
     # Send a REGISTER request containing the new asset. If that fails, show a
     # clear message rather than a traceback. Each server is tried once, with no
-    # further retries: the user can simply run this again, and unique asset IDs
-    # stop the same asset being stored twice.
+    # further retries. Running this again sends a new registration, so after an
+    # error, check the list first in case the first attempt did work.
     try:
-        response = send_request({"action": "REGISTER", "asset": new_asset})
+        response = send_request(new_register_request(new_asset))
     except (OSError, ValueError) as exc:
         print(f"Could not register the asset: {exc}")
         return

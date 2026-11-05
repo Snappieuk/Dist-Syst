@@ -14,7 +14,7 @@ import threading  # runs network requests without freezing the window
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from common import format_asset_tags, generate_asset_tags, include_asset, send_request
+from common import format_asset_tags, generate_asset_tags, include_asset, new_register_request, send_request
 
 
 class AssetManagementApp:
@@ -27,6 +27,7 @@ class AssetManagementApp:
         self.results = queue.Queue()  # finished requests, waiting to be displayed
 
         self.fields = {}  # the form's text boxes, by asset field name
+        self.unconfirmed_registration = None  # see register_asset()
         self._build_ui()
 
         # Start checking for finished requests, then load the table.
@@ -38,8 +39,8 @@ class AssetManagementApp:
         form = ttk.LabelFrame(self.root, text="Register an asset", padding=10)
         form.pack(fill=tk.X, padx=12, pady=(12, 8))
 
+        # The server creates the asset ID, so there is no box for it.
         labels = (
-            ("asset_id", "Asset ID"),
             ("description", "Description"),
             ("category", "Category"),
             ("location", "Location"),
@@ -80,7 +81,7 @@ class AssetManagementApp:
             "date_registered": "Date Registered",
         }
         widths = {
-            "asset_id": 100,
+            "asset_id": 170,
             "description": 190,
             "category": 120,
             "location": 150,
@@ -151,7 +152,15 @@ class AssetManagementApp:
             )
             return
 
-        self._start_request("register", {"action": "REGISTER", "asset": asset})
+        # If the last attempt failed, the server may still have saved it, with only
+        # the reply being lost. Pressing the button again with the same details sends
+        # the same request, which cannot create a second copy of the asset.
+        pending = self.unconfirmed_registration
+        if pending is None or pending["asset"] != asset:
+            pending = new_register_request(asset)
+            self.unconfirmed_registration = pending
+
+        self._start_request("register", pending)
 
     def refresh_assets(self) -> None:
         """Ask the server for the current list of assets."""
@@ -168,6 +177,7 @@ class AssetManagementApp:
                     # The registration worked and only the list refresh failed, so
                     # clear the form as usual but report the problem.
                     if operation == "register" and response and response.get("status") == "OK":
+                        self.unconfirmed_registration = None
                         for entry in self.fields.values():
                             entry.delete(0, tk.END)
                         self.status_label.configure(text="Asset registered; list refresh failed")
@@ -188,6 +198,7 @@ class AssetManagementApp:
                     continue
 
                 if operation == "register":
+                    self.unconfirmed_registration = None
                     for entry in self.fields.values():
                         entry.delete(0, tk.END)
                     self.status_label.configure(text="Asset registered successfully")
