@@ -55,6 +55,12 @@ BACKUP_ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "a
 # The fields a client must supply when registering an asset.
 REQUIRED_FIELDS = ("asset_id", "description", "category", "location", "status")
 
+# The longest value allowed in each of those fields, in characters. There is no
+# delete, so without a cap a single huge asset would push every LIST reply over
+# the message limit for good. It also keeps every REGISTER reply well under that
+# limit, so a client always hears the result of a registration that was saved.
+MAX_FIELD_LENGTH = 1000
+
 # How long the server waits on each read from, or send to, a client before giving
 # up on it. Without this, an idle client would hold a thread and a connection forever.
 CLIENT_TIMEOUT_SECONDS = 10
@@ -114,6 +120,16 @@ def error_reply(code: str, detail: str) -> dict:
     return {"status": "ERROR", "code": code, "detail": detail}
 
 
+def check_text(value: object, name: str) -> str:
+    """Return `value` without surrounding spaces, or raise ValueError if it is not
+    an acceptable field value."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Field must be a non-empty string: {name}")
+    if len(value.strip()) > MAX_FIELD_LENGTH:
+        raise ValueError(f"Field must be at most {MAX_FIELD_LENGTH} characters: {name}")
+    return value.strip()
+
+
 def validate_asset(asset: object) -> dict:
     """Return a clean copy of a client's asset with its date and tags added, or
     raise ValueError if it is invalid.
@@ -127,10 +143,7 @@ def validate_asset(asset: object) -> dict:
     # Copying only the expected fields means any extra fields are dropped.
     clean = {}
     for field in REQUIRED_FIELDS:
-        value = asset.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"Field must be a non-empty string: {field}")
-        clean[field] = value.strip()
+        clean[field] = check_text(asset.get(field), field)
 
     # The date comes from the server, and anything the client sent is ignored,
     # because client clocks can be wrong or in other time zones.
@@ -296,7 +309,14 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
         # `with conn:` closes the connection when this block ends, even on error.
         with conn:
             conn.settimeout(CLIENT_TIMEOUT_SECONDS)
-            send_message(conn, read_and_process(conn))
+            reply = read_and_process(conn)
+            try:
+                send_message(conn, reply)
+            except MessageTooLargeError as exc:
+                # A LIST of too many assets. send_message() checks the size before
+                # sending anything, so the client can still be told what happened,
+                # rather than seeing a dropped connection that looks like an outage.
+                send_message(conn, error_reply(TOO_LARGE, f"The reply is too large to send. {exc}"))
     except OSError as exc:
         # The client disconnected or timed out. Nobody is left to read a reply,
         # so all that remains is to record it. (Trying to reply on the dead

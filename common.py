@@ -17,7 +17,8 @@ import socket    # provides the networking building blocks (sockets)
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
 # The largest message either side will send or accept (10 MiB). This is enough
-# for a LIST reply with tens of thousands of assets.
+# for a LIST reply with tens of thousands of assets. A larger list gets a TOO_LARGE
+# reply instead.
 #
 # WHY: the 4-byte header can claim up to 4 GB. The header comes from another
 # machine, so it must be treated as untrusted input. Without a cap, a faulty

@@ -119,11 +119,19 @@ class SystemTest(unittest.TestCase):
             "not a string": make_asset(category=7),
             "empty": make_asset(status=""),
             "only spaces": make_asset(status="   "),
+            "too long": make_asset(description="x" * (server.MAX_FIELD_LENGTH + 1)),
         }
         for name, asset in invalid_assets.items():
             with self.subTest(name):
                 self.assertEqual(register(asset)["code"], common.BAD_REQUEST)
         self.assertEqual(list_ids(), [])
+
+    def test_largest_allowed_asset_gets_a_reply_and_can_be_listed(self):
+        longest = "€" * server.MAX_FIELD_LENGTH
+        asset = make_asset(longest, description=longest, category=longest, location=longest, status=longest)
+
+        self.assertEqual(register(asset)["status"], "OK")
+        self.assertEqual(list_ids(), [longest])
 
     def test_duplicate_id_is_rejected(self):
         register(make_asset())
@@ -155,6 +163,13 @@ class SystemTest(unittest.TestCase):
     def test_client_refuses_to_send_a_huge_message(self):
         with self.assertRaises(common.MessageTooLargeError):
             register(make_asset(description="x" * (common.MAX_MESSAGE_BYTES + 1)))
+
+    def test_a_list_too_large_to_send_gets_a_clear_error(self):
+        server.assets.append(make_asset(description="x" * (common.MAX_MESSAGE_BYTES + 1)))
+
+        reply = common.send_request({"action": "LIST"})
+
+        self.assertEqual(reply["code"], common.TOO_LARGE)
 
     def test_server_survives_a_client_vanishing(self):
         def vanish(data: bytes) -> None:
