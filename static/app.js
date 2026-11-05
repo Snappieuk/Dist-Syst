@@ -171,7 +171,22 @@ async function deleteAsset(asset) {
   await loadAssets();
 }
 
+// The totals cover every asset, whatever the filters are showing. During an outage the
+// list on screen is an old one, so nothing is named as having answered.
+function showStats() {
+  const withStatus = (status) => allAssets.filter((asset) => asset.status === status).length;
+  document.getElementById("stat-total").textContent = allAssets.length;
+  document.getElementById("stat-in-use").textContent = withStatus("In Use");
+  document.getElementById("stat-not-in-use").textContent = withStatus("Not In Use");
+
+  const server = document.getElementById("stat-server");
+  server.textContent = loadError || !servedBy ? "No server" : servedBy;
+  server.classList.toggle("server-backup", !loadError && servedBy === "backup");
+  server.classList.toggle("problem", loadError !== "");
+}
+
 function showMessage(visibleCount) {
+  showStats();
   const counts = `Showing ${visibleCount} of ${allAssets.length} asset(s)`;
   message.classList.toggle("problem", loadError !== "");
 

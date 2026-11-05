@@ -100,6 +100,36 @@ h1::before {
   color: var(--text);
 }
 
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.stat strong {
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+/* The backup answering means the primary is down, so it should stand out. */
+.stat strong.server-backup {
+  color: var(--warning);
+}
+
 #message {
   margin: 0 0 16px;
   color: var(--muted);
