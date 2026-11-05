@@ -44,6 +44,11 @@ TIMEOUT_SECONDS = 5
 BAD_REQUEST = "BAD_REQUEST"    # the request is malformed or fails validation
 TOO_LARGE = "TOO_LARGE"        # the message is bigger than MAX_MESSAGE_BYTES
 INTERNAL = "INTERNAL"          # the server failed; the request itself may be fine
+NOT_FOUND = "NOT_FOUND"        # no asset has that asset_id on this server
+
+# The two standard asset statuses. Registration also accepts other text.
+IN_USE = "In Use"
+NOT_IN_USE = "Not In Use"
 
 
 class MessageTooLargeError(ValueError):
@@ -277,9 +282,10 @@ def send_request(request: dict) -> dict:
     is safe even if the primary did the work and only its reply was lost, because
     the server recognises a repeated request.
 
-    The next server is also tried after an INTERNAL reply, such as when one server's
-    disk is full. That is safe because a server undoes a change it could not save.
-    If every server that answers replies INTERNAL, the last reply is returned.
+    The next server is also tried after two kinds of ERROR reply. INTERNAL, such as
+    one server's disk being full, is safe to retry because a server undoes a change
+    it could not save. NOT_FOUND may only mean this server has not got the asset yet.
+    If no server does better, the last such reply is returned.
 
     Raises ConnectionError with a clear message if no server can be reached, and
     ValueError if the request is too large or a reply is not a valid message.
@@ -295,7 +301,7 @@ def send_request(request: dict) -> dict:
             last_error = exc
             continue
 
-        if reply.get("code") == INTERNAL:
+        if reply.get("code") in (INTERNAL, NOT_FOUND):
             retryable_reply = reply
             continue
 

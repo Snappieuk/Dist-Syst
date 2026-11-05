@@ -136,7 +136,7 @@ class SystemTest(NodeTestCase):
             set(stored),
             {
                 "asset_id", "description", "category", "location", "status",
-                "date_registered", "tags", "request_id",
+                "date_registered", "tags", "version", "request_id",
             },
         )
         self.assertEqual(stored["description"], "Dell laptop")
@@ -172,6 +172,7 @@ class SystemTest(NodeTestCase):
         with contextlib.redirect_stdout(output):
             receive.main()
 
+        self.assertIn("In Use", output.getvalue())
         self.assertIn("dell", output.getvalue())
 
     def test_a_just_registered_asset_is_shown_even_if_the_list_lacks_it(self):
@@ -216,6 +217,16 @@ class SystemTest(NodeTestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(list_ids()), 1)
 
+    def test_repeating_a_registration_after_a_status_change_keeps_the_change(self):
+        request = common.new_register_request(make_asset())
+        asset_id = common.send_request(request)["stored"]["asset_id"]
+        common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE})
+
+        reply = common.send_request(request)
+
+        self.assertEqual(reply["stored"]["status"], common.NOT_IN_USE)
+        self.assertEqual(len(list_ids()), 1)
+
     def test_reusing_a_request_id_for_a_different_asset_is_rejected(self):
         request = common.new_register_request(make_asset())
         common.send_request(request)
@@ -226,6 +237,55 @@ class SystemTest(NodeTestCase):
         self.assertEqual(list_descriptions(), ["Dell laptop"])
 
     # ---- Changing an asset's status ----
+
+    def test_an_asset_can_be_marked_not_in_use_and_back(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        for status, tag in ((common.NOT_IN_USE, "not in use"), (common.IN_USE, "in use")):
+            reply = common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": status})
+            self.assertEqual(reply["status"], "OK")
+
+            stored = list_assets()[0]
+            self.assertEqual(stored["status"], status)
+            self.assertIn(tag, stored["tags"])  # the tags follow the status
+
+        self.assertEqual(stored["version"], 3)
+        self.assertEqual(server.load_assets()[0]["status"], common.IN_USE)
+
+    def test_setting_the_same_status_changes_nothing(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": common.IN_USE})
+
+        self.assertEqual(list_assets()[0]["version"], 1)
+
+    def test_status_of_an_unknown_asset_is_not_found(self):
+        reply = common.send_request({"action": "SET_STATUS", "asset_id": "AST-X", "status": common.NOT_IN_USE})
+        self.assertEqual(reply["code"], common.NOT_FOUND)
+
+    def test_invalid_status_requests_are_rejected(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        requests = (
+            {"asset_id": asset_id, "status": ""},
+            {"asset_id": asset_id, "status": 7},
+            {"asset_id": asset_id},
+            {"status": common.NOT_IN_USE},
+        )
+        for request in requests:
+            with self.subTest(request=request):
+                reply = common.send_request({"action": "SET_STATUS", **request})
+                self.assertEqual(reply["code"], common.BAD_REQUEST)
+
+    def test_failed_status_save_leaves_nothing_behind(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        blocker = server.ASSETS_FILE + ".tmp"
+        os.mkdir(blocker)
+        self.addCleanup(os.rmdir, blocker)
+        reply = common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE})
+
+        self.assertEqual(reply["code"], common.INTERNAL)
+        self.assertEqual(list_assets()[0]["status"], common.IN_USE)
 
     # ---- Simultaneous changes ----
 
@@ -506,6 +566,19 @@ class MergeTest(NodeTestCase):
         with self.assertRaisesRegex(ValueError, "too large"):
             server.sync_once(peer, prefer_peer=True)
         self.assertEqual(len(list_ids()), 1)
+
+    def test_merge_keeps_the_newest_version_on_either_server(self):
+        older, newer = make_record(status="Old", version=1), make_record(status="New", version=2)
+
+        for prefer_peer in (False, True):
+            with self.subTest(prefer_peer=prefer_peer):
+                server.assets.clear()
+                server.merge_assets([older], prefer_peer=False)
+
+                # The newer copy is taken, and an older one does not undo that.
+                self.assertEqual(server.merge_assets([newer], prefer_peer), 1)
+                self.assertEqual(server.merge_assets([older], prefer_peer), 0)
+                self.assertEqual(server.assets[0]["status"], "New")
 
 
 class BackupTest(unittest.TestCase):

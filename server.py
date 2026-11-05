@@ -6,6 +6,8 @@ Each connection carries one request and one reply:
     {"action": "REGISTER", "request_id": "...", "asset": {...}}
                                              -> validates and stores the asset, creating its ID
     {"action": "LIST"}                       -> replies with every stored asset
+    {"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use"}
+                                             -> changes an asset's status
 
 Replies always contain "status". Failures look like this:
 
@@ -36,6 +38,7 @@ import time       # waits between syncs with the other server
 from common import (
     BAD_REQUEST,
     INTERNAL,
+    NOT_FOUND,
     SERVERS,
     TOO_LARGE,
     MessageTooLargeError,
@@ -181,6 +184,15 @@ def validate_asset(asset: object) -> dict:
     return clean
 
 
+def find_asset(asset_id: str) -> object:
+    """Return the position of an asset in `assets`, or None. The caller must hold
+    the lock."""
+    for index, asset in enumerate(assets):
+        if asset["asset_id"] == asset_id:
+            return index
+    return None
+
+
 def generate_asset_id() -> str:
     """Return an asset ID that has never been used. The caller must hold the lock.
 
@@ -220,7 +232,9 @@ def register_asset(clean: dict, request_id: object) -> dict:
                         return error_reply(BAD_REQUEST, "This request_id was already used for a different asset")
                     return {"status": "OK", "stored": existing}
 
-        asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id)
+        # version counts the changes made to this asset, so that sync can tell which
+        # copy of it is the newer one (see merge_assets).
+        asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id, version=1)
 
         # Tags come from the server too, so every client's assets are tagged the same way.
         asset["tags"] = generate_asset_tags(asset)
@@ -237,6 +251,35 @@ def register_asset(clean: dict, request_id: object) -> dict:
     # Echo back what was stored, because the server changed it (trimmed spaces,
     # dropped extra fields, added the ID, date and tags).
     return {"status": "OK", "stored": asset}
+
+
+def set_asset_status(asset_id: str, status: str) -> dict:
+    """Change an asset's status and return the reply.
+
+    The tags include the status, so they are regenerated. A new record replaces the
+    old one rather than the old one being edited, because a LIST reply may be being
+    sent from the old one on another thread, outside the lock.
+    """
+    with assets_lock:
+        index = find_asset(asset_id)
+        if index is None:
+            return error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
+
+        previous = assets[index]
+        if previous["status"] == status:
+            return {"status": "OK", "stored": previous}  # nothing to change
+
+        updated = dict(previous, status=status, version=previous.get("version", 0) + 1)
+        updated["tags"] = generate_asset_tags(updated)
+
+        assets[index] = updated
+        try:
+            save_assets()
+        except OSError:
+            assets[index] = previous  # as in register_asset()
+            raise
+
+    return {"status": "OK", "stored": updated}
 
 
 def process_request(request: dict) -> dict:
@@ -262,13 +305,22 @@ def process_request(request: dict) -> dict:
         with assets_lock:
             return {"status": "OK", "assets": list(assets)}
 
+    if action == "SET_STATUS":
+        try:
+            asset_id = check_text(request.get("asset_id"), "asset_id")
+            status = check_text(request.get("status"), "status")
+        except ValueError as exc:
+            return error_reply(BAD_REQUEST, str(exc))
+        return set_asset_status(asset_id, status)
+
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
 def is_valid_peer_asset(record: object) -> bool:
     """Check a record from the other server before it is stored.
 
-    Records saved before tagging was added have no tags, so tags and the date are
+    Records saved before tagging was added have no tags, and those saved before
+    status changes were added have no version, so these fields and the date are
     optional, but they must have the right type if present.
     """
     if not isinstance(record, dict):
@@ -281,21 +333,26 @@ def is_valid_peer_asset(record: object) -> bool:
         return False
 
     tags = record.get("tags", [])
+    version = record.get("version", 0)
     return (
         isinstance(tags, list)
         and all(isinstance(tag, str) for tag in tags)
         and isinstance(record.get("date_registered", ""), str)
+        and isinstance(version, int)
+        and not isinstance(version, bool)  # in Python, True counts as an int
     )
 
 
 def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
     """Add the other server's assets to this one's, returning how many changed.
 
-    Clients can only add assets, never change or remove them, so combining two lists
-    is simple: anything missing is copied across. The one awkward case is when each
-    server accepted a different asset with the same ID while they could not reach
-    each other. Then the backup gives way to the primary (`prefer_peer` is True on
-    the backup), so both end up with the same records, possibly in a different order.
+    Both servers end up with the same records, possibly in a different order, by
+    following the same rules whichever order things happen in:
+      - A missing asset is copied across.
+      - Of two different copies, the one with the higher version is newer and wins.
+      - With equal versions, each server changed the asset while they could not reach
+        each other. Then the backup gives way to the primary (`prefer_peer` is True
+        on the backup).
 
     The caller must pass only valid records (see is_valid_peer_asset).
     """
@@ -306,7 +363,16 @@ def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
         changed = 0
         for peer_asset in peer_assets:
             my_asset = merged.get(peer_asset["asset_id"])
-            if my_asset is None or (prefer_peer and my_asset != peer_asset):
+            if my_asset is None:
+                peer_is_better = True
+            else:
+                my_version = my_asset.get("version", 0)
+                peer_version = peer_asset.get("version", 0)
+                peer_is_better = peer_version > my_version or (
+                    peer_version == my_version and prefer_peer and my_asset != peer_asset
+                )
+
+            if peer_is_better:
                 merged[peer_asset["asset_id"]] = peer_asset
                 changed += 1
 

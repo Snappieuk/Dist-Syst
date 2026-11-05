@@ -2,7 +2,7 @@
 Query client.
 
 Asks the server for the current list of registered assets and prints
-each one's ID and tags. At least one server must already be running
+each one's ID, status and tags. At least one server must already be running
 (start server.py first).
 
     python receive.py
@@ -41,13 +41,13 @@ def main() -> None:
         print("No assets registered yet.")
         return
 
-    # Print a short summary, then one line per asset: its ID and tags only.
+    # Print a short summary, then one line per asset: its ID, status and tags only.
     print(f"{len(assets)} asset(s) registered:\n")
     for asset in assets:
         # Assets saved before tagging was added have no tags, so those are worked
         # out here for display, as the GUI does.
         tags = asset.get("tags") or generate_asset_tags(asset)
-        print(f"{asset.get('asset_id', 'Unknown')}: {tags}")
+        print(f"{asset.get('asset_id', 'Unknown')} ({asset.get('status', 'Unknown')}): {tags}")
 
 
 # Only run this if the file is executed directly (not imported).
