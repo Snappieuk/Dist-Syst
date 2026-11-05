@@ -2,17 +2,18 @@
 
 A distributed system for registering, listing, updating and deleting asset records.
 The servers and clients are separate programs that run as their own processes and talk
-to each other by sending JSON messages over TCP sockets. They can run on one machine or
-on several.
+to each other by sending JSON messages over TCP sockets. By default everything runs on one
+machine. Setting one environment variable spreads it across several, with the servers
+found by name rather than by fixed addresses in the code.
 
 ```
-                                      browser
-                                         | HTTP
-  send.py   receive.py   manage.py   gui.py   web.py   clients
+                                       browser
+                                          | HTTP
+  send.py   receive.py   manage.py   gui.py   web.py      clients, on any machine
       \          |           |        /        /
-       \         |           |       /        /    try the primary first,
-        v        v           v      v              then the backup
-    +-----------------+              +-----------------+
+       \         |           |       /        /     find the servers by name through
+        v        v           v      v               ASSET_SERVERS, and try the
+    +-----------------+              +-----------------+   primary first, then the backup
     |    server.py    |  heartbeats  |    backup.py    |
     |    (primary)    |<-------------|    (backup)     |
     |                 |  each change |                 |
@@ -21,6 +22,7 @@ on several.
     |  orders them    |<------------>|  refuses clients|
     +-----------------+              +-----------------+
        assets.json                     assets_backup.json
+       e.g. assets-1                   e.g. assets-2
 ```
 
 Each asset has an ID, description, category, location, status, registration date and
@@ -34,18 +36,18 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `server.py` | The primary server. Accepts changes, puts them in order and copies each one to the backup. Stores its data in `assets.json`. |
 | `backup.py` | The backup server. Keeps its own copy of the data in `assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
 | `node.py` | Code used by both servers: the data, the rules for changing it and the network loop. |
-| `common.py` | Code used by the servers and clients: the message format, server addresses, error codes, tag generation and client failover. |
+| `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `send.py` | Registers a new asset. |
 | `receive.py` | Lists the assets with their IDs, statuses and tags. |
 | `manage.py` | Marks an asset as "Not In Use" or "In Use", or deletes it. |
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
 | `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
-| `start.py` | Starts the primary, backup and web interface with one command, running setup first if needed. |
-| `setup.py` | First-time setup, which creates the first web account, and a full reset with `--reset`. |
+| `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed. |
+| `setup.py` | First-time setup, which creates the shared secret and the first web account, and a full reset with `--reset`. |
 | `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py` | The automated tests. |
 
-## Running it
+## Running it on one machine
 
 You need Python 3.8 or later. There are no third-party packages to install.
 
@@ -62,18 +64,6 @@ press Ctrl+C. To create an account from the command line, or replace a lost pass
 
 If you had a web password from before accounts were added, it keeps working as an account
 called `admin`.
-
-To put everything back to a fresh install, stop the system and run:
-
-```
-python setup.py --reset
-```
-
-**This permanently deletes every asset, every web account and the shared secret on this
-machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
-the code or the git history. If you use several machines, reset each of them, because a
-server that still has the data would copy it straight back. The next `python start.py` runs
-setup again.
 
 To stop one server on its own, which you need for the demo below, or to use the GUI, run
 each program in its own terminal instead:
@@ -101,35 +91,59 @@ unless you change `WEB_ADDRESS` in `web.py`.
 
 The system runs without the backup, but it won't survive the primary failing.
 
-### Running it across several machines
+## Running it across several machines
 
-Nothing in the code needs changing. Every program finds the servers through the
-`ASSET_SERVERS` environment variable: the primary first, then the backup. Set it to the same
-value on every machine, including those running only a client or `web.py`:
+Nothing in the code needs changing. Two environment variables say where things are:
+
+| Variable | Set on | Meaning |
+|---|---|---|
+| `ASSET_SERVERS` | Every machine, including those running only a client or `web.py` | Where the servers are: the primary first, then the backup, as `host:port,host:port`. Without it, both are on this machine, on ports 65432 and 65433. |
+| `ASSET_LISTEN_HOST` | Each server machine | The address the server listens on. Use `0.0.0.0` to accept connections on every network connection the machine has. Without it, the server listens on the name in its own `ASSET_SERVERS` entry. |
+
+For example:
 
 ```
 export ASSET_SERVERS=assets-1:65432,assets-2:65433      # Linux and macOS
 $env:ASSET_SERVERS = "assets-1:65432,assets-2:65433"   # Windows PowerShell
 ```
 
-Hostnames are better than IP addresses, because a machine can then change its address
+Use hostnames rather than IP addresses where you can, so a machine can change its address
 without anyone updating the list. Any name the machines can look up works, from an entry
-in each machine's hosts file to a container's name or a Kubernetes service. Without the
-variable, everything runs on this machine as before.
+in each machine's hosts file to DNS, a container's name or a Kubernetes service. Names are
+looked up as IPv4 addresses, because that is what the servers listen on.
 
-On each server machine, also set `ASSET_LISTEN_HOST=0.0.0.0`. Otherwise the server tries to
-listen only on the name in its entry, which may not belong to that machine, for example
-behind a router or in a container. Then:
+`ASSET_LISTEN_HOST` is needed because the name others use may not belong to the server's
+own machine, for example when it is behind a router or in a container. The server then
+couldn't listen on that name and wouldn't start.
 
-1. Run `python setup.py` on the machine that will run `web.py`, and copy the `secret.key` it
+Then:
+
+1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` it
    creates to every other machine, beside the code.
 2. Run `python server.py` on the first machine and `python backup.py` on the second.
-3. Run clients or `web.py` anywhere that can reach both.
+3. Run clients or `web.py` anywhere that can reach both servers.
 
 Each server's firewall must allow its port. Don't use `start.py` here, because it starts
 both servers on the same machine. Nothing is encrypted, so only do this on a network you
-trust. So far this has been tested as separate processes on one machine, using names in
-place of `127.0.0.1`.
+trust.
+
+So far this has been tested as separate processes on one machine, with the servers found
+by name (`localhost`) instead of by `127.0.0.1`. It hasn't been run on two physical machines
+yet, and listening on `0.0.0.0` hasn't been tried.
+
+## Resetting
+
+To put everything back to a fresh install, stop the system and run:
+
+```
+python setup.py --reset
+```
+
+**This permanently deletes every asset, every web account and the shared secret on this
+machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
+the code or the git history. If you use several machines, reset each of them, because a
+server that still has the data would copy it straight back. The next `python start.py` runs
+setup again.
 
 ## Demo
 
@@ -148,6 +162,9 @@ Start both servers and the GUI, and keep the server logs visible.
 5. Run `web.py`, log in and repeat steps 2 and 3. Without reloading, the summary row
    changes to `Backup` and back, and you can still add and delete assets during the outage.
    If you stop both servers, it keeps the last list on screen with a warning.
+6. To show the servers being found by name, set
+   `ASSET_SERVERS=localhost:65432,localhost:65433` in every terminal and repeat steps 1–3.
+   Nothing changes for the user, because no program needs to know the servers' addresses.
 
 ## Authentication
 
@@ -155,8 +172,9 @@ There are two layers, because a login on the web page alone could be bypassed by
 directly to a server's port.
 
 Between programs, every request to a server carries a shared secret from `secret.key`. The
-first program to run creates this file. Servers refuse any request without the right value
-with `UNAUTHORIZED`, including the messages between the servers themselves.
+first program to run creates this file, and every machine needs the same copy. Servers
+refuse any request without the right value with `UNAUTHORIZED`, including the messages
+between the servers themselves.
 
 On the web page, everything except the login page itself needs an account. You create the
 first one during setup. If `web.py` is started with nobody at the keyboard to do that, it
@@ -186,8 +204,10 @@ The tests start real servers on spare ports and use temporary files for data and
 so yours aren't touched. They do use `secret.key`, and create it if it doesn't exist yet.
 `test_web.py` makes real HTTP requests but doesn't run the page's script in a browser, so that
 part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and
-`backup.py` as separate programs and kills them partway through. Some tests make a save fail
-on purpose, so you will see logged errors and tracebacks in the output.
+`backup.py` as separate programs and kills them partway through. `test_config.py` starts
+programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
+it can't listen on. Some tests make a save fail on purpose, so you will see logged errors and
+tracebacks in the output.
 
 ## Distributed systems concepts used
 
@@ -195,6 +215,7 @@ on purpose, so you will see logged errors and tracebacks in the output.
 |---|---|---|
 | Message passing | Servers and clients share no memory and only communicate over sockets | `common.py`: `send_message`, `receive_message` |
 | External data representation | Length-prefixed UTF-8 JSON, so programs don't depend on a language or platform | `common.py`: `send_message` |
+| Naming and location transparency | Programs find the servers by name from configuration, so a server can move machine without any code changing | `common.py`: `SERVERS`, `parse_servers`, `request_from` |
 | Replication | The backup holds a full copy of the data in its own file | `backup.py`: `apply_change` |
 | Synchronous replication | A client only hears that a change worked after the backup has saved it | `server.py`: `replicate_change` |
 | Single leader | Only the primary accepts changes, so there is one order of events | `node.py`: `accepts_writes` |
@@ -306,6 +327,8 @@ limitations cover what happens if both do.
 - Errors have clear codes, and clients show a message instead of a traceback when no
   server can be reached.
 - A separate backup server takes over if the primary fails.
+- The servers can run on separate machines, found by name through configuration instead
+  of addresses fixed in the code.
 - Programs need a shared secret, and the web page needs a login, with accounts that can be
   created from the page.
 - A web page, a single start command, first-time setup and a full reset were added.
@@ -321,6 +344,40 @@ While both servers are running, a change is on both disks before the client gets
 | Isolation | A lock makes checking, changing and saving one indivisible step. |
 | Durability | The file is forced to disk before the client gets its reply, and on Linux and macOS so is the folder holding it. |
 
+## How far it scales
+
+Running the servers on separate machines makes the system **fault tolerant**: it keeps
+working when one machine fails. It doesn't add **capacity**, because every change still
+goes through the one primary.
+
+| | Now |
+|---|---|
+| Server failures it survives | 1 |
+| Servers that accept changes | 1, the primary |
+| Servers that answer reads | 2, though the backup may be slightly behind |
+| Servers in total | Exactly 2 |
+| Copies of `web.py` | 1, because logins are held in its memory |
+
+It could run on Kubernetes with two small changes. Each server would be a StatefulSet with
+one pod and a persistent volume, with the service names in `ASSET_SERVERS`,
+`ASSET_LISTEN_HOST=0.0.0.0`, and `secret.key` mounted from a Kubernetes Secret. Kubernetes
+would restart a failed pod, and the backup would cover the gap until it returned. First,
+though, the data files would need a configurable folder, because they are saved beside the
+code, and `web.py` would need to listen on more than `127.0.0.1`. This hasn't been tried.
+
+Growing beyond this would take, roughly in order:
+
+1. **Reading from the backup** for `LIST`, trading slightly old data for more read capacity.
+2. **Three or more servers with a majority vote**, as in Raft. A change would count once
+   most servers had saved it, and a leader would be elected by majority. This also ends
+   the network split problem below, because the smaller side can't form a majority.
+3. **A database instead of the JSON file**, so a change only writes what changed, plus
+   paging for `LIST`.
+4. **Sessions and accounts in a shared store**, so `web.py` can run as many copies as needed
+   behind a load balancer.
+5. **Sharding**, splitting the assets across several groups of servers, each with its own
+   leader. This is the only step that adds write capacity.
+
 ## Known limitations
 
 The biggest one is a network split. Two servers can't tell a failed partner from an
@@ -335,19 +392,27 @@ data, and some changes are lost even though their clients were told they worked:
   they made the same number.
 - A delete on either server beats any status change.
 
+This is more likely across separate machines, where the network between them can fail on
+its own, than on one machine.
+
 Other limitations:
 
 - The first change after the primary fails took about 8 seconds when timed on one Windows
   machine, mostly waiting for the 3 missed heartbeats. Clients also try the primary first
   on every request, which took about 2 more seconds each time. If both servers are down,
   clients show an error.
-- Only one backup is supported, and failed servers have to be restarted by hand.
+- Exactly one primary and one backup are supported, and failed servers have to be restarted
+  by hand or by something like Kubernetes.
 - If the backup was down when the primary took changes and the primary then fails, those
   changes are unavailable until the primary returns. If the primary's disk were also
   destroyed, they would be lost.
 - The lock is held while copying to the backup, so a stalled backup can delay changes by
-  up to the 5-second timeout before it is marked as behind.
+  up to the 5-second timeout before it is marked as behind. Across a slow network, every
+  change also waits for the round trip to the backup.
 - The backup answers `LIST` while on standby, and may be out of date if it was recently down.
+- The servers only use IPv4. A name is looked up as an IPv4 address, and only its first
+  address is tried.
+- `secret.key` has to be copied to each machine by hand, and every program shares it.
 - Duplicates are judged only by description, category and location, because nothing
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
   different items. Status and category are free text.
@@ -357,7 +422,7 @@ Other limitations:
 - Every web account can do everything, including creating more accounts, because there are
   no roles. Accounts can't be deleted from the page, and nothing records who changed an asset.
 - Accounts belong to `web.py` and are stored beside it. They aren't copied to the backup, so
-  they don't protect against losing that machine. All programs share one secret.
+  they don't protect against losing that machine.
 - A password can't be changed from the web page, only with `python web.py --set-password`,
   and `web.py` must then be restarted.
 - The web page can add and delete assets, but can't change an asset's status. Use the GUI
@@ -378,8 +443,8 @@ Other limitations:
 
 ## Further development
 
-A third server would let a majority decide which server leads, so a network split couldn't
-leave two leaders. Other ideas are editing assets from the web page, editing more fields, a
-serial number to identify items, search and paging on the servers, a database instead of the
-JSON file, encryption with TLS, and account roles, including deleting accounts and recording
-who changed what.
+The scaling steps above come first, especially a third server and a majority vote. Other
+ideas are editing assets from the web page, editing more fields, a serial number to identify
+items, search on the servers, encryption with TLS, the shared secret supplied through an
+environment variable, and account roles, including deleting accounts and recording who
+changed what.
