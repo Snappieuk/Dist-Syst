@@ -10,9 +10,9 @@ about what counts as a valid message live here rather than being repeated
 (and possibly disagreeing) in every program.
 """
 
-import json      # used to turn a Python dict into a JSON string, and back
-import re        # used to clean up tag text snippets from asset details
-import socket    # provides the networking building blocks (sockets)
+import json         # used to turn a Python dict into a JSON string, and back
+import socket       # provides the networking building blocks (sockets)
+import unicodedata  # recognises letters and digits in any language, for tags
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
@@ -72,22 +72,32 @@ COMMON_STOP_WORDS = {
 }
 
 
+def _split_words(value: str) -> list:
+    """Split text into words, in any language.
+
+    Letters, digits and combining marks (the Unicode categories starting L, N and
+    M) belong to a word, and everything else separates words. Marks are included
+    because some languages need them inside a word, such as the vowel signs in Hindi.
+    NFC normalisation stores an accented letter one way, however it was typed.
+    """
+    normalised = unicodedata.normalize("NFC", value)
+    kept = (char if unicodedata.category(char)[0] in "LNM" else " " for char in normalised)
+    return "".join(kept).split()
+
+
 def _phrase_to_tags(value: str) -> list:
     """Split free text into lowercase keywords, leaving out stop words.
 
-    Anything other than an ASCII letter or digit separates words. A value that
-    is not a string gives an empty list.
+    A value that is not a string gives an empty list.
     """
     if not isinstance(value, str):
         return []
 
-    tokens = re.split(r"[^0-9A-Za-z]+", value.strip())
     clean = []
-    for token in tokens:
-        token = token.strip().lower()
-        if not token or token in COMMON_STOP_WORDS:
-            continue
-        clean.append(token)
+    for token in _split_words(value):
+        token = token.lower()
+        if token not in COMMON_STOP_WORDS:
+            clean.append(token)
     return clean
 
 
@@ -117,14 +127,12 @@ def generate_asset_tags(asset: dict) -> list:
     for field in ("category", "location", "status"):
         value = asset.get(field)
         if isinstance(value, str):
-            phrase = " ".join(part for part in re.split(r"[^0-9A-Za-z]+", value.strip()) if part)
-            if phrase:
-                add_tag(phrase)
+            add_tag(" ".join(_split_words(value)))
 
     # Punctuation in the ID becomes hyphens, so "AST_0001" becomes "ast-0001".
     asset_id = asset.get("asset_id")
     if asset_id is not None:
-        add_tag(re.sub(r"[^0-9A-Za-z]+", "-", str(asset_id).strip()).strip("-"))
+        add_tag("-".join(_split_words(str(asset_id))))
 
     # The first five keywords. Any that repeat an earlier tag are skipped, so
     # this can add fewer than five.
@@ -140,6 +148,20 @@ def format_asset_tags(tags: list) -> str:
     if not tags:
         return ""
     return ", ".join(str(tag) for tag in tags)
+
+
+def include_asset(assets: list, stored: object) -> list:
+    """Return `assets`, adding the just-registered `stored` asset if it is missing.
+
+    A client's list may come from a different server than its registration did,
+    and that server may not have synced yet. The registration still succeeded, so
+    the client should show the asset it was told was stored.
+    """
+    if not isinstance(stored, dict):
+        return assets
+    if any(asset.get("asset_id") == stored.get("asset_id") for asset in assets):
+        return assets
+    return assets + [stored]
 
 
 def send_message(sock: socket.socket, message: dict) -> None:

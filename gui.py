@@ -14,7 +14,7 @@ import threading  # runs network requests without freezing the window
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from common import format_asset_tags, generate_asset_tags, send_request
+from common import format_asset_tags, generate_asset_tags, include_asset, send_request
 
 
 class AssetManagementApp:
@@ -120,14 +120,15 @@ class AssetManagementApp:
                 error = None
 
                 # After a successful registration, fetch the list again so the
-                # table includes the new asset.
+                # table includes the new asset, even if the list came from a
+                # server that has not synced it yet.
                 if operation == "register" and response.get("status") == "OK":
                     try:
                         list_response = send_request({"action": "LIST"})
                         if list_response.get("status") != "OK":
                             error = list_response.get("detail", "Could not refresh the asset list")
                         else:
-                            assets = list_response.get("assets", [])
+                            assets = include_asset(list_response.get("assets", []), response.get("stored"))
                     except (OSError, ValueError) as exc:
                         error = str(exc)
                 self.results.put((operation, response, assets, error))

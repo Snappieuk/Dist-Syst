@@ -15,7 +15,7 @@ script from a terminal you already have open does not need it.
 """
 
 # The shared networking code used by every client.
-from common import send_request
+from common import generate_asset_tags, send_request
 
 
 def main() -> None:
@@ -44,7 +44,9 @@ def main() -> None:
     # Print a short summary, then one line per asset: its ID and tags only.
     print(f"{len(assets)} asset(s) registered:\n")
     for asset in assets:
-        tags = asset.get("tags") or []
+        # Assets saved before tagging was added have no tags, so those are worked
+        # out here for display, as the GUI does.
+        tags = asset.get("tags") or generate_asset_tags(asset)
         print(f"{asset.get('asset_id', 'Unknown')}: {tags}")
 
 

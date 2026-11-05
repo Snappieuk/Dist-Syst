@@ -9,6 +9,8 @@ BackupTest runs the primary and backup as separate programs. Every server uses
 temporary data files and spare ports, so your real assets.json is never touched.
 """
 
+import contextlib
+import io
 import json
 import os
 import socket
@@ -21,6 +23,7 @@ import time
 import unittest
 
 import common
+import receive
 import server
 
 
@@ -131,6 +134,31 @@ class SystemTest(unittest.TestCase):
         reply = register(make_asset(date_registered="1999-01-01", extra="x"))
         self.assertNotEqual(reply["stored"]["date_registered"], "1999-01-01")
         self.assertNotIn("extra", reply["stored"])
+
+    def test_tags_work_in_any_language(self):
+        tags = common.generate_asset_tags(make_asset(description="Büro 笔记本电脑 हिन्दी"))
+        self.assertIn("büro", tags)
+        self.assertIn("笔记本电脑", tags)
+        self.assertIn("हिन्दी", tags)
+
+    def test_tags_replace_punctuation(self):
+        tags = common.generate_asset_tags(make_asset("AST_0001", location="Site A - IT Store"))
+        self.assertIn("ast-0001", tags)
+        self.assertIn("site a it store", tags)
+
+    def test_query_client_shows_tags_for_assets_saved_without_any(self):
+        server.merge_assets([make_asset()], prefer_peer=False)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receive.main()
+
+        self.assertIn("dell", output.getvalue())
+
+    def test_a_just_registered_asset_is_shown_even_if_the_list_lacks_it(self):
+        listed, stored = make_asset("AST-1"), make_asset("AST-2")
+        self.assertEqual(common.include_asset([listed], stored), [listed, stored])
+        self.assertEqual(common.include_asset([listed, stored], stored), [listed, stored])
 
     # ---- Validation ----
 
