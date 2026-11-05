@@ -32,12 +32,39 @@ HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 
 # The address of each server: the primary first, then the backup. Every program
-# must agree on this list. 127.0.0.1 means "this machine"; to use separate
-# machines, replace it with each server's IP address.
-SERVERS = [
+# must agree on this list. 127.0.0.1 means "this machine", so by default everything
+# runs on one computer.
+DEFAULT_SERVERS = [
     ("127.0.0.1", 65432),  # primary
     ("127.0.0.1", 65433),  # backup
 ]
+
+# To run the servers on separate machines, set this environment variable to the same
+# list on every machine, for example ASSET_SERVERS=assets-1:65432,assets-2:65433.
+# Hostnames are better than IP addresses, because a machine can then change its address
+# without every program being reconfigured. Nothing in the code has to change.
+SERVERS_VARIABLE = "ASSET_SERVERS"
+
+
+def parse_servers(text: str) -> list:
+    """Turn "host:port,host:port" into a list of (host, port) addresses.
+
+    Raises ValueError, naming the bad entry, if the text is not one or two addresses.
+    """
+    servers = []
+    for entry in text.split(","):
+        entry = entry.strip()
+        host, colon, port = entry.rpartition(":")
+        if not colon or not host or not (port.isascii() and port.isdigit()) or not 0 < int(port) < 65536:
+            raise ValueError(f"{SERVERS_VARIABLE}: {entry!r} should look like host:port")
+        servers.append((host, int(port)))
+
+    if len(servers) > 2:
+        raise ValueError(f"{SERVERS_VARIABLE} lists at most two servers: the primary, then the backup")
+    return servers
+
+
+SERVERS = parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS_VARIABLE) else DEFAULT_SERVERS
 
 # The key every program sends to prove it belongs to this system. It is created the first
 # time any program runs. To use several machines, copy this file to each of them.
