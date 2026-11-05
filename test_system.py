@@ -154,7 +154,7 @@ class ProtocolTest(ServerTestCase):
     def test_messages_are_utf8_json_with_a_length_prefix(self):
         body = json.dumps({"action": "LIST", "protocol_version": 1}).encode("utf-8")
         reply = self.raw_exchange(self.frame(body))
-        self.assertEqual(reply, {"status": "OK", "assets": []})
+        self.assertEqual((reply["status"], reply["assets"]), ("OK", []))
 
     def test_malformed_json_gets_a_structured_error(self):
         reply = self.raw_exchange(self.frame(b"{not json"))
@@ -278,7 +278,7 @@ class AssetDataTest(ServerTestCase):
     def test_the_query_client_says_when_there_are_no_assets(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main(self.config)
+            receive.main(self.config, [])
         self.assertIn("No assets registered yet.", output.getvalue())
 
     def test_the_query_client_shows_every_asset(self):
@@ -286,7 +286,7 @@ class AssetDataTest(ServerTestCase):
         self.register(make_asset("AST-0002"))
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main(self.config)
+            receive.main(self.config, [])
         self.assertIn("2 asset(s) registered", output.getvalue())
         self.assertIn("AST-0002 | Laptop AST-0002 | IT Equipment | Site A | In Use", output.getvalue())
 
@@ -350,6 +350,71 @@ class ConcurrencyTest(ServerTestCase):
                 common.send_request({"action": "LIST"}, config)
             self.assertLess(time.monotonic() - started, config["client_timeout_seconds"] + 1)
 
+
+
+class SearchTest(ServerTestCase):
+    """FR12, FR13."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.register(make_asset("AST-0001", description="Dell laptop", location="Site A"))
+        self.register(make_asset("AST-0002", description="HP printer", category="Printers", location="Site B"))
+        self.register(make_asset("AST-0003", description="Dell monitor", location="Site B", status="Not In Use"))
+
+    def ids(self, **parameters) -> list:
+        return [asset["asset_id"] for asset in self.request({"action": "LIST", **parameters})["assets"]]
+
+    def test_each_supported_field_can_be_searched_ignoring_capitals(self):
+        self.assertEqual(self.ids(filters={"asset_id": "ast-0002"}), ["AST-0002"])
+        self.assertEqual(self.ids(filters={"description": "DELL"}), ["AST-0001", "AST-0003"])
+        self.assertEqual(self.ids(filters={"category": "printers"}), ["AST-0002"])
+        self.assertEqual(self.ids(filters={"location": "site b"}), ["AST-0002", "AST-0003"])
+        self.assertEqual(self.ids(filters={"status": "not in use"}), ["AST-0003"])
+
+    def test_filters_combine_and_a_query_searches_every_field(self):
+        self.assertEqual(self.ids(filters={"description": "dell", "location": "site b"}), ["AST-0003"])
+        self.assertEqual(self.ids(query="printer"), ["AST-0002"])
+        self.assertEqual(self.ids(query="site"), ["AST-0001", "AST-0002", "AST-0003"])
+
+    def test_an_unknown_search_field_is_rejected(self):
+        reply = self.request({"action": "LIST", "filters": {"colour": "red"}})
+        self.assertEqual((reply["code"], reply["context"]["field"]), (common.BAD_REQUEST, "colour"))
+
+    def test_deleted_assets_are_not_found(self):
+        self.delete("AST-0001", 1)
+        self.assertEqual(self.ids(query="dell"), ["AST-0003"])
+
+    def test_pages_return_only_their_records_with_paging_metadata(self):
+        first = self.request({"action": "LIST", "page": 1, "page_size": 2})
+        self.assertEqual([a["asset_id"] for a in first["assets"]], ["AST-0001", "AST-0002"])
+        self.assertEqual((first["total"], first["page"], first["page_size"], first["pages"]), (3, 1, 2, 2))
+        second = self.request({"action": "LIST", "page": 2, "page_size": 2})
+        self.assertEqual([a["asset_id"] for a in second["assets"]], ["AST-0003"])
+
+    def test_paging_applies_after_filtering(self):
+        reply = self.request({"action": "LIST", "filters": {"location": "b"}, "page": 2, "page_size": 1})
+        self.assertEqual(([a["asset_id"] for a in reply["assets"]], reply["total"], reply["pages"]), (["AST-0003"], 2, 2))
+
+    def test_without_paging_every_match_is_returned_with_metadata(self):
+        reply = self.request({"action": "LIST"})
+        self.assertEqual((len(reply["assets"]), reply["total"], reply["pages"]), (3, 3, 1))
+
+    def test_invalid_paging_values_are_rejected(self):
+        for parameters in ({"page": 0}, {"page": "2"}, {"page_size": 0}, {"page_size": server.MAX_PAGE_SIZE + 1}):
+            reply = self.request({"action": "LIST", **parameters})
+            self.assertEqual(reply["code"], common.BAD_REQUEST, parameters)
+
+    def test_the_query_client_can_search(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receive.main(self.config, ["location=site", "b"])
+        self.assertIn("2 asset(s) found", output.getvalue())
+        self.assertNotIn("AST-0001", output.getvalue())
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receive.main(self.config, ["tablet"])
+        self.assertIn("No assets match that search.", output.getvalue())
 
 
 class ChangeTest(ServerTestCase):

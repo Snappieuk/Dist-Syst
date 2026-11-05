@@ -5,7 +5,7 @@ Asset Management System server.
 
 Understands these actions:
     {"action": "REGISTER", "request_id": "...", "asset": {...}}
-    {"action": "LIST"}
+    {"action": "LIST", "query": "...", "filters": {"location": "..."}, "page": 1, "page_size": 20}
     {"action": "EDIT", "request_id": "...", "asset_id": "...", "expected_version": 1,
      "changes": {"description": "...", "category": "...", "location": "...", "status": "..."}}
     {"action": "DELETE", "request_id": "...", "asset_id": "...", "expected_version": 1}
@@ -55,6 +55,9 @@ MAX_FIELD_LENGTH = 200
 # How many recent request IDs are remembered, so that retries are recognised. Old ones
 # are forgotten so the data file can't grow forever; a retry comes within seconds.
 MAX_REMEMBERED_REQUESTS = 1000
+
+# The most assets one page of a LIST reply may hold.
+MAX_PAGE_SIZE = 100
 
 # Actions that change the data, and so must carry a request_id.
 CHANGE_ACTIONS = ("REGISTER", "EDIT", "DELETE")
@@ -340,10 +343,57 @@ class AssetServer:
         return reply, lambda: self.assets.__setitem__(deleted["asset_id"], previous)
 
     def list_assets(self, request: dict) -> dict:
-        """Return every asset that has not been deleted."""
+        """Return the assets that have not been deleted and match the search, one page
+        at a time if a page_size is given.
+
+        Optional parameters:
+          query      text that must appear in any of the asset's fields
+          filters    {field: text}: the text must appear in that field
+          page       which page to return, from 1
+          page_size  how many assets per page, at most MAX_PAGE_SIZE
+        Matching ignores capitals. Without page_size, every match is returned.
+        The reply always says how many assets matched in total, and which page this is.
+        """
+        query = request.get("query")
+        if query is not None:
+            query = check_text(query, "query").lower()
+        filters = request.get("filters") or {}
+        if not isinstance(filters, dict):
+            raise InvalidRequest("filters must be an object", field="filters")
+        for field in filters:
+            if field not in ASSET_FIELDS:
+                raise InvalidRequest(f"Cannot search by {field}", field=field, searchable=list(ASSET_FIELDS))
+        wanted = {field: check_text(text, field).lower() for field, text in filters.items()}
+
+        def matches(asset: dict) -> bool:
+            if asset.get("deleted"):
+                return False
+            if query and not any(query in asset[field].lower() for field in ASSET_FIELDS):
+                return False
+            return all(text in asset[field].lower() for field, text in wanted.items())
+
         with self.lock:
-            current = [asset for asset in self.assets.values() if not asset.get("deleted")]
-        return {"status": "OK", "assets": current}
+            found = [asset for asset in self.assets.values() if matches(asset)]
+
+        total = len(found)
+        page_size = request.get("page_size")
+        if page_size is None:
+            page_size = max(total, 1)
+        elif not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= MAX_PAGE_SIZE:
+            raise InvalidRequest(f"page_size must be from 1 to {MAX_PAGE_SIZE}", field="page_size")
+        page = request.get("page", 1)
+        if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+            raise InvalidRequest("page must be a whole number of at least 1", field="page")
+
+        start = (page - 1) * page_size
+        return {
+            "status": "OK",
+            "assets": found[start:start + page_size],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": max(1, -(-total // page_size)),  # total / page_size, rounded up
+        }
 
     # ---- Networking -----------------------------------------------------------
 
