@@ -25,6 +25,8 @@ const username = document.getElementById("username");
 const password = document.getElementById("password");
 const loginError = document.getElementById("login-error");
 const logoutButton = document.getElementById("logout");
+const account = document.getElementById("account");
+const currentUser = document.getElementById("current-user");
 const addForm = document.getElementById("add-form");
 const addButton = document.getElementById("add-button");
 const actionMessage = document.getElementById("action-message");
@@ -183,7 +185,8 @@ function showLogin() {
   showActionResult("");
   tableBody.replaceChildren();
   appSection.hidden = true;
-  logoutButton.hidden = true;
+  account.hidden = true;
+  currentUser.textContent = "";
   loginSection.hidden = false;
   username.focus();
 }
@@ -191,7 +194,7 @@ function showLogin() {
 function showApp() {
   loginSection.hidden = true;
   appSection.hidden = false;
-  logoutButton.hidden = false;
+  account.hidden = false;
 }
 
 async function logIn(event) {
@@ -279,6 +282,7 @@ async function loadAssets() {
     }
     showApp();
     const body = await response.json();
+    currentUser.textContent = body.username;
     if (!response.ok) {
       throw new Error(body.error);
     }

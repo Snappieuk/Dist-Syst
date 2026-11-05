@@ -97,8 +97,8 @@ USER_ERROR_STATUSES = {
 
 logger = logging.getLogger("asset_web")
 
-# Who is logged in: a random token for each browser, and when its login expires. These are
-# only held in memory, so restarting this program logs everyone out.
+# Who is logged in: a random token for each browser, with its username and when its login
+# expires. These are only held in memory, so restarting this program logs everyone out.
 sessions = {}
 failed_logins = 0
 locked_until = 0
@@ -220,21 +220,25 @@ def add_account(username: str, password: str, replace: bool = False) -> object:
     return None
 
 
-def create_session() -> str:
+def create_session(username: str) -> str:
     """Log a browser in, returning its token. Expired sessions are cleared out here too,
     so the list cannot grow forever."""
     token = secrets.token_urlsafe(32)
     now = time.monotonic()
     with login_lock:
-        for expired in [key for key, expiry in sessions.items() if expiry <= now]:
+        for expired in [key for key, session in sessions.items() if session["expires"] <= now]:
             del sessions[expired]
-        sessions[token] = now + SESSION_SECONDS
+        sessions[token] = {"username": username, "expires": now + SESSION_SECONDS}
     return token
 
 
-def session_is_valid(token: object) -> bool:
+def session_username(token: object) -> object:
+    """Return who a token belongs to, or None if it isn't a current login."""
     with login_lock:
-        return token in sessions and sessions[token] > time.monotonic()
+        session = sessions.get(token)
+        if session is None or session["expires"] <= time.monotonic():
+            return None
+        return session["username"]
 
 
 def end_session(token: object) -> None:
@@ -256,8 +260,9 @@ def try_login(username: str, guess: str) -> tuple:
         if time.monotonic() < locked_until:
             return 429, {"error": "Too many failed logins. Please wait a minute and try again."}, None
 
+    username = normalise_username(username)
     with users_lock:
-        record = users.get(normalise_username(username))
+        record = users.get(username)
 
     if record is None:
         hash_password(guess)
@@ -268,7 +273,7 @@ def try_login(username: str, guess: str) -> tuple:
     if matched:
         with login_lock:
             failed_logins = 0
-        return 200, {"logged_in": True}, create_session()
+        return 200, {"username": username}, create_session(username)
 
     with login_lock:
         failed_logins += 1
@@ -384,10 +389,13 @@ class WebHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
 
         if path == "/api/assets":
-            if self.is_logged_in():
-                self.send_json(*assets_reply())
-            else:
+            username = session_username(self.session_token())
+            if username is None:
                 self.send_json(401, {"error": "Please log in"})
+            else:
+                status, reply = assets_reply()
+                reply["username"] = username  # so the page can say who is logged in
+                self.send_json(status, reply)
         elif path in STATIC_FILES:
             self.send_static_file(*STATIC_FILES[path])
         elif path == "/favicon.ico":
@@ -448,7 +456,7 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def handle_logout(self) -> None:
         end_session(self.session_token())
-        self.send_json(200, {"logged_in": False}, session_cookie("", 0))
+        self.send_json(200, {}, session_cookie("", 0))
 
     def session_token(self) -> object:
         """Return the token in the browser's cookie, or None if it has none."""
@@ -459,7 +467,7 @@ class WebHandler(BaseHTTPRequestHandler):
         return morsel.value if morsel else None
 
     def is_logged_in(self) -> bool:
-        return session_is_valid(self.session_token())
+        return session_username(self.session_token()) is not None
 
     def is_from_this_site(self) -> bool:
         """Refuse requests that a browser was tricked into sending by another website.

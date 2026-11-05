@@ -54,6 +54,18 @@ h1 {
   margin-bottom: 8px;
 }
 
+.account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.account strong {
+  color: var(--text);
+}
+
 #message {
   margin: 0 0 16px;
   color: var(--muted);

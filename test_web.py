@@ -486,6 +486,31 @@ class AddAssetTest(WebTestCase):
 
 
 class LoginTest(WebTestCase):
+    def test_the_reply_says_who_is_logged_in(self):
+        self.assertEqual(self.fetch_json("/api/assets")[1]["username"], USERNAME)
+
+    def test_the_username_is_still_sent_during_an_outage(self):
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            common.SERVERS = [spare.getsockname()]
+
+        status, body = self.fetch_json("/api/assets")
+
+        self.assertEqual(status, 503)
+        self.assertEqual(body["username"], USERNAME)
+
+    def test_each_login_is_kept_separate(self):
+        web.add_account("second", "second password")
+        _, headers, _ = self.login("second password", "second")
+        second = headers["Set-Cookie"].split(";")[0]
+
+        self.assertEqual(json.loads(self.fetch("/api/assets", cookie=second)[2])["username"], "second")
+        self.assertEqual(self.fetch_json("/api/assets")[1]["username"], USERNAME)
+
+        self.fetch("/api/logout", "POST", cookie=second)
+        self.assertEqual(self.fetch("/api/assets", cookie=second)[0], 401)
+        self.assertEqual(self.fetch_json("/api/assets")[0], 200)
+
     def login(self, password: object = PASSWORD, username: object = USERNAME, **options) -> tuple:
         body = {"username": username, "password": password}
         return self.fetch("/api/login", "POST", body, cookie=None, **options)

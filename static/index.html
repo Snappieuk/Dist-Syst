@@ -11,7 +11,10 @@
   <main>
     <header class="page-header">
       <h1>Asset Browser</h1>
-      <button id="logout" type="button" class="secondary" hidden>Log out</button>
+      <div id="account" class="account" hidden>
+        <span>Logged in as <strong id="current-user"></strong></span>
+        <button id="logout" type="button" class="secondary">Log out</button>
+      </div>
     </header>
 
     <section id="login-section" hidden>
