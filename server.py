@@ -39,6 +39,7 @@ from common import (
     SERVERS,
     TOO_LARGE,
     MessageTooLargeError,
+    generate_asset_tags,
     receive_message,
     request_from,
     send_message,
@@ -133,6 +134,9 @@ def validate_asset(asset: object) -> dict:
     # The date comes from the server, and anything the client sent is ignored,
     # because client clocks can be wrong or in other time zones.
     clean["date_registered"] = datetime.date.today().isoformat()
+
+    # Tags come from the server too, so every client's assets are tagged the same way.
+    clean["tags"] = generate_asset_tags(clean)
     return clean
 
 

@@ -34,7 +34,7 @@ def prompt_for_asset() -> dict:
     # Build and return the asset as a dict. The server validates these fields
     # and rejects anything invalid, because only the server can reliably check
     # rules such as "this asset_id is not already in use". It also sets
-    # date_registered itself, so that is not sent from here.
+    # date_registered and tags itself, so those are not sent from here.
     return {
         "asset_id": asset_id,
         "description": description,

@@ -43,7 +43,8 @@ def main() -> None:
     # Print a short summary, then one line per asset record.
     print(f"{len(assets)} asset(s) registered:\n")
     for asset in assets:
-        print(asset)
+        tags = asset.get("tags") or []
+        print(f"{asset.get('asset_id', 'Unknown')}: {tags}")
 
 
 # Only run this if the file is executed directly (not imported).

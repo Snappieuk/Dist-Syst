@@ -11,6 +11,7 @@ about what counts as a valid message live here rather than being repeated
 """
 
 import json      # used to turn a Python dict into a JSON string, and back
+import re        # used to clean up tag text snippets from asset details
 import socket    # provides the networking building blocks (sockets)
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
@@ -48,6 +49,79 @@ class MessageTooLargeError(ValueError):
     It has its own type so the server can reply TOO_LARGE. It is a ValueError
     because that is what the other kinds of invalid message raise too.
     """
+
+
+COMMON_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "at",
+    "by",
+    "for",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+
+def _phrase_to_tags(value: str) -> list:
+    """Convert a free-text field into a list of clean keyword tags."""
+    if not isinstance(value, str):
+        return []
+
+    tokens = re.split(r"[^0-9A-Za-z]+", value.strip())
+    clean = []
+    for token in tokens:
+        token = token.strip().lower()
+        if not token or token in COMMON_STOP_WORDS:
+            continue
+        clean.append(token)
+    return clean
+
+
+def generate_asset_tags(asset: dict) -> list:
+    """Generate a useful tag list automatically from the asset record."""
+    if not isinstance(asset, dict):
+        return []
+
+    tags = []
+    seen = set()
+
+    def add_tag(tag: str) -> None:
+        if not tag:
+            return
+        normalised = tag.strip().lower()
+        if normalised and normalised not in seen:
+            tags.append(normalised)
+            seen.add(normalised)
+
+    for field in ("category", "location", "status"):
+        value = asset.get(field)
+        if isinstance(value, str):
+            phrase = " ".join(part for part in re.split(r"[^0-9A-Za-z]+", value.strip()) if part)
+            if phrase:
+                add_tag(phrase)
+
+    asset_id = asset.get("asset_id")
+    if asset_id is not None:
+        add_tag(re.sub(r"[^0-9A-Za-z]+", "-", str(asset_id).strip()).strip("-"))
+
+    description = asset.get("description", "")
+    for token in _phrase_to_tags(description)[:5]:
+        add_tag(token)
+
+    return tags
+
+
+def format_asset_tags(tags: list) -> str:
+    """Return the tag list in a compact display form for UI tables."""
+    if not tags:
+        return ""
+    return ", ".join(str(tag) for tag in tags)
 
 
 def send_message(sock: socket.socket, message: dict) -> None:

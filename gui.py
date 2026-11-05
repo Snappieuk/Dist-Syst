@@ -14,7 +14,7 @@ import threading  # runs network requests without freezing the window
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from common import send_request
+from common import format_asset_tags, generate_asset_tags, send_request
 
 
 class AssetManagementApp:
@@ -66,6 +66,7 @@ class AssetManagementApp:
             "category",
             "location",
             "status",
+            "tags",
             "date_registered",
         )
         self.tree = ttk.Treeview(listing, columns=columns, show="headings")
@@ -75,6 +76,7 @@ class AssetManagementApp:
             "category": "Category",
             "location": "Location",
             "status": "Status",
+            "tags": "Tags",
             "date_registered": "Date Registered",
         }
         widths = {
@@ -83,6 +85,7 @@ class AssetManagementApp:
             "category": 120,
             "location": 150,
             "status": 100,
+            "tags": 160,
             "date_registered": 115,
         }
         for column in columns:
@@ -209,6 +212,7 @@ class AssetManagementApp:
                     asset.get("category", ""),
                     asset.get("location", ""),
                     asset.get("status", ""),
+                    format_asset_tags(asset.get("tags") or generate_asset_tags(asset)),
                     asset.get("date_registered", ""),
                 ),
             )

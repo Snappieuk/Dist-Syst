@@ -90,9 +90,17 @@ class SystemTest(unittest.TestCase):
         stored = common.send_request({"action": "LIST"})["assets"][0]
         self.assertEqual(
             set(stored),
-            {"asset_id", "description", "category", "location", "status", "date_registered"},
+            {"asset_id", "description", "category", "location", "status", "date_registered", "tags"},
         )
         self.assertEqual(stored["description"], "Dell laptop")
+
+    def test_server_generates_tags_and_ignores_any_sent_by_the_client(self):
+        reply = register(make_asset(description="The Dell laptop", tags=["client tag"]))
+        tags = reply["stored"]["tags"]
+        self.assertIn("ast-1", tags)
+        self.assertIn("dell", tags)
+        self.assertNotIn("the", tags)  # a stop word
+        self.assertNotIn("client tag", tags)
 
     def test_server_sets_the_date_and_drops_extra_fields(self):
         reply = register(make_asset(date_registered="1999-01-01", extra="x"))
