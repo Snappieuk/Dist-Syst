@@ -6,9 +6,11 @@ to each other by sending JSON messages over TCP sockets. They can run on one mac
 on several.
 
 ```
-  send.py   receive.py   manage.py   gui.py        clients
-      \          |           |        /
-       \         |           |       /             try the primary first,
+                                      browser
+                                         | HTTP
+  send.py   receive.py   manage.py   gui.py   web.py   clients
+      \          |           |        /        /
+       \         |           |       /        /    try the primary first,
         v        v           v      v              then the backup
     +-----------------+              +-----------------+
     |    server.py    |  heartbeats  |    backup.py    |
@@ -37,7 +39,9 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `receive.py` | Lists the assets with their IDs, statuses and tags. |
 | `manage.py` | Marks an asset as "Not In Use" or "In Use", or deletes it. |
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
-| `test_system.py` | The automated tests. |
+| `web.py` | A read-only web interface for browsing assets. It serves the page in `static/` and gets the data from the servers like any other client. |
+| `static/` | The web page: `index.html`, `app.js` and `style.css`. |
+| `test_system.py`, `test_web.py` | The automated tests. |
 
 ## Running it
 
@@ -53,6 +57,16 @@ python gui.py
 You can use `python send.py`, `python receive.py` and `python manage.py` instead of the
 GUI. These wait for you to press Enter before closing, so the window stays open if you
 start them by double-clicking.
+
+To browse the assets in a web browser, run this as well and open http://127.0.0.1:8080:
+
+```
+python web.py
+```
+
+You can search, filter by status and sort by clicking a column heading. The page refreshes
+every 5 seconds and says which server answered. It can't change anything, and only this
+machine can open it unless you change `WEB_ADDRESS` in `web.py`.
 
 The system runs without the backup, but it won't survive the primary failing.
 
@@ -74,15 +88,19 @@ Start both servers and the GUI, and keep the server logs visible.
 4. Open two GUI windows showing the same asset with the status "In Use". Click "Mark Not
    In Use" in one, then "Delete Asset" in the other without refreshing. The delete is
    refused because that window hasn't seen the change.
+5. Run `web.py`, open the page and repeat steps 2 and 3. Without reloading, the page
+   switches to `from the backup server` and back. If you stop both servers, it keeps the
+   last list on screen with a warning.
 
 ## Tests
 
 ```
-python -m unittest -v test_system
+python -m unittest -v test_system test_web
 ```
 
 The tests start real servers on spare ports and use temporary data files, so your data
-isn't touched. `DistributedTest` runs `server.py` and `backup.py` as separate programs
+isn't touched. `test_web.py` makes real HTTP requests but doesn't run the page's script in
+a browser, so that part was checked by hand in Microsoft Edge. `DistributedTest` runs `server.py` and `backup.py` as separate programs
 and kills them partway through. Some tests make a save fail on purpose, so you will see
 logged errors and tracebacks in the output.
 
@@ -106,6 +124,8 @@ logged errors and tracebacks in the output.
 | Optimistic concurrency control | A change names the version it was based on and is refused if that is out of date | `node.py`: `version_conflict` |
 | Tombstones | Deleted IDs are kept so another server's old copy can't bring an asset back | `node.py`: `deleted_ids` |
 | Independent failure | One client or server failing doesn't bring down the others | `node.py`: `handle_client` |
+| Multi-tier architecture | The browser talks to `web.py`, which talks to the servers, so the servers don't need to know about HTTP | `web.py` |
+| Failure transparency | A browser keeps working through a failover without knowing which server is in charge | `web.py`: `assets_reply` |
 | CAP trade-off | In a network split both servers stay available, and the data is made consistent afterwards | See known limitations |
 
 ## Messages
@@ -231,7 +251,11 @@ Other limitations:
 - There is no authentication or encryption. Anyone who can reach a server can read and
   change assets, including by sending the messages meant for the other server, so only use
   it on a trusted network.
-- Assets can't be searched, and only the status can be changed after registration.
+- The web page can only browse assets. It has no login, so anyone who can open it can see
+  every asset. Don't change `WEB_ADDRESS` to expose it on a network you don't trust.
+- The web page fetches the whole list on every refresh and searches it in the browser, so
+  this will get slow with a very large number of assets.
+- The servers can't search assets, and only the status can be changed after registration.
 - The list of deleted IDs only ever grows.
 - Every change rewrites the whole file, changes happen one at a time, every asset is held
   in memory and each `LIST` returns everything. Once the data is over the 10 MiB message
@@ -244,5 +268,5 @@ Other limitations:
 ## Further development
 
 A third server would let a majority decide which server leads, so a network split couldn't
-leave two leaders. Other ideas are editing more fields, a serial number to identify items,
-search and paging, a database instead of the JSON file, and login and encryption.
+leave two leaders. Other ideas are editing assets from the web page, editing more fields, a
+serial number to identify items, search and paging on the servers, a database instead of the JSON file, and login and encryption.
