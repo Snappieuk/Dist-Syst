@@ -42,32 +42,92 @@ DEFAULT_SERVERS = [
     ("127.0.0.1", 65433),  # backup
 ]
 
-# To run the servers on separate machines, set this environment variable to the same
-# list on every machine, for example ASSET_SERVERS=assets-1:65432,assets-2:65433.
+# Where web.py listens. 127.0.0.1 means only this machine can open the page.
+DEFAULT_WEB_ADDRESS = ("127.0.0.1", 8080)
+
+# Settings can come from three places, and a later one overrides an earlier one:
+#   1. the defaults in this file
+#   2. config.json beside the code, if it exists (see config.example.json), or the file
+#      named by the ASSET_CONFIG environment variable
+#   3. environment variables, such as ASSET_SERVERS=assets-1:65432,assets-2:65433
+# To run the servers on separate machines, give every machine the same server list.
 # Hostnames are better than IP addresses, because a machine can then change its address
 # without every program being reconfigured. Nothing in the code has to change.
+CONFIG_FILE = os.environ.get("ASSET_CONFIG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 SERVERS_VARIABLE = "ASSET_SERVERS"
+WEB_ADDRESS_VARIABLE = "ASSET_WEB_ADDRESS"
+
+# What config.json may contain. Anything else is rejected, so a misspelt setting is
+# noticed instead of silently ignored.
+CONFIG_TIMEOUTS = ("timeout_seconds", "heartbeat_timeout_seconds", "failover_wait_seconds")
+CONFIG_KEYS = ("servers", "web_address") + CONFIG_TIMEOUTS
 
 
-def parse_servers(text: str) -> list:
+def parse_address(text: str, setting: str) -> tuple:
+    """Turn "host:port" into a (host, port) address, or raise ValueError naming `setting`."""
+    entry = text.strip()
+    host, colon, port = entry.rpartition(":")
+    if not colon or not host or not (port.isascii() and port.isdigit()) or not 0 < int(port) < 65536:
+        raise ValueError(f"{setting}: {entry!r} should look like host:port")
+    return host, int(port)
+
+
+def parse_servers(text: str, setting: str = SERVERS_VARIABLE) -> list:
     """Turn "host:port,host:port" into a list of (host, port) addresses.
 
     Raises ValueError, naming the bad entry, if the text is not one or two addresses.
     """
-    servers = []
-    for entry in text.split(","):
-        entry = entry.strip()
-        host, colon, port = entry.rpartition(":")
-        if not colon or not host or not (port.isascii() and port.isdigit()) or not 0 < int(port) < 65536:
-            raise ValueError(f"{SERVERS_VARIABLE}: {entry!r} should look like host:port")
-        servers.append((host, int(port)))
-
+    servers = [parse_address(entry, setting) for entry in text.split(",")]
     if len(servers) > 2:
-        raise ValueError(f"{SERVERS_VARIABLE} lists at most two servers: the primary, then the backup")
+        raise ValueError(f"{setting} lists at most two servers: the primary, then the backup")
     return servers
 
 
-SERVERS = parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS_VARIABLE) else DEFAULT_SERVERS
+def load_config(path: str) -> dict:
+    """Read the settings file, returning only the settings it contains, already checked.
+
+    A missing file is normal and gives no settings. A file that can't be understood
+    raises ValueError naming the file and the problem, so a mistake is never ignored.
+    """
+    try:
+        with open(path, encoding="utf-8") as file:
+            raw = json.load(file)
+    except FileNotFoundError:
+        return {}
+    except ValueError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from None
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must hold a JSON object")
+    unknown = sorted(set(raw) - set(CONFIG_KEYS))
+    if unknown:
+        raise ValueError(f"{path} has unknown settings: {', '.join(unknown)}. It may contain: {', '.join(CONFIG_KEYS)}")
+
+    settings = {}
+    if "servers" in raw:
+        entries = raw["servers"]
+        if not isinstance(entries, list) or not entries or not all(isinstance(entry, str) for entry in entries):
+            raise ValueError(f'{path}: "servers" must be a list such as ["assets-1:65432", "assets-2:65433"]')
+        settings["servers"] = parse_servers(",".join(entries), f"{path} servers")
+    if "web_address" in raw:
+        if not isinstance(raw["web_address"], str):
+            raise ValueError(f'{path}: "web_address" must be text such as "127.0.0.1:8080"')
+        settings["web_address"] = parse_address(raw["web_address"], f"{path} web_address")
+    for name in CONFIG_TIMEOUTS:
+        if name in raw:
+            value = raw[name]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 300:
+                raise ValueError(f'{path}: "{name}" must be a number of seconds above 0 and at most 300')
+            settings[name] = value
+    return settings
+
+
+_config = load_config(CONFIG_FILE)
+
+SERVERS = (parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS_VARIABLE)
+           else _config.get("servers", DEFAULT_SERVERS))
+WEB_ADDRESS = (parse_address(os.environ[WEB_ADDRESS_VARIABLE], WEB_ADDRESS_VARIABLE)
+               if os.environ.get(WEB_ADDRESS_VARIABLE) else _config.get("web_address", DEFAULT_WEB_ADDRESS))
 
 # The key every program sends to prove it belongs to this system. It is created the first
 # time any program runs. To use several machines, copy this file to each of them.
@@ -85,15 +145,15 @@ LOG_FILE_COPIES = 5
 
 # How long request_from() waits on each network step before giving up. Clients
 # use it for their requests, and the primary uses it when copying to the backup.
-TIMEOUT_SECONDS = 5
+TIMEOUT_SECONDS = _config.get("timeout_seconds", 5)
 
 # How long the servers wait for each other's heartbeats. This is short, because a
 # heartbeat needs no work from the other server, so a slow one means trouble.
-HEARTBEAT_TIMEOUT_SECONDS = 1
+HEARTBEAT_TIMEOUT_SECONDS = _config.get("heartbeat_timeout_seconds", 1)
 
 # How long a client keeps trying while no server is accepting changes. This is long
 # enough for the backup to notice that the primary has failed and take over.
-FAILOVER_WAIT_SECONDS = 15
+FAILOVER_WAIT_SECONDS = _config.get("failover_wait_seconds", 15)
 
 # Error codes, sent as the "code" field of an ERROR reply. "detail" is written
 # for people and may be reworded, so programs should act on the code instead.

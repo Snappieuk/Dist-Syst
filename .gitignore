@@ -10,6 +10,9 @@ assets_backup.json
 # Each program's log file
 logs/
 
+# This machine's own settings. config.example.json shows what it can hold.
+config.json
+
 # Secrets created when the programs run, which must never be shared
 secret.key
 web_password.json

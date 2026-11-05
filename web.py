@@ -25,6 +25,8 @@ import secrets    # generates login tokens, password salts and a first password
 import sys        # sys.argv holds the --set-password option
 import threading  # the locks protect the data shared between request threads
 import time       # sessions and lockouts expire
+
+import common     # where the web interface listens
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -39,8 +41,9 @@ from common import (
     send_request,
 )
 
-# Where the web interface listens. 127.0.0.1 means only this machine can open it.
-WEB_ADDRESS = ("127.0.0.1", 8080)
+# Where the web interface listens. By default 127.0.0.1:8080, which means only this
+# machine can open it. It can be set in config.json or with ASSET_WEB_ADDRESS.
+WEB_ADDRESS = common.WEB_ADDRESS
 
 # How long to wait on a browser before giving up on it, so that an idle connection
 # cannot hold a thread forever.

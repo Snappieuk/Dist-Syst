@@ -53,6 +53,7 @@ rule still load, and can be changed to one of the two.
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
 | `demo.py` | Shows a failover step by step on a running system. |
+| `config.example.json` | An example of the optional settings file, `config.json`. |
 | `setup.py` | First-time setup, which creates the shared secret and the first web account, and a full reset with `--reset`. |
 | `logs/` | Created as the programs run. Each program's own log file: `primary.log`, `backup.log`, `web.log` and `start.log`. |
 | `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py` | The automated tests. |
@@ -102,7 +103,26 @@ python web.py
 After logging in, you can search, filter by status, sort by clicking a column heading, add
 and delete assets, and create accounts for other people. The page refreshes every 5 seconds.
 Its summary row shows the totals and which server answered. Only this machine can open it
-unless you change `WEB_ADDRESS` in `web.py`.
+unless you change its address in the settings below.
+
+## Settings
+
+Everything works without any settings. To change them, copy `config.example.json` to
+`config.json` beside the code and edit it. Leave out any setting you don't want to change.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | Where the primary and then the backup are |
+| `web_address` | `"127.0.0.1:8080"` | Where `web.py` listens |
+| `timeout_seconds` | `5` | How long a program waits on each network step before giving up |
+| `heartbeat_timeout_seconds` | `1` | How long the servers wait for each other's heartbeats |
+| `failover_wait_seconds` | `15` | How long a client keeps trying while the backup takes over |
+
+A misspelt setting or a wrong value stops the program with a message naming `config.json`,
+rather than being ignored. Environment variables override the file: `ASSET_SERVERS` for the
+servers and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form.
+`ASSET_CONFIG` can name a different settings file. `config.json` is ignored by git,
+because each machine has its own, and a reset leaves it alone.
 
 The system runs without the backup, but it won't survive the primary failing. When the
 primary starts, it keeps trying to reach the backup for up to 3 seconds before serving
@@ -112,11 +132,13 @@ when it appears.
 
 ## Running it across several machines
 
-Nothing in the code needs changing. Two environment variables say where things are:
+Nothing in the code needs changing. Every machine, including those running only a client
+or `web.py`, needs the same server list, either as `servers` in its `config.json` or in the
+`ASSET_SERVERS` environment variable:
 
 | Variable | Set on | Meaning |
 |---|---|---|
-| `ASSET_SERVERS` | Every machine, including those running only a client or `web.py` | Where the servers are: the primary first, then the backup, as `host:port,host:port`. Without it, both are on this machine, on ports 65432 and 65433. |
+| `ASSET_SERVERS` | Every machine, unless `config.json` has `servers` | Where the servers are: the primary first, then the backup, as `host:port,host:port`. Without it or the setting, both are on this machine, on ports 65432 and 65433. |
 | `ASSET_LISTEN_HOST` | Each server machine | The address the server listens on. Use `0.0.0.0` to accept connections on every network connection the machine has. Without it, the server listens on the name in its own `ASSET_SERVERS` entry. |
 
 For example:
@@ -521,7 +543,7 @@ Other limitations:
   and `web.py` must then be restarted.
 - The web page can add and delete assets, but can't change an asset's status. Use the GUI
   or `manage.py` for that.
-- Don't change `WEB_ADDRESS` to expose the web page on a network you don't trust, because
+- Don't change the web address to expose the web page on a network you don't trust, because
   passwords would travel unencrypted.
 - The web page fetches the whole list on every refresh and searches it in the browser, so
   this will get slow with a very large number of assets.

@@ -1,0 +1,7 @@
+{
+  "servers": ["127.0.0.1:65432", "127.0.0.1:65433"],
+  "web_address": "127.0.0.1:8080",
+  "timeout_seconds": 5,
+  "heartbeat_timeout_seconds": 1,
+  "failover_wait_seconds": 15
+}
