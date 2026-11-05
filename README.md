@@ -43,7 +43,7 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface with one command, running setup first if needed. |
 | `setup.py` | First-time setup, which creates the first web account, and a full reset with `--reset`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py` | The automated tests. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py` | The automated tests. |
 
 ## Running it
 
@@ -101,10 +101,35 @@ unless you change `WEB_ADDRESS` in `web.py`.
 
 The system runs without the backup, but it won't survive the primary failing.
 
-To run it across several machines, put each server's IP address in `SERVERS` in
-`common.py` and use the same list on every machine. Copy `secret.key` to every machine too,
-after it has been created by the first run. Each server's firewall must allow its port. So
-far this has only been run as separate processes on one machine.
+### Running it across several machines
+
+Nothing in the code needs changing. Every program finds the servers through the
+`ASSET_SERVERS` environment variable: the primary first, then the backup. Set it to the same
+value on every machine, including those running only a client or `web.py`:
+
+```
+export ASSET_SERVERS=assets-1:65432,assets-2:65433      # Linux and macOS
+$env:ASSET_SERVERS = "assets-1:65432,assets-2:65433"   # Windows PowerShell
+```
+
+Hostnames are better than IP addresses, because a machine can then change its address
+without anyone updating the list. Any name the machines can look up works, from an entry
+in each machine's hosts file to a container's name or a Kubernetes service. Without the
+variable, everything runs on this machine as before.
+
+On each server machine, also set `ASSET_LISTEN_HOST=0.0.0.0`. Otherwise the server tries to
+listen only on the name in its entry, which may not belong to that machine, for example
+behind a router or in a container. Then:
+
+1. Run `python setup.py` on the machine that will run `web.py`, and copy the `secret.key` it
+   creates to every other machine, beside the code.
+2. Run `python server.py` on the first machine and `python backup.py` on the second.
+3. Run clients or `web.py` anywhere that can reach both.
+
+Each server's firewall must allow its port. Don't use `start.py` here, because it starts
+both servers on the same machine. Nothing is encrypted, so only do this on a network you
+trust. So far this has been tested as separate processes on one machine, using names in
+place of `127.0.0.1`.
 
 ## Demo
 
@@ -154,7 +179,7 @@ logins in a row, on any usernames, logins are refused for a minute.
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start test_setup
+python -m unittest -v test_system test_web test_start test_setup test_config
 ```
 
 The tests start real servers on spare ports and use temporary files for data and accounts,
