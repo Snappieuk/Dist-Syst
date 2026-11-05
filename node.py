@@ -39,6 +39,7 @@ from common import (
     TOO_LARGE,
     UNAUTHORIZED,
     MessageTooLargeError,
+    configure_logging,
     generate_asset_tags,
     normalise_text,
     receive_message,
@@ -572,11 +573,9 @@ def start_up(address: tuple) -> socket.socket:
     """
     global last_seq
 
-    logging.basicConfig(
-        level=logging.INFO,
-        # threadName in the log makes the concurrent handling visible.
-        format=f"%(asctime)s %(levelname)s [{ROLE}] [%(threadName)s] %(message)s",
-    )
+    # The log goes to the console and to logs/primary.log or logs/backup.log. The thread
+    # name in each line makes the concurrent handling visible.
+    configure_logging(ROLE)
 
     try:
         loaded_assets, loaded_deleted, last_seq = load_assets()

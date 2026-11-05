@@ -11,9 +11,12 @@ about what counts as a valid message live here rather than being repeated
 """
 
 import json         # used to turn a Python dict into a JSON string, and back
+import logging      # each program's log, on screen and in its own file
+import logging.handlers  # replaces a log file with a new one when it gets too big
 import os           # finds and creates the shared secret file
 import secrets      # generates the shared secret
 import socket      # provides the networking building blocks (sockets)
+import sys          # records crashes in the log
 import time         # waits while the backup takes over
 import unicodedata  # recognises letters and digits in any language, for tags
 import uuid         # creates the random request ID sent with each registration
@@ -71,6 +74,14 @@ SERVERS = parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS_
 SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret.key")
 
 _secret = None  # the key, once read, so the file is only read once
+
+# Where each program keeps its log file, named after it: primary.log, backup.log, web.log
+# and start.log. A file that reaches LOG_FILE_BYTES is renamed to name.log.1, the older
+# ones move up to name.log.2 and so on, and only LOG_FILE_COPIES old files are kept.
+LOG_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+LOG_NAMES = ("primary", "backup", "web", "start")
+LOG_FILE_BYTES = 1024 * 1024
+LOG_FILE_COPIES = 5
 
 # How long request_from() waits on each network step before giving up. Clients
 # use it for their requests, and the primary uses it when copying to the backup.
@@ -322,6 +333,55 @@ def receive_message(sock: socket.socket) -> dict:
         raise ValueError("Message must be a JSON object")
 
     return message
+
+
+def log_path(name: str) -> str:
+    return os.path.join(LOG_FOLDER, name + ".log")
+
+
+def configure_logging(name: str) -> None:
+    """Send this program's log to the console and to its own file, logs/<name>.log.
+
+    Each program has its own file because they are separate processes. Two processes
+    writing to one file can mix up each other's lines, and can't safely take turns
+    renaming it when it fills up. Each line is stamped with the time, the level, the
+    program and the thread, so files from different programs can be lined up.
+
+    Passwords and the shared secret are never logged. If the file can't be opened, the
+    program still runs, logging to the console only.
+    """
+    handlers = [logging.StreamHandler()]
+    problem = None
+    try:
+        os.makedirs(LOG_FOLDER, exist_ok=True)
+        handlers.append(logging.handlers.RotatingFileHandler(
+            log_path(name), maxBytes=LOG_FILE_BYTES, backupCount=LOG_FILE_COPIES, encoding="utf-8"
+        ))
+    except OSError as exc:
+        problem = exc
+
+    # force=True replaces any earlier set-up, so calling this twice can't log lines twice.
+    logging.basicConfig(
+        level=logging.INFO,
+        format=f"%(asctime)s %(levelname)s [{name}] [%(threadName)s] %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+    log = logging.getLogger(name)
+    if problem is None:
+        log.info("Logging to %s", log_path(name))
+    else:
+        log.warning("Logging to the console only, because the log file could not be opened: %s", problem)
+
+    def log_crash(kind, value, traceback) -> None:
+        # A crash would otherwise only reach the console, which may already be closed.
+        # The log shows it on the console too, so Python doesn't print it a second time.
+        if issubclass(kind, KeyboardInterrupt):
+            sys.__excepthook__(kind, value, traceback)
+        else:
+            log.critical("Stopped by an unexpected error", exc_info=(kind, value, traceback))
+
+    sys.excepthook = log_crash
 
 
 def shared_secret() -> str:

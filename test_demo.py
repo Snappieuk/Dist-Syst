@@ -45,6 +45,7 @@ class ServerTestCase(unittest.TestCase):
     def start(self, module: str) -> subprocess.Popen:
         code = (
             f"import common\ncommon.SERVERS = {self.servers!r}\n"
+            f"common.LOG_FOLDER = {self.folder!r}\n"
             f"import {module} as program\n"
             f"program.ASSETS_FILE = {os.path.join(self.folder, module + '.json')!r}\n"
             "program.main()\n"

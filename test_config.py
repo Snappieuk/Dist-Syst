@@ -110,6 +110,7 @@ class ListenAddressTest(unittest.TestCase):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         code = (
+            f"import common\ncommon.LOG_FOLDER = {temp_dir.name!r}\n"
             "import server\n"
             f"server.ASSETS_FILE = {os.path.join(temp_dir.name, 'assets.json')!r}\n"
             "server.main()\n"

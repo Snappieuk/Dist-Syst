@@ -7,6 +7,9 @@ assets.json
 assets_backup.json
 *.tmp
 
+# Each program's log file
+logs/
+
 # Secrets created when the programs run, which must never be shared
 secret.key
 web_password.json

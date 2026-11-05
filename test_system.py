@@ -911,6 +911,7 @@ class DistributedTest(unittest.TestCase):
         code = (
             "import common\n"
             f"common.SERVERS = {common.SERVERS!r}\n"
+            f"common.LOG_FOLDER = {self.temp_path!r}\n"
             f"import {module} as program\n"
             f"program.ASSETS_FILE = {os.path.join(self.temp_path, module + '.json')!r}\n"
             "program.main()\n"
