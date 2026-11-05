@@ -33,9 +33,29 @@ class StartTest(unittest.TestCase):
         self.processes = {"one": run_for(30), "two": run_for(30)}
         self.assertIsNone(start.first_stopped(self.processes))
 
-    def test_a_stopped_program_is_noticed(self):
-        self.processes = {"running": run_for(30), "stopping": run_for(0)}
-        self.assertEqual(start.wait_until_one_stops(self.processes), "stopping")
+    def test_a_program_that_fails_as_it_starts_stops_the_start(self):
+        self.processes = {"running": run_for(30), "failing": run_for(0)}
+        self.assertEqual(start.keep_running(self.processes), "failing")
+
+    def test_a_program_that_stops_later_is_restarted_after_a_wait(self):
+        self.processes = {"running": run_for(30), "stopped": run_for(0)}
+        self.processes["stopped"].wait()
+        stopped = self.processes["stopped"]
+        long_ago = {"running": 0, "stopped": 0}  # both started well over START_FAILURE_SECONDS ago
+        restart_at = {}
+
+        with mock.patch.object(start, "start_program", side_effect=lambda name: run_for(30)), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(start.check_programs(self.processes, long_ago, restart_at))
+            self.assertIn("stopped", restart_at)
+            self.assertIs(self.processes["stopped"], stopped)  # not restarted yet
+
+            restart_at["stopped"] = 0  # the wait is over
+            self.assertIsNone(start.check_programs(self.processes, long_ago, restart_at))
+
+        self.assertIsNone(self.processes["stopped"].poll())  # running again
+        self.assertEqual(restart_at, {})
+        self.assertIn("restarted", output.getvalue())
 
     def test_stopping_stops_everything_still_running(self):
         self.processes = {"one": run_for(30), "two": run_for(30), "finished": run_for(0)}

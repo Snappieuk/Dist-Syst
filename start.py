@@ -9,8 +9,10 @@ The primary, backup and web interface still run as separate processes, exactly a
 each had been started in its own terminal. They share this window, so each log line
 says which one wrote it. Press Ctrl+C to stop them all.
 
-To stop just one of them, for example to demonstrate a failover, start them in separate
-terminals instead (see the README).
+If one of them stops after starting properly, for example because demo.py stopped it,
+the others carry on and it is restarted after RESTART_SECONDS, the way a cluster manager
+such as Kubernetes restarts a failed server. One that fails as it starts, usually because
+its port is in use, stops everything instead, so it can't be restarted over and over.
 """
 
 import os          # os.path finds the programs
@@ -29,6 +31,13 @@ FOLDER = os.path.dirname(os.path.abspath(__file__))
 
 # How long to wait for the web interface before opening the browser anyway.
 WEB_START_SECONDS = 10
+
+# How long a stopped program stays down before it is restarted. This is long enough for
+# the backup to take over and for a client to make a change on it, which demo.py shows.
+RESTART_SECONDS = 20
+
+# A program that stops sooner than this after starting failed as it started.
+START_FAILURE_SECONDS = 5
 
 
 def ensure_set_up() -> bool:
@@ -50,12 +59,14 @@ def ensure_set_up() -> bool:
     return False
 
 
+def start_program(name: str) -> subprocess.Popen:
+    """Start one program as its own process."""
+    return subprocess.Popen([sys.executable, os.path.join(FOLDER, name)], cwd=FOLDER)
+
+
 def start_programs(programs: tuple) -> dict:
     """Start each program as its own process, returning them by name."""
-    return {
-        name: subprocess.Popen([sys.executable, os.path.join(FOLDER, name)], cwd=FOLDER)
-        for name in programs
-    }
+    return {name: start_program(name) for name in programs}
 
 
 def wait_for_web(processes: dict) -> None:
@@ -77,12 +88,37 @@ def first_stopped(processes: dict) -> object:
     return None
 
 
-def wait_until_one_stops(processes: dict) -> str:
-    """Wait until any program stops, and return its name."""
+def check_programs(processes: dict, started: dict, restart_at: dict) -> object:
+    """Check every program once, returning the name of one that failed as it started.
+
+    A program that stopped later is given a restart time in `restart_at`, and restarted
+    once that time has passed. `started` holds when each program last started.
+    """
+    now = time.monotonic()
+    for name, process in list(processes.items()):
+        if name in restart_at:
+            if now >= restart_at[name]:
+                print(f"\nRestarting {name}.", flush=True)
+                processes[name] = start_program(name)
+                started[name] = now
+                del restart_at[name]
+        elif process.poll() is not None:
+            if now - started[name] < START_FAILURE_SECONDS:
+                return name
+            print(f"\n{name} has stopped. The others carry on, and it will be restarted "
+                  f"in {RESTART_SECONDS} seconds.", flush=True)
+            restart_at[name] = now + RESTART_SECONDS
+    return None
+
+
+def keep_running(processes: dict) -> str:
+    """Keep the programs running until one fails as it starts, and return its name."""
+    started = {name: time.monotonic() for name in processes}
+    restart_at = {}
     while True:
-        stopped = first_stopped(processes)
-        if stopped is not None:
-            return stopped
+        failed = check_programs(processes, started, restart_at)
+        if failed is not None:
+            return failed
         time.sleep(0.5)
 
 
@@ -110,10 +146,10 @@ def main() -> None:
         if first_stopped(processes) is None:
             webbrowser.open(f"http://{WEB_ADDRESS[0]}:{WEB_ADDRESS[1]}")
 
-        # They should run until stopped, so one stopping means something is wrong, most
-        # likely that the system is already running and its port is in use.
-        stopped = wait_until_one_stops(processes)
-        print(f"\n{stopped} has stopped, so stopping the others. Check the messages above.")
+        # A program failing as it starts most likely means the system is already running
+        # and its port is in use, so restarting it wouldn't help.
+        stopped = keep_running(processes)
+        print(f"\n{stopped} could not start, so stopping the others. Check the messages above.")
         stop_all(processes)
         try:
             # Keep the window open to read the error, if this was started by double-clicking.
