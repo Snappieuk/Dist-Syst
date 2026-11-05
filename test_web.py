@@ -9,7 +9,9 @@ data file and spare ports, so your real assets.json is never touched.
 """
 
 import json
+import logging
 import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -19,6 +21,10 @@ import urllib.request
 import common
 import node
 import web
+
+
+# These tests cause errors on purpose, so the logged warnings are only noise here.
+logging.getLogger("asset_web").setLevel(logging.ERROR)
 
 
 def make_asset(description="Dell laptop", **changes) -> dict:
@@ -118,6 +124,24 @@ class AssetsApiTest(WebTestCase):
         status, body = self.fetch_json("/nothing-here")
         self.assertEqual(status, 404)
         self.assertIn("error", body)
+
+    def test_every_server_being_down_gives_a_clear_error(self):
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            common.SERVERS = [spare.getsockname()]
+
+        status, body = self.fetch_json("/api/assets")
+
+        self.assertEqual(status, 503)
+        self.assertIn("No asset server", body["error"])
+
+    def test_a_server_error_gives_a_clear_error_without_its_details(self):
+        node.assets.append(make_asset(asset_id="AST-BIG", description="x" * (common.MAX_MESSAGE_BYTES + 1)))
+
+        status, body = self.fetch_json("/api/assets")
+
+        self.assertEqual(status, 502)
+        self.assertNotIn("bytes", body["error"])
 
     def test_changing_data_is_not_possible(self):
         register(make_asset())

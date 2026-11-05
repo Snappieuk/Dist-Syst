@@ -43,8 +43,21 @@ def public_asset(asset: dict) -> dict:
 
 
 def assets_reply() -> tuple:
-    """Fetch the assets from the servers, returning an HTTP status and a JSON body."""
-    reply = send_request({"action": "LIST"})
+    """Fetch the assets from the servers, returning an HTTP status and a JSON body.
+
+    Problems are logged in full for whoever runs this, but the browser only gets a
+    general message, because internal details can help an attacker.
+    """
+    try:
+        reply = send_request({"action": "LIST"})
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not get the assets: %s", exc)
+        return 503, {"error": "No asset server can be reached at the moment"}
+
+    if reply.get("status") != "OK":
+        logger.warning("A server could not list the assets: %s", reply.get("detail"))
+        return 502, {"error": "The asset server could not provide the list"}
+
     return 200, {"assets": [public_asset(asset) for asset in reply["assets"]]}
 
 
