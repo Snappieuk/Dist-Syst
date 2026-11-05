@@ -9,36 +9,53 @@
 </head>
 <body>
   <main>
-    <h1>Asset Browser</h1>
-    <p id="message" role="status">Loading...</p>
-    <form id="filters" class="filters">
-      <label>
-        Search
-        <input id="search" type="search" placeholder="Description, location, tags...">
-      </label>
-      <label>
-        Status
-        <select id="status-filter">
-          <option value="">All statuses</option>
-        </select>
-      </label>
-    </form>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Asset ID</th>
-            <th scope="col">Description</th>
-            <th scope="col">Category</th>
-            <th scope="col">Location</th>
-            <th scope="col">Status</th>
-            <th scope="col">Tags</th>
-            <th scope="col">Date Registered</th>
-          </tr>
-        </thead>
-        <tbody id="assets"></tbody>
-      </table>
-    </div>
+    <header class="page-header">
+      <h1>Asset Browser</h1>
+      <button id="logout" type="button" class="secondary" hidden>Log out</button>
+    </header>
+
+    <section id="login-section" hidden>
+      <form id="login-form" class="panel login-form">
+        <label>
+          Password
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">Log in</button>
+        <p id="login-error" class="problem" role="alert"></p>
+      </form>
+    </section>
+
+    <section id="app-section" hidden>
+      <p id="message" role="status">Loading...</p>
+      <form id="filters" class="filters">
+        <label>
+          Search
+          <input id="search" type="search" placeholder="Description, location, tags...">
+        </label>
+        <label>
+          Status
+          <select id="status-filter">
+            <option value="">All statuses</option>
+          </select>
+        </label>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Asset ID</th>
+              <th scope="col">Description</th>
+              <th scope="col">Category</th>
+              <th scope="col">Location</th>
+              <th scope="col">Status</th>
+              <th scope="col">Tags</th>
+              <th scope="col">Date Registered</th>
+            </tr>
+          </thead>
+          <tbody id="assets"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
 </body>
 </html>

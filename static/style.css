@@ -41,14 +41,47 @@ h1 {
   font-size: 1.6rem;
 }
 
+/* Elements with their own display style would otherwise ignore the hidden attribute. */
+[hidden] {
+  display: none !important;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
 #message {
   margin: 0 0 16px;
   color: var(--muted);
 }
 
+.problem,
 #message.problem {
   color: var(--problem);
   font-weight: 600;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 340px;
+  margin-top: 16px;
+}
+
+.login-form .problem {
+  margin: 0;
 }
 
 .filters {
@@ -58,18 +91,21 @@ h1 {
   margin-bottom: 16px;
 }
 
-.filters label {
+label {
   display: flex;
   flex-direction: column;
-  flex: 1 1 200px;
-  max-width: 400px;
   gap: 4px;
   color: var(--muted);
   font-size: 0.85rem;
 }
 
-.filters input,
-.filters select {
+.filters label {
+  flex: 1 1 200px;
+  max-width: 400px;
+}
+
+input,
+select {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -77,6 +113,23 @@ h1 {
   color: var(--text);
   font: inherit;
   font-size: 0.95rem;
+}
+
+/* The column heading buttons have their own, plainer style further down. */
+main button {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--background);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+main button.secondary {
+  background: none;
+  color: var(--accent);
 }
 
 /* A wide table scrolls inside this box, so a phone's page itself does not scroll sideways. */
@@ -108,12 +161,13 @@ th {
   white-space: nowrap;
 }
 
-th button {
+main th button {
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
+  font-weight: inherit;
   cursor: pointer;
 }
 

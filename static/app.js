@@ -17,6 +17,12 @@ const search = document.getElementById("search");
 const statusFilter = document.getElementById("status-filter");
 
 const headings = document.querySelectorAll("thead th");
+const loginSection = document.getElementById("login-section");
+const appSection = document.getElementById("app-section");
+const loginForm = document.getElementById("login-form");
+const password = document.getElementById("password");
+const loginError = document.getElementById("login-error");
+const logoutButton = document.getElementById("logout");
 
 let allAssets = [];
 let servedBy = "";
@@ -121,11 +127,63 @@ function updateStatusChoices() {
   statusFilter.value = chosen;
 }
 
+// Clears the assets from the page as well as hiding them, so that nothing is left behind
+// after logging out or when a login has expired.
+function showLogin() {
+  allAssets = [];
+  servedBy = "";
+  loadError = "";
+  tableBody.replaceChildren();
+  appSection.hidden = true;
+  logoutButton.hidden = true;
+  loginSection.hidden = false;
+  password.focus();
+}
+
+function showApp() {
+  loginSection.hidden = true;
+  appSection.hidden = false;
+  logoutButton.hidden = false;
+}
+
+async function logIn(event) {
+  event.preventDefault();
+  loginError.textContent = "";
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: password.value }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error);
+    }
+    password.value = "";
+    await loadAssets();
+  } catch (error) {
+    loginError.textContent = error.message;
+  }
+}
+
+async function logOut() {
+  try {
+    await fetch("/api/logout", { method: "POST" });
+  } finally {
+    showLogin();
+  }
+}
+
 // A failed refresh keeps the last list on screen, with a warning, because old data is
 // more useful than none during an outage.
 async function loadAssets() {
   try {
     const response = await fetch("/api/assets");
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    showApp();
     const body = await response.json();
     if (!response.ok) {
       throw new Error(body.error);
@@ -141,9 +199,10 @@ async function loadAssets() {
 }
 
 // The next refresh is only scheduled once this one has finished, so that a slow server
-// cannot build up a queue of requests. A hidden browser tab skips the work.
+// cannot build up a queue of requests. A hidden browser tab skips the work, and so does
+// the login form, which has nothing to show until someone logs in.
 async function refreshRepeatedly() {
-  if (!document.hidden) {
+  if (!document.hidden && loginSection.hidden) {
     await loadAssets();
   }
   setTimeout(refreshRepeatedly, REFRESH_MILLISECONDS);
@@ -154,6 +213,9 @@ statusFilter.addEventListener("change", showAssets);
 
 // There is nothing to submit, so pressing Enter must not reload the page.
 filters.addEventListener("submit", (event) => event.preventDefault());
+
+loginForm.addEventListener("submit", logIn);
+logoutButton.addEventListener("click", logOut);
 
 makeHeadingsSortable();
 refreshRepeatedly();
