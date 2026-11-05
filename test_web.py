@@ -161,6 +161,19 @@ class PageTest(WebTestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn(b"Asset Browser", body)
 
+    def test_the_script_is_served(self):
+        status, headers, _ = self.fetch("/app.js")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+
+    def test_the_script_never_adds_asset_details_as_html(self):
+        _, _, body = self.fetch("/app.js")
+
+        for unsafe in (b".innerHTML", b".outerHTML", b"insertAdjacentHTML", b"document.write"):
+            with self.subTest(unsafe):
+                self.assertNotIn(unsafe, body)
+
     def test_security_headers_are_sent(self):
         for path in ("/", "/api/assets", "/nothing-here"):
             with self.subTest(path):

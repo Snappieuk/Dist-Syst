@@ -39,6 +39,7 @@ STATIC_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static
 # ever reach another file on this machine, however it is written.
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
 
 logger = logging.getLogger("asset_web")
