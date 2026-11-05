@@ -162,6 +162,8 @@ class AssetServer:
         self.max_bytes = config["max_message_bytes"]
         self.timeout = config["server_timeout_seconds"]
         self.data_file = common.config_path(config, config["data_files"][role])
+        self.audit_file = common.config_path(config, config["audit_files"][role])
+        self.audit_lock = threading.Lock()  # one line at a time from many threads
         self.session_seconds = config["session_seconds"]
         self.secret = users.read_secret(config)  # signs and checks session tokens
 
@@ -173,6 +175,22 @@ class AssetServer:
         self.assets = {}    # every asset, by asset_id, including soft-deleted ones
         self.requests = {}  # recent request IDs: {request_id: {"fingerprint", "reply"}}
         self.load()
+
+    # ---- Audit trail ----------------------------------------------------------
+
+    def audit(self, event: str, **details) -> None:
+        """Append one line to the audit log: a JSON object with the server's UTC time,
+        this server's role, the event and its details (user, request ID, asset ID...).
+
+        JSON Lines keeps each record on one line, readable by people and by programs.
+        A failure to write is logged but never fails the request it describes.
+        """
+        record = {"time": utc_now(), "server": self.role, "event": event, **details}
+        try:
+            with self.audit_lock, open(self.audit_file, "a", encoding="utf-8") as file:
+                file.write(json.dumps(record) + "\n")
+        except OSError as exc:
+            logger.error("Could not write to the audit log: %s", exc)
 
     # ---- Storage --------------------------------------------------------------
 
@@ -226,6 +244,7 @@ class AssetServer:
         here, so the rules can be tested without a socket."""
         version = request.get("protocol_version")
         if version not in SUPPORTED_VERSIONS:
+            self.audit("rejected_version", action=request.get("action"), protocol_version=version)
             return error_reply(
                 UNSUPPORTED_VERSION,
                 f"Protocol version {version!r} is not supported",
@@ -273,9 +292,11 @@ class AssetServer:
             matched = users.password_matches(record, password)
         if not matched:
             logger.warning("Failed login for %r", username)
+            self.audit("login_failed", user=username)
             raise InvalidRequest("Wrong username or password", code=UNAUTHENTICATED)
         token, expires = users.issue_token(username, self.secret, self.session_seconds)
         logger.info("%s logged in", username)
+        self.audit("login", user=username, role=record["role"])
         return {
             "status": "OK",
             "token": token,
@@ -293,15 +314,25 @@ class AssetServer:
         try:
             username = users.read_token(request.get("token"), self.secret)
         except users.TokenError as exc:
+            self.audit("unauthenticated", action=request.get("action"), request_id=request.get("request_id"), reason=str(exc))
             raise InvalidRequest(str(exc), code=UNAUTHENTICATED) from exc
         record = users.load_users(self.config).get(username)
         if record is None:
+            self.audit("unauthenticated", action=request.get("action"), user=username, reason="account removed")
             raise InvalidRequest("This account no longer exists. Please log in again.", code=UNAUTHENTICATED)
         user = {"username": username, "role": record["role"]}
 
         allowed = ALLOWED_ROLES.get(request.get("action"))
         if allowed and user["role"] not in allowed:
             logger.warning("%s (%s) was refused %s", username, user["role"], request.get("action"))
+            self.audit(
+                "forbidden",
+                action=request.get("action"),
+                request_id=request.get("request_id"),
+                user=username,
+                role=user["role"],
+                asset_id=request.get("asset_id"),
+            )
             raise InvalidRequest(
                 f"Only {' or '.join(allowed)} users may {request.get('action')}",
                 code=FORBIDDEN,
@@ -339,6 +370,16 @@ class AssetServer:
             self.commit(undo_all)
             while len(self.requests) > MAX_REMEMBERED_REQUESTS:
                 del self.requests[next(iter(self.requests))]  # forget the oldest
+            stored = reply["stored"]
+            self.audit(
+                request["action"].lower(),
+                user=user["username"],
+                role=user["role"],
+                request_id=request_id,
+                asset_id=stored["asset_id"],
+                version=stored["version"],
+                fields=sorted(request.get("changes", {})) or None,
+            )
         return reply
 
     def current_asset(self, asset_id: object, expected_version: object) -> dict:
@@ -477,13 +518,21 @@ class AssetServer:
         try:
             request = receive_message(conn, self.max_bytes)
         except MessageTooLargeError as exc:
+            self.audit("rejected_message", reason=str(exc))
             return error_reply(TOO_LARGE, str(exc), max_bytes=self.max_bytes)
         except ValueError as exc:
+            self.audit("rejected_message", reason=str(exc))
             return error_reply(BAD_REQUEST, str(exc))
         try:
             return self.process(request)
-        except Exception:
+        except Exception as exc:
             logger.exception("Could not complete a %s request", request.get("action"))
+            self.audit(
+                "error",
+                action=request.get("action"),
+                request_id=request.get("request_id"),
+                detail=f"{type(exc).__name__}: {exc}",
+            )
             return error_reply(INTERNAL, "The server could not complete the request")
 
     def handle_connection(self, conn: socket.socket, addr: tuple = None) -> None:
@@ -517,6 +566,7 @@ class AssetServer:
         with self.open_socket() as server_sock:
             server_sock.settimeout(0.2)  # wake up regularly to check `stop`
             logger.info("Asset Management %s server listening on %s:%s", self.role, *self.address)
+            self.audit("server_started", address=f"{self.address[0]}:{self.address[1]}")
             while not stop.is_set():
                 try:
                     conn, addr = server_sock.accept()

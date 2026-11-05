@@ -9,3 +9,6 @@ assets_*.json
 # Accounts and the token-signing key, which must never be shared publicly
 users.json
 secret.key
+
+# Audit logs written by the servers
+*.log

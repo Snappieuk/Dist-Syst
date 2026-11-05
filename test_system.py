@@ -526,6 +526,72 @@ class AccountTest(ServerTestCase):
                 users.add_user(self.config, username, password, role)
 
 
+class AuditTest(ServerTestCase):
+    """NFR19."""
+
+    def events(self, name: str = None) -> list:
+        with open(self.server.audit_file, encoding="utf-8") as file:
+            records = [json.loads(line) for line in file]
+        return [record for record in records if name is None or record["event"] == name]
+
+    def test_every_record_has_a_server_utc_timestamp_and_the_server_role(self):
+        for record in self.events():
+            self.assertRegex(record["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertEqual(record["server"], "primary")
+        self.assertEqual(len(self.events("server_started")), 1)
+
+    def test_asset_changes_are_recorded_with_the_user_and_request_id(self):
+        self.register(make_asset(), request_id="reg-1")
+        self.edit("AST-0001", 1, request_id="edit-1", location="Site B")
+        self.delete("AST-0001", 2, request_id="del-1")
+        changes = [(r["event"], r["user"], r["request_id"], r["asset_id"], r["version"])
+                   for r in self.events() if r["event"] in ("register", "edit", "delete")]
+        self.assertEqual(changes, [
+            ("register", "admin", "reg-1", "AST-0001", 1),
+            ("edit", "admin", "edit-1", "AST-0001", 2),
+            ("delete", "admin", "del-1", "AST-0001", 3),
+        ])
+        self.assertEqual(self.events("edit")[0]["fields"], ["location"])
+
+    def test_a_replayed_change_is_recorded_once(self):
+        self.register(make_asset(), request_id="once")
+        self.register(make_asset(), request_id="once")
+        self.assertEqual(len(self.events("register")), 1)
+
+    def test_security_events_are_recorded(self):
+        common.login("alice", "wrong-password", self.config)
+        self.request({"action": "LIST", "token": "nonsense"})
+        alice = self.log_in("alice", USER_PASSWORD)
+        self.register(make_asset())
+        self.request({"action": "DELETE", "request_id": "d", "asset_id": "AST-0001", "expected_version": 1, "token": alice})
+
+        self.assertEqual(self.events("login_failed")[0]["user"], "alice")
+        self.assertIn("alice", [r["user"] for r in self.events("login")])
+        self.assertEqual(self.events("unauthenticated")[0]["action"], "LIST")
+        forbidden = self.events("forbidden")[0]
+        self.assertEqual((forbidden["user"], forbidden["action"], forbidden["request_id"]), ("alice", "DELETE", "d"))
+
+    def test_passwords_and_tokens_never_reach_the_audit_log(self):
+        common.login("alice", "wrong-password", self.config)
+        with open(self.server.audit_file, encoding="utf-8") as file:
+            text = file.read()
+        for secret in (ADMIN_PASSWORD, "wrong-password", self.token):
+            self.assertNotIn(secret, text)
+
+    def test_system_errors_are_recorded_with_the_request_id(self):
+        with mock.patch("server.json.dump", side_effect=OSError("disk full")):
+            self.register(make_asset(), request_id="failing")
+        error = self.events("error")[0]
+        self.assertEqual((error["action"], error["request_id"]), ("REGISTER", "failing"))
+        self.assertIn("disk full", error["detail"])
+
+    def test_rejected_messages_are_recorded(self):
+        self.raw_exchange(self.frame(b"{broken"))
+        self.raw_exchange(self.frame(json.dumps({"action": "LIST"}).encode("utf-8")))
+        self.assertEqual(len(self.events("rejected_message")), 1)
+        self.assertEqual(len(self.events("rejected_version")), 1)
+
+
 class ChangeTest(ServerTestCase):
     """FR10 (soft deletion), FR11, NFR10, NFR11, NFR12."""
 
