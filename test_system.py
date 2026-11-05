@@ -3,9 +3,10 @@ Tests for the Asset Management System.
 
     python -m unittest -v test_system
 
-These run a real server on a background thread and talk to it over real TCP
-sockets, so they test the whole path a client uses. The server uses a temporary
-data file and a spare port, so your real assets.json is never touched.
+These run real servers and talk to them over real TCP sockets, so they test the
+whole path a client uses. SystemTest runs one server on a background thread, and
+BackupTest runs the primary and backup as separate programs. Every server uses
+temporary data files and spare ports, so your real assets.json is never touched.
 """
 
 import json

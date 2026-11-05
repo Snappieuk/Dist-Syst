@@ -4,9 +4,9 @@ Tkinter interface for the Asset Management System.
 WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
 seconds, and running it on the main thread would freeze the window. So each
-request runs on a background thread. Tkinter is also not safe
-to call from other threads, so that thread puts its result on a queue, and the
-main thread checks the queue regularly and updates the window itself.
+request runs on a background thread. Tkinter is also not safe to call from other
+threads, so that thread puts its result on a queue, and the main thread checks
+the queue regularly and updates the window itself.
 """
 
 import queue      # carries results from background threads to the main thread
@@ -164,6 +164,8 @@ class AssetManagementApp:
                 self._set_busy(False)
 
                 if error:
+                    # The registration worked and only the list refresh failed, so
+                    # clear the form as usual but report the problem.
                     if operation == "register" and response and response.get("status") == "OK":
                         for entry in self.fields.values():
                             entry.delete(0, tk.END)
@@ -202,6 +204,8 @@ class AssetManagementApp:
         """Replace the table's contents with `assets`."""
         for item in self.tree.get_children():
             self.tree.delete(item)
+        # Assets saved before tagging was added have no tags, so those are
+        # worked out here for display.
         for asset in assets:
             self.tree.insert(
                 "",

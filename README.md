@@ -4,18 +4,20 @@ A simple distributed prototype: a central server with a backup, a registration
 client and a query client, which register and retrieve asset records. They
 communicate over TCP sockets using JSON messages.
 
-Each asset has an asset ID, description, category, location, status and
-registration date.
+Each asset has an asset ID, description, category, location, status, registration
+date and tags. The server sets the date and generates the tags.
 
 ## Files
 
 - `common.py` — shared helpers: sends and receives JSON messages over a TCP
-  socket, using a 4-byte length prefix so each message is framed correctly.
+  socket, using a 4-byte length prefix so each message is framed correctly. It
+  also holds the server addresses, error codes, tag generation and client failover.
 - `server.py` — accepts `REGISTER` and `LIST` requests, and saves assets to
   `assets.json`. Run with `--backup`, it acts as the backup server and uses
   `assets_backup.json`.
 - `send.py` — the registration client: prompts for a new asset and registers it.
-- `receive.py` — the query client: retrieves and prints the current assets.
+- `receive.py` — the query client: retrieves the current assets and prints each
+  one's ID and tags.
 - `gui.py` — a Tkinter window that can both register and list assets.
 - `test_system.py` — the automated tests.
 
@@ -106,7 +108,8 @@ Failures look like `{"status": "ERROR", "code": "DUPLICATE_ID", "detail": "..."}
 - **Concurrency:** each client has its own thread, so a slow client does not
   delay the others. A lock protects the shared data.
 - **Validation:** the server checks every field and rejects duplicate IDs. It also
-  sets the registration date, because client clocks may differ.
+  sets the registration date, because client clocks may differ, and generates
+  each asset's tags.
 - **Reliability:** a client that disconnects abruptly or sends invalid data used
   to crash the server. Each failure now only affects that client.
 - **Timeouts and limits:** idle clients are disconnected, clients do not wait

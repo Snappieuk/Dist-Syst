@@ -33,7 +33,9 @@ SERVERS = [
     ("127.0.0.1", 65433),  # backup
 ]
 
-TIMEOUT_SECONDS = 5  # how long a client waits for the server before giving up
+# How long request_from() waits on each network step before giving up. Clients
+# use it for their requests, and each server uses it when syncing with the other.
+TIMEOUT_SECONDS = 5
 
 # Error codes, sent as the "code" field of an ERROR reply. "detail" is written
 # for people and may be reworded, so programs should act on the code instead.
@@ -51,6 +53,7 @@ class MessageTooLargeError(ValueError):
     """
 
 
+# Words too common to be useful, so they are left out of description keywords.
 COMMON_STOP_WORDS = {
     "a",
     "an",
@@ -69,7 +72,11 @@ COMMON_STOP_WORDS = {
 
 
 def _phrase_to_tags(value: str) -> list:
-    """Convert a free-text field into a list of clean keyword tags."""
+    """Split free text into lowercase keywords, leaving out stop words.
+
+    Anything other than an ASCII letter or digit separates words. A value that
+    is not a string gives an empty list.
+    """
     if not isinstance(value, str):
         return []
 
@@ -84,7 +91,12 @@ def _phrase_to_tags(value: str) -> list:
 
 
 def generate_asset_tags(asset: dict) -> list:
-    """Generate a useful tag list automatically from the asset record."""
+    """Build an asset's tags from its other fields, in lowercase with no repeats.
+
+    The tags are, in order: the category, location and status as whole phrases,
+    the asset ID, then up to five keywords from the description. Anything other
+    than a dict gives an empty list.
+    """
     if not isinstance(asset, dict):
         return []
 
@@ -99,6 +111,8 @@ def generate_asset_tags(asset: dict) -> list:
             tags.append(normalised)
             seen.add(normalised)
 
+    # Whole phrases, with punctuation replaced by single spaces, so
+    # "Site A - IT Store" becomes "site a it store".
     for field in ("category", "location", "status"):
         value = asset.get(field)
         if isinstance(value, str):
@@ -106,10 +120,13 @@ def generate_asset_tags(asset: dict) -> list:
             if phrase:
                 add_tag(phrase)
 
+    # Punctuation in the ID becomes hyphens, so "AST_0001" becomes "ast-0001".
     asset_id = asset.get("asset_id")
     if asset_id is not None:
         add_tag(re.sub(r"[^0-9A-Za-z]+", "-", str(asset_id).strip()).strip("-"))
 
+    # The first five keywords. Any that repeat an earlier tag are skipped, so
+    # this can add fewer than five.
     description = asset.get("description", "")
     for token in _phrase_to_tags(description)[:5]:
         add_tag(token)
@@ -118,7 +135,7 @@ def generate_asset_tags(asset: dict) -> list:
 
 
 def format_asset_tags(tags: list) -> str:
-    """Return the tag list in a compact display form for UI tables."""
+    """Join tags into one comma-separated string for the GUI's table."""
     if not tags:
         return ""
     return ", ".join(str(tag) for tag in tags)
@@ -181,7 +198,7 @@ def receive_message(sock: socket.socket) -> dict:
 
     Raises OSError if the connection fails, so no reply can be delivered. Raises
     ValueError if the connection works but the data is invalid, so the sender can
-    be told what was wrong.
+    be told what was wrong. JSON nested too deeply to parse raises RecursionError.
     """
     # First, read exactly the 4-byte header written by send_message().
     header = _recv_exact(sock, HEADER_LENGTH_BYTES)
@@ -228,7 +245,7 @@ def send_request(request: dict) -> dict:
     the servers later match assets up by their unique IDs.
 
     Raises ConnectionError with a clear message if no server can be reached, and
-    ValueError if a reply is not a valid message.
+    ValueError if the request is too large or a reply is not a valid message.
     """
     last_error = None
     for address in SERVERS:

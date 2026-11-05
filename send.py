@@ -2,7 +2,7 @@
 Registration client.
 
 Prompts you for the details of one asset, then registers it with the
-server. The server must already be running (start server.py first).
+server. At least one server must already be running (start server.py first).
 
     python send.py
 
@@ -49,9 +49,9 @@ def main() -> None:
     new_asset = prompt_for_asset()
 
     # Send a REGISTER request containing the new asset. If that fails, show a
-    # clear message rather than a traceback. There is no automatic retry: the
-    # user can simply run this again, and unique asset IDs stop the same asset
-    # being stored twice.
+    # clear message rather than a traceback. Each server is tried once, with no
+    # further retries: the user can simply run this again, and unique asset IDs
+    # stop the same asset being stored twice.
     try:
         response = send_request({"action": "REGISTER", "asset": new_asset})
     except (OSError, ValueError) as exc:

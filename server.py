@@ -25,9 +25,9 @@ new assets from each other.
 import datetime   # the server stamps each new asset with today's date
 import json       # the assets file uses JSON, the same format as the messages
 import logging    # records what happens, including errors, without stopping
-import os         # os.replace() and os.fsync() make saving safe (see save_assets)
+import os         # os.path finds the data files; os.replace() and os.fsync() make saving safe
 import socket     # provides the networking building blocks (sockets)
-import sys        # sys.exit() reports startup failures to the operating system
+import sys        # sys.argv holds the --backup option; sys.exit() reports startup failures
 import threading  # gives each client a thread, and provides the lock
 import time       # waits between syncs with the other server
 
@@ -55,8 +55,8 @@ BACKUP_ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "a
 # The fields a client must supply when registering an asset.
 REQUIRED_FIELDS = ("asset_id", "description", "category", "location", "status")
 
-# How long a client may stay silent before the server gives up on it. Without
-# this, an idle client would hold a thread and a connection forever.
+# How long the server waits on each read from, or send to, a client before giving
+# up on it. Without this, an idle client would hold a thread and a connection forever.
 CLIENT_TIMEOUT_SECONDS = 10
 
 # How often each server copies new assets from the other one.
@@ -115,7 +115,8 @@ def error_reply(code: str, detail: str) -> dict:
 
 
 def validate_asset(asset: object) -> dict:
-    """Return a clean copy of a client's asset, or raise ValueError if invalid.
+    """Return a clean copy of a client's asset with its date and tags added, or
+    raise ValueError if it is invalid.
 
     This happens on the server even if a client also checks, because anyone can
     write a program that speaks this protocol. Only the server can guarantee it.
@@ -164,7 +165,7 @@ def register_asset(asset: dict) -> dict:
             raise
 
     # Echo back what was stored, because the server may have changed it (trimmed
-    # spaces, added the date).
+    # spaces, dropped extra fields, added the date and tags).
     return {"status": "OK", "stored": asset}
 
 
@@ -194,11 +195,11 @@ def process_request(request: dict) -> dict:
 def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
     """Add the other server's assets to this one's, returning how many changed.
 
-    Assets are only ever added, never changed or removed, so combining two lists
+    Clients can only add assets, never change or remove them, so combining two lists
     is simple: anything missing is copied across. The one awkward case is when each
     server accepted a different asset with the same ID while they could not reach
     each other. Then the backup gives way to the primary (`prefer_peer` is True on
-    the backup), so that the two always end up with identical data.
+    the backup), so both end up with the same records, possibly in a different order.
     """
     with assets_lock:
         # A dict keeps its order and makes each asset quick to find by ID.
@@ -248,6 +249,8 @@ def sync_with_peer(peer: tuple, prefer_peer: bool) -> None:
                 logger.info("The other server is back")
             peer_was_reachable = True
         except OSError as exc:
+            # Usually the other server being unreachable, but a failed save in
+            # merge_assets() is also an OSError, so it is reported here too.
             # Only report the change, not every failed attempt.
             if peer_was_reachable:
                 logger.warning("Cannot reach the other server: %s", exc)
@@ -307,9 +310,9 @@ def create_listening_socket(host: str, port: int) -> socket.socket:
     """Create the TCP/IPv4 socket that waits for new connections."""
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    # Allow a quick restart without the port being reported as "in use". On
-    # Windows, SO_REUSEADDR would also let two servers share a port without any
-    # error, so SO_EXCLUSIVEADDRUSE is used there instead.
+    # SO_REUSEADDR allows a quick restart without the port being reported as
+    # "in use". On Windows it would also let two servers share a port without
+    # any error, so SO_EXCLUSIVEADDRUSE is used there instead.
     if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
     else:
@@ -346,7 +349,8 @@ def main() -> None:
     global ASSETS_FILE
 
     # The primary and backup are the same program. This option only decides which
-    # address and data file it uses.
+    # address and data file it uses, which server it syncs with, and that the
+    # backup is the one to give way in a conflict.
     is_backup = "--backup" in sys.argv
     address = SERVERS[1] if is_backup else SERVERS[0]
     peer = SERVERS[0] if is_backup else SERVERS[1]
