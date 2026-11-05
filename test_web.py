@@ -8,6 +8,8 @@ they test the whole path from a browser to the data. The asset server uses a tem
 data file and spare ports, so your real assets.json is never touched.
 """
 
+import contextlib
+import io
 import json
 import logging
 import os
@@ -17,6 +19,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 import common
 import node
@@ -83,6 +86,61 @@ class WebTestCase(unittest.TestCase):
     def fetch_json(self, path: str) -> tuple:
         status, _, body = self.fetch(path)
         return status, json.loads(body)
+
+
+class PasswordTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        for name, value in (
+            ("PASSWORD_FILE", os.path.join(temp_dir.name, "web_password.json")),
+            ("HASH_ITERATIONS", 1000),  # the real number is slow on purpose
+            ("password_record", None),
+        ):
+            self.addCleanup(setattr, web, name, getattr(web, name))
+            setattr(web, name, value)
+
+    def test_only_the_right_password_matches(self):
+        web.password_record = web.hash_password("correct horse")
+
+        self.assertTrue(web.password_matches("correct horse"))
+        self.assertFalse(web.password_matches("wrong horse"))
+
+    def test_the_password_itself_is_not_stored(self):
+        web.save_password("correct horse")
+
+        with open(web.PASSWORD_FILE, encoding="utf-8") as file:
+            self.assertNotIn("correct horse", file.read())
+
+    def test_identical_passwords_have_different_hashes(self):
+        self.assertNotEqual(web.hash_password("same")["hash"], web.hash_password("same")["hash"])
+
+    def test_the_first_run_creates_a_password_and_shows_it_once(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            first = web.load_or_create_password()
+        self.assertIn("web password is:", output.getvalue())
+
+        web.password_record = first
+        shown = output.getvalue().split("web password is: ")[1].split()[0]
+        self.assertTrue(web.password_matches(shown))
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(web.load_or_create_password(), first)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_setting_a_password_needs_a_long_enough_match(self):
+        attempts = (
+            (["short", "short"], False),
+            (["long enough 1", "long enough 2"], False),
+            (["long enough", "long enough"], True),
+        )
+        for answers, changes in attempts:
+            with self.subTest(answers=answers):
+                with mock.patch("getpass.getpass", side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
+                    web.set_password_from_prompt()
+                self.assertEqual(os.path.exists(web.PASSWORD_FILE), changes)
 
 
 class AssetsApiTest(WebTestCase):

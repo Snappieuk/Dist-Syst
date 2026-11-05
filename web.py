@@ -12,9 +12,14 @@ It only reads data. There is no login, so anyone who can open the page can see i
 it listens only on this machine by default.
 """
 
+import getpass    # asks for a new password without showing it on screen
+import hashlib    # hashes the password, so that the password itself is never stored
+import hmac       # compares password hashes safely
 import json       # the data sent to the browser is JSON
 import logging    # records what happens, including errors, without stopping
 import os         # os.path finds the page's files
+import secrets    # generates the first password
+import sys        # sys.argv holds the --set-password option
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -43,7 +48,76 @@ STATIC_FILES = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
+# Where the hash of the web password is stored.
+PASSWORD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_password.json")
+
+# How many rounds of hashing a password gets. This is deliberately slow, so that someone
+# who obtained the file could only try a few guesses each second.
+HASH_ITERATIONS = 600_000
+
+MINIMUM_PASSWORD_LENGTH = 8
+
 logger = logging.getLogger("asset_web")
+
+password_record = None  # the hash of the web password, set when the program starts
+
+
+def hash_password(password: str, salt: str = None, iterations: int = None) -> dict:
+    """Hash a password, returning everything needed to check a guess against it later.
+
+    A random salt means that two identical passwords have different hashes, so ready-made
+    tables of common password hashes are no use.
+    """
+    salt = salt or secrets.token_hex(16)
+    iterations = iterations or HASH_ITERATIONS
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8", "surrogatepass"), bytes.fromhex(salt), iterations)
+    return {"salt": salt, "iterations": iterations, "hash": digest.hex()}
+
+
+def password_matches(guess: str) -> bool:
+    """Check a guess against the stored hash. compare_digest() takes the same time wherever
+    the values differ, so timing replies reveals nothing."""
+    attempt = hash_password(guess, password_record["salt"], password_record["iterations"])
+    return hmac.compare_digest(attempt["hash"], password_record["hash"])
+
+
+def save_password(password: str) -> dict:
+    """Store the hash of a new password, and return it. The swap means a crash cannot leave
+    a damaged file, and other users of the machine cannot read it on Linux and macOS."""
+    record = hash_password(password)
+    temp_path = PASSWORD_FILE + ".tmp"
+    with os.fdopen(os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as file:
+        json.dump(record, file)
+    os.replace(temp_path, PASSWORD_FILE)
+    return record
+
+
+def load_or_create_password() -> dict:
+    """Read the stored password hash. On the first run, create a random password and show
+    it once, because it cannot be recovered from the hash afterwards."""
+    try:
+        with open(PASSWORD_FILE, encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        pass
+
+    password = secrets.token_urlsafe(12)
+    record = save_password(password)
+    print(f"\n*** The web password is: {password}")
+    print("*** It will not be shown again. To change it, run: python web.py --set-password\n", flush=True)
+    return record
+
+
+def set_password_from_prompt() -> None:
+    """Ask for a new web password and store it."""
+    password = getpass.getpass("New web password: ")
+    if len(password) < MINIMUM_PASSWORD_LENGTH:
+        print(f"Nothing changed: it must be at least {MINIMUM_PASSWORD_LENGTH} characters.")
+    elif password != getpass.getpass("Type it again: "):
+        print("Nothing changed: the two did not match.")
+    else:
+        save_password(password)
+        print("Password changed. Restart web.py if it is running.")
 
 
 def public_asset(asset: dict) -> dict:
@@ -129,7 +203,14 @@ class WebHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global password_record
+
+    if "--set-password" in sys.argv:
+        set_password_from_prompt()
+        return
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [web] %(message)s")
+    password_record = load_or_create_password()
 
     # ThreadingHTTPServer gives each browser request its own thread, so one slow
     # browser does not delay the others.
