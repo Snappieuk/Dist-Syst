@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -62,6 +63,33 @@ class ServerListTest(unittest.TestCase):
             {common.SERVERS_VARIABLE: "assets-1:65432,assets-2:65433"}, "import common; print(common.SERVERS)"
         )
         self.assertEqual(result.stdout.strip(), "[('assets-1', 65432), ('assets-2', 65433)]")
+
+
+class HostnameTest(unittest.TestCase):
+    def setUp(self):
+        self.listener = node.create_listening_socket("127.0.0.1", 0)
+        self.addCleanup(self.listener.close)
+        self.port = self.listener.getsockname()[1]
+
+    def test_a_server_found_by_name_answers_quickly(self):
+        # localhost often has an IPv6 address too, which the servers don't listen on.
+        def answer():
+            conn, _ = self.listener.accept()
+            with conn:
+                common.receive_message(conn)
+                common.send_message(conn, {"status": "OK"})
+
+        threading.Thread(target=answer, daemon=True).start()
+
+        started = time.monotonic()
+        reply = common.request_from(("localhost", self.port), {"action": "PING"})
+
+        self.assertEqual(reply["status"], "OK")
+        self.assertLess(time.monotonic() - started, common.HEARTBEAT_TIMEOUT_SECONDS)
+
+    def test_a_name_that_does_not_exist_counts_as_unreachable(self):
+        with self.assertRaises(OSError):
+            common.request_from(("assets-primary.invalid", self.port), {"action": "PING"})
 
 
 class ListenAddressTest(unittest.TestCase):

@@ -362,9 +362,16 @@ def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS
 
     Every request carries the shared secret, because the server refuses any without it.
     """
+    # The servers only listen on IPv4, so a name is looked up as IPv4 only. Otherwise a
+    # name with an IPv6 address too, such as "localhost", is tried over IPv6 first, and
+    # on Windows each failed attempt takes 2 seconds, longer than a heartbeat may take.
+    # A name that can't be found raises socket.gaierror, an OSError like a refusal.
+    host, port = address
+    ipv4_address = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4]
+
     # create_connection() is used because it takes a timeout. Without one, a
     # stalled server would leave the program waiting forever.
-    with socket.create_connection(address, timeout=timeout) as sock:
+    with socket.create_connection(ipv4_address, timeout=timeout) as sock:
         send_message(sock, {**request, "auth": shared_secret()})
         return receive_message(sock)
 
