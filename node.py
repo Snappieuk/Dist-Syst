@@ -65,6 +65,11 @@ MAX_FIELD_LENGTH = 1000
 # it. Without this, an idle client would hold a thread and a connection forever.
 CLIENT_TIMEOUT_SECONDS = 10
 
+# How long a server waits after a STOP request before ending, so its reply gets out,
+# and the exit code it ends with, which tells start.py it didn't stop normally.
+STOP_DELAY_SECONDS = 0.2
+STOPPED_EXIT_CODE = 1
+
 logger = logging.getLogger("asset_server")
 
 # ---- What makes this node the primary or the backup, set by that program ----
@@ -408,6 +413,14 @@ def process_request(request: dict) -> dict:
         # The heartbeat between servers. It takes no lock, so a server that is busy
         # saving is not mistaken for one that has failed.
         return {"status": "OK", "accepts_writes": accepts_writes}
+
+    if action == "STOP":
+        # Used by demo.py to show a failover. The server ends abruptly, without telling
+        # the other server or finishing anything, exactly like a crash or a power cut.
+        # The short delay lets this reply reach the sender first.
+        logger.warning("Received STOP, so stopping now, as if this server had crashed.")
+        threading.Timer(STOP_DELAY_SECONDS, os._exit, args=(STOPPED_EXIT_CODE,)).start()
+        return {"status": "OK"}
 
     if action in role_actions:
         return role_actions[action](request)
