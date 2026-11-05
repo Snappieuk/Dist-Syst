@@ -60,6 +60,9 @@ STORED_FIELDS = ("asset_id",) + CLIENT_FIELDS
 # left out, because it describes the item's current use rather than which item it is.
 IDENTITY_FIELDS = ("description", "category", "location")
 
+# The fields a LIST search looks in.
+SEARCH_FIELDS = ("asset_id", "description", "category", "location", "status")
+
 # The longest value allowed in each field, in characters. Without a cap, a single
 # huge asset would push every LIST reply over the message limit. It also keeps every
 # REGISTER reply well under that limit, so a client always hears the result.
@@ -492,6 +495,41 @@ def delete_asset(asset_id: str, expected_version: object = None) -> dict:
     return {"status": "OK", "deleted": asset_id}
 
 
+def check_search(request: dict) -> dict:
+    """Return a LIST request's search options, leaving out any it didn't send, or raise
+    ValueError if one is invalid."""
+    options = {}
+    for name in ("query", "status"):
+        if request.get(name) is not None:
+            if not isinstance(request[name], str) or len(request[name]) > MAX_FIELD_LENGTH:
+                raise ValueError(f"{name} must be text of at most {MAX_FIELD_LENGTH} characters")
+            options[name] = request[name]
+    for name, smallest in (("offset", 0), ("limit", 1)):
+        value = request.get(name)
+        if value is not None:
+            if not isinstance(value, int) or isinstance(value, bool) or value < smallest:
+                raise ValueError(f"{name} must be a whole number of at least {smallest}")
+            options[name] = value
+    return options
+
+
+def search_assets(candidates: list, query: str = "", status: str = None, offset: int = 0, limit: int = None) -> dict:
+    """Return one page of the assets that match, and how many match in total.
+
+    `query` is found anywhere in the ID, description, category, location or status,
+    ignoring capitals and surrounding spaces. `status` must match exactly. With no
+    options, every asset is returned, in the order they are stored, as LIST always has.
+    """
+    wanted = query.strip().casefold()
+    matches = [
+        asset for asset in candidates
+        if (status is None or asset.get("status") == status)
+        and (not wanted or any(wanted in str(asset.get(field, "")).casefold() for field in SEARCH_FIELDS))
+    ]
+    page = matches[offset:] if limit is None else matches[offset:offset + limit]
+    return {"assets": page, "total": len(matches)}
+
+
 def process_request(request: dict) -> dict:
     """Carry out one decoded request and return the reply.
 
@@ -500,10 +538,16 @@ def process_request(request: dict) -> dict:
     action = request.get("action")
 
     if action == "LIST":
-        # Copy the list while holding the lock. It is sent after the lock is
-        # released, so one slow client cannot hold up everyone else.
+        try:
+            options = check_search(request)
+        except ValueError as exc:
+            return error_reply(BAD_REQUEST, str(exc))
+
+        # Copy the list while holding the lock. It is searched and sent after the lock
+        # is released, so one slow client cannot hold up everyone else.
         with assets_lock:
-            return {"status": "OK", "assets": list(assets)}
+            current = list(assets)
+        return {"status": "OK", **search_assets(current, **options)}
 
     if action == "PING":
         # The heartbeat between servers. It takes no lock, so a server that is busy

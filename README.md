@@ -349,11 +349,18 @@ Requests from clients:
 | Request | Successful reply |
 |---|---|
 | `{"action": "REGISTER", "request_id": "...", "asset": {...}}` | `{"status": "OK", "stored": {...}}` |
-| `{"action": "LIST"}` | `{"status": "OK", "assets": [...]}` |
+| `{"action": "LIST"}` | `{"status": "OK", "assets": [...], "total": 12}` |
+| `{"action": "LIST", "query": "dell", "status": "In Use", "offset": 0, "limit": 20}` | One page of the matching assets, and `total`, how many match altogether |
 | `{"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use", "expected_version": 1}` | `{"status": "OK", "stored": {...}}` |
 | `{"action": "EDIT", "asset_id": "...", "changes": {"location": "Site B"}, "expected_version": 1}` | `{"status": "OK", "stored": {...}}`, the updated record |
 | `{"action": "DELETE", "asset_id": "...", "expected_version": 1}` | `{"status": "OK", "deleted": "..."}` |
 | `{"action": "STOP"}` | `{"status": "OK"}`, then the server ends abruptly, as if it had crashed. Used by `demo.py` |
+
+Each of `LIST`'s options is optional, and without any it returns every asset, as it always
+has. `query` is found anywhere in the ID, description, category, location or status,
+ignoring capitals. `status` must match exactly. `offset` skips that many matches and `limit`
+returns at most that many, so a client can page through a long list without hitting the
+10 MiB message limit. Both servers answer `LIST`, so the backup can search too.
 
 `EDIT` changes any of `description`, `category`, `location` and `status`, and leaves the
 others alone. Each is checked as on registration, the edit is refused with
@@ -553,13 +560,15 @@ Other limitations:
   passwords would travel unencrypted.
 - The web page fetches the whole list on every refresh and searches it in the browser, so
   this will get slow with a very large number of assets.
-- The servers can't search assets. An asset's ID can't be changed, so an item can't be moved
-  to a different ID.
+- An asset's ID can't be changed, so an item can't be moved to a different ID.
+- A search looks through every asset in memory, which is fine for thousands of assets but
+  not millions. A page is only stable while nothing changes, so an asset added meanwhile can
+  shift the next page by one.
 - The list of deleted IDs only ever grows.
-- Every change rewrites the whole file, changes happen one at a time, every asset is held
-  in memory and each `LIST` returns everything. Once the data is over the 10 MiB message
-  limit, `LIST` replies `TOO_LARGE` and the primary can't reconcile with a returning
-  backup, although changes still work. There is no paging yet.
+- Every change rewrites the whole file, changes happen one at a time and every asset is held
+  in memory. `LIST` can page, but the handover between the servers can't. Once the data is
+  over the 10 MiB message limit, a `LIST` without a `limit` replies `TOO_LARGE`, and the
+  primary can't reconcile with a returning backup, although changes still work.
 - There is no limit on threads, so a flood of connections could exhaust a server. The idle
   timeout applies to each read, so a client sending one byte at a time could also hold a
   thread for a long time.
@@ -567,6 +576,6 @@ Other limitations:
 ## Further development
 
 The scaling steps above come first, especially a third server and a majority vote. Other
-ideas are a serial number to identify items, search on the servers, encryption with TLS, the shared secret supplied through an
+ideas are a serial number to identify items, encryption with TLS, the shared secret supplied through an
 environment variable, account roles including deleting accounts, and sending every
 machine's logs to one place.

@@ -376,6 +376,95 @@ class SystemTest(NodeTestCase):
         self.assertEqual(reply["code"], common.INTERNAL)
         self.assertEqual(list_assets()[0]["status"], common.IN_USE)
 
+    # ---- Searching and paging ----
+
+    def search(self, **options) -> dict:
+        return common.send_request({"action": "LIST", **options})
+
+    def add_examples(self) -> list:
+        """Register five assets, returning their IDs in the order they were stored."""
+        examples = (
+            make_asset("Dell laptop", category="IT Equipment", location="Site A"),
+            make_asset("HP printer", category="Printers", location="Site B", status=common.NOT_IN_USE),
+            make_asset("Dell monitor", category="IT Equipment", location="Site B"),
+            make_asset("Office chair", category="Furniture", location="Site A", status=common.NOT_IN_USE),
+            make_asset("Projector", category="AV", location="Dell Room"),
+        )
+        return [register(asset)["stored"]["asset_id"] for asset in examples]
+
+    def descriptions(self, reply: dict) -> list:
+        return [asset["description"] for asset in reply["assets"]]
+
+    def test_list_without_options_returns_everything_in_order(self):
+        ids = self.add_examples()
+
+        reply = self.search()
+
+        self.assertEqual([asset["asset_id"] for asset in reply["assets"]], ids)
+        self.assertEqual(reply["total"], 5)
+        self.assertEqual(reply["assets"], list(node.assets))
+
+    def test_the_query_is_found_in_any_field_ignoring_capitals(self):
+        ids = self.add_examples()
+
+        self.assertEqual(self.descriptions(self.search(query="dell")), ["Dell laptop", "Dell monitor", "Projector"])
+        self.assertEqual(self.descriptions(self.search(query="  PRINTERS ")), ["HP printer"])
+        self.assertEqual(self.descriptions(self.search(query="site b")), ["HP printer", "Dell monitor"])
+        self.assertEqual(self.descriptions(self.search(query=ids[3].lower())), ["Office chair"])
+        self.assertEqual(self.search(query="not in use")["total"], 2)
+        self.assertEqual(self.search(query="nothing like this")["assets"], [])
+
+    def test_the_status_filter_matches_exactly(self):
+        self.add_examples()
+
+        reply = self.search(status=common.NOT_IN_USE)
+
+        self.assertEqual(self.descriptions(reply), ["HP printer", "Office chair"])
+        self.assertEqual(reply["total"], 2)
+        self.assertEqual(self.search(status="not in use")["total"], 0)
+
+    def test_query_and_status_combine(self):
+        self.add_examples()
+
+        reply = self.search(query="site a", status=common.IN_USE)
+
+        self.assertEqual(self.descriptions(reply), ["Dell laptop"])
+
+    def test_offset_and_limit_page_through_the_matches(self):
+        self.add_examples()
+
+        pages = [self.search(offset=offset, limit=2) for offset in (0, 2, 4, 6)]
+
+        self.assertEqual([self.descriptions(page) for page in pages],
+                         [["Dell laptop", "HP printer"], ["Dell monitor", "Office chair"], ["Projector"], []])
+        self.assertEqual({page["total"] for page in pages}, {5})
+
+    def test_paging_applies_after_searching(self):
+        self.add_examples()
+
+        reply = self.search(query="dell", offset=1, limit=1)
+
+        self.assertEqual(self.descriptions(reply), ["Dell monitor"])
+        self.assertEqual(reply["total"], 3)
+
+    def test_invalid_search_options_are_rejected(self):
+        for options in ({"query": 7}, {"status": ["In Use"]}, {"query": "x" * (node.MAX_FIELD_LENGTH + 1)},
+                        {"offset": -1}, {"offset": "1"}, {"limit": 0}, {"limit": True}, {"limit": 2.5}):
+            with self.subTest(options):
+                self.assertEqual(self.search(**options)["code"], common.BAD_REQUEST)
+
+    def test_older_assets_missing_fields_can_still_be_searched(self):
+        node.assets.append({"asset_id": "AST-OLD", "description": "Old thing"})
+
+        self.assertEqual(self.search(query="old")["total"], 1)
+        self.assertEqual(self.search(query="site")["total"], 0)
+
+    def test_the_backup_can_search_too(self):
+        self.add_examples()
+        node.accepts_writes = False  # on standby, which still answers LIST
+
+        self.assertEqual(self.search(query="dell")["total"], 3)
+
     # ---- Editing an asset ----
 
     def edit(self, asset_id: str, expected_version: object = None, **changes) -> dict:
