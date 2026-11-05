@@ -43,9 +43,10 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
 | `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
-| `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed. |
+| `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
+| `demo.py` | Shows a failover step by step on a running system. |
 | `setup.py` | First-time setup, which creates the shared secret and the first web account, and a full reset with `--reset`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py` | The automated tests. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py` | The automated tests. |
 
 ## Running it on one machine
 
@@ -62,11 +63,16 @@ primary, the backup and the web interface, opens the web page, and stops them al
 press Ctrl+C. To create an account from the command line, or replace a lost password, run
 `python web.py --set-password`.
 
+If one of them stops, the others carry on and it is restarted 20 seconds later, the way a
+cluster manager such as Kubernetes restarts a failed server. One that fails as it starts,
+usually because the system is already running and its port is in use, stops everything
+instead.
+
 If you had a web password from before accounts were added, it keeps working as an account
 called `admin`.
 
-To stop one server on its own, which you need for the demo below, or to use the GUI, run
-each program in its own terminal instead:
+To see each program's log on its own, or to use the GUI, run each program in its own
+terminal instead:
 
 ```
 python server.py
@@ -147,7 +153,30 @@ setup again.
 
 ## Demo
 
-Start both servers and the GUI, and keep the server logs visible.
+The quickest way to show a failover is to start the system, then run this in a second
+terminal:
+
+```
+python demo.py
+```
+
+Keep the `start.py` window visible beside it, because the server logs show the same events
+from the servers' side. The demo pauses before each step, so you can explain it:
+
+1. It shows both servers' states, then adds an asset through the primary and checks the
+   backup already has a copy.
+2. It sends the primary a `STOP` request, which ends it abruptly, as if it had crashed.
+3. It adds another asset. The client waits while the backup misses 3 heartbeats and takes
+   over, which took about 8 seconds when tried, and the backup stores it with an `AST-B` ID.
+4. It waits for the primary to come back. `start.py` restarts it after 20 seconds. If you
+   started the servers in separate terminals, the demo asks you to run `server.py` again.
+   The primary merges the backup's changes, and the demo checks both assets are there.
+5. It deletes the two assets it added.
+
+It also works across machines, as long as `ASSET_SERVERS` is set where it runs.
+
+To show it by hand instead, start both servers and the GUI in separate terminals, and keep
+the server logs visible.
 
 1. Register an asset. The primary logs `Change N copied to the backup` and the backup
    logs `Applied change N from the primary`.
@@ -197,7 +226,7 @@ logins in a row, on any usernames, logins are refused for a minute.
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start test_setup test_config
+python -m unittest -v test_system test_web test_start test_setup test_config test_demo
 ```
 
 The tests start real servers on spare ports and use temporary files for data and accounts,
@@ -206,7 +235,7 @@ so yours aren't touched. They do use `secret.key`, and create it if it doesn't e
 part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and
 `backup.py` as separate programs and kills them partway through. `test_config.py` starts
 programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
-it can't listen on. Some tests make a save fail on purpose, so you will see logged errors and
+it can't listen on. `test_demo.py` runs the whole demo against real servers. Some tests make a save fail on purpose, so you will see logged errors and
 tracebacks in the output.
 
 ## Distributed systems concepts used
@@ -222,6 +251,7 @@ tracebacks in the output.
 | Total ordering | Every change has a sequence number, so a gap can be detected | `backup.py`: `apply_change` |
 | Failure detection | The backup pings the primary every second and treats 3 missed heartbeats as a failure | `backup.py`: `monitor_primary` |
 | Failover | The backup promotes itself and clients move to it automatically | `backup.py`: `monitor_primary`, `common.py`: `send_request` |
+| Automatic restart | A server that stops is restarted while the others carry on, as a cluster manager would | `start.py`: `check_programs` |
 | Recovery and reconciliation | A returning primary merges the backup's changes and takes back control | `server.py`: `catch_up_backup`, `merge_state` |
 | Conflict resolution | A delete wins, then the higher version, then the primary's copy | `server.py`: `merge_state` |
 | Idempotent requests | A retry has the same `request_id`, so it can't create a second asset | `node.py`: `register_asset` |
@@ -249,6 +279,7 @@ Requests from clients:
 | `{"action": "LIST"}` | `{"status": "OK", "assets": [...]}` |
 | `{"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use", "expected_version": 1}` | `{"status": "OK", "stored": {...}}` |
 | `{"action": "DELETE", "asset_id": "...", "expected_version": 1}` | `{"status": "OK", "deleted": "..."}` |
+| `{"action": "STOP"}` | `{"status": "OK"}`, then the server ends abruptly, as if it had crashed. Used by `demo.py` |
 
 `request_id` is a random value the client picks for each new registration. Sending the
 same one again returns the same asset. `expected_version` is the version of the asset
@@ -401,8 +432,11 @@ Other limitations:
   machine, mostly waiting for the 3 missed heartbeats. Clients also try the primary first
   on every request, which took about 2 more seconds each time. If both servers are down,
   clients show an error.
-- Exactly one primary and one backup are supported, and failed servers have to be restarted
-  by hand or by something like Kubernetes.
+- Exactly one primary and one backup are supported. `start.py` restarts a failed server, but
+  only on one machine. Across machines, failed servers have to be restarted by hand or by
+  something like Kubernetes.
+- Any program with `secret.key` can stop a server with `STOP`. That is no more access than it
+  already has, since it could also delete every asset.
 - If the backup was down when the primary took changes and the primary then fails, those
   changes are unavailable until the primary returns. If the primary's disk were also
   destroyed, they would be lost.
