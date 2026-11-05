@@ -205,6 +205,29 @@ def process_request(request: dict) -> dict:
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
+def is_valid_peer_asset(record: object) -> bool:
+    """Check a record from the other server before it is stored.
+
+    Records saved before tagging was added have no tags, so tags and the date are
+    optional, but they must have the right type if present.
+    """
+    if not isinstance(record, dict):
+        return False
+
+    try:
+        for field in REQUIRED_FIELDS:
+            check_text(record.get(field), field)
+    except ValueError:
+        return False
+
+    tags = record.get("tags", [])
+    return (
+        isinstance(tags, list)
+        and all(isinstance(tag, str) for tag in tags)
+        and isinstance(record.get("date_registered", ""), str)
+    )
+
+
 def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
     """Add the other server's assets to this one's, returning how many changed.
 
@@ -213,6 +236,8 @@ def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
     server accepted a different asset with the same ID while they could not reach
     each other. Then the backup gives way to the primary (`prefer_peer` is True on
     the backup), so both end up with the same records, possibly in a different order.
+
+    The caller must pass only valid records (see is_valid_peer_asset).
     """
     with assets_lock:
         # A dict keeps its order and makes each asset quick to find by ID.
@@ -239,6 +264,26 @@ def merge_assets(peer_assets: list, prefer_peer: bool) -> int:
         return changed
 
 
+def sync_once(peer: tuple, prefer_peer: bool) -> tuple:
+    """Copy assets from the other server once, returning how many records changed
+    and how many invalid ones were skipped.
+
+    An ERROR reply raises ValueError rather than counting as an empty list, so a
+    sync that is failing does not look like there is simply nothing to copy. One bad
+    record is skipped, so that it does not stop all the others being copied.
+    """
+    reply = request_from(peer, {"action": "LIST"})
+    if reply.get("status") != "OK":
+        raise ValueError(f"It replied with an error: {reply.get('detail')}")
+
+    records = reply.get("assets")
+    if not isinstance(records, list):
+        raise ValueError("Its reply has no list of assets")
+
+    valid_records = [record for record in records if is_valid_peer_asset(record)]
+    return merge_assets(valid_records, prefer_peer), len(records) - len(valid_records)
+
+
 def sync_with_peer(peer: tuple, prefer_peer: bool) -> None:
     """Keep copying assets from the other server. Runs on its own thread forever.
 
@@ -249,28 +294,36 @@ def sync_with_peer(peer: tuple, prefer_peer: bool) -> None:
     The trade-off is that the two can differ for a couple of seconds. This is called
     eventual consistency. An asset is safe in the file of the server that accepted
     it, and reaches the other server on the next sync after both are running.
+
+    This repeats every couple of seconds, so a problem is only logged when it first
+    appears or changes, not on every attempt.
     """
-    peer_was_reachable = True
+    last_problem = None
+    last_skipped = 0
 
     while True:
+        problem = None
         try:
-            reply = request_from(peer, {"action": "LIST"})
-            changed = merge_assets(reply.get("assets", []), prefer_peer)
+            changed, skipped = sync_once(peer, prefer_peer)
             if changed:
                 logger.info("Copied %s asset(s) from the other server", changed)
-            if not peer_was_reachable:
-                logger.info("The other server is back")
-            peer_was_reachable = True
-        except OSError as exc:
-            # Usually the other server being unreachable, but a failed save in
-            # merge_assets() is also an OSError, so it is reported here too.
-            # Only report the change, not every failed attempt.
-            if peer_was_reachable:
-                logger.warning("Cannot reach the other server: %s", exc)
-            peer_was_reachable = False
-        except Exception:
-            # Anything else, such as an invalid reply, must not stop the syncing.
-            logger.exception("Could not sync with the other server")
+            if skipped and skipped != last_skipped:
+                logger.warning("Skipped %s invalid record(s) from the other server", skipped)
+            last_skipped = skipped
+            if last_problem:
+                logger.info("Syncing with the other server again")
+        except Exception as exc:
+            # Nothing may stop the syncing. An OSError means the other server is
+            # unreachable or a save failed, and a ValueError means its reply was
+            # unusable. Anything else is a bug, so its traceback is logged too.
+            problem = str(exc)
+            if problem != last_problem:
+                logger.warning(
+                    "Could not sync with the other server: %s",
+                    problem,
+                    exc_info=not isinstance(exc, (OSError, ValueError)),
+                )
+        last_problem = problem
 
         time.sleep(SYNC_INTERVAL_SECONDS)
 

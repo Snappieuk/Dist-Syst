@@ -65,6 +65,30 @@ def unused_address() -> tuple:
         return spare.getsockname()
 
 
+def start_fake_server(test: unittest.TestCase, reply) -> tuple:
+    """Run a server that gives every request the same reply, and return its address.
+
+    A reply of None reads the request and then drops the connection, as if the
+    reply were lost on its way back.
+    """
+    listener = server.create_listening_socket("127.0.0.1", 0)
+    test.addCleanup(listener.close)
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return  # the test has finished and closed the listener
+            with conn:
+                common.receive_message(conn)
+                if reply is not None:
+                    common.send_message(conn, reply)
+
+    threading.Thread(target=serve, daemon=True).start()
+    return listener.getsockname()
+
+
 class SystemTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -292,6 +316,21 @@ class SystemTest(unittest.TestCase):
         with self.assertRaises(OSError):
             server.merge_assets([make_asset()], prefer_peer=False)
         self.assertEqual(server.assets, [])
+
+    def test_sync_skips_invalid_records_and_copies_the_rest(self):
+        records = [make_asset("GOOD"), {"no_id": 1}, {"asset_id": "JUNK"}, [1], make_asset("BAD", tags=7)]
+        peer = start_fake_server(self, {"status": "OK", "assets": records})
+
+        self.assertEqual(server.sync_once(peer, prefer_peer=False), (1, 4))
+        self.assertEqual(list_ids(), ["GOOD"])
+
+    def test_sync_treats_an_error_reply_as_a_failure(self):
+        register(make_asset())
+        peer = start_fake_server(self, {"status": "ERROR", "code": common.TOO_LARGE, "detail": "too large"})
+
+        with self.assertRaisesRegex(ValueError, "too large"):
+            server.sync_once(peer, prefer_peer=True)
+        self.assertEqual(list_ids(), ["AST-1"])
 
     # ---- Non-functional requirement: concurrency ----
 
