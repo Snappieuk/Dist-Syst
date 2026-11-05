@@ -1,8 +1,13 @@
 {
   "servers": {
-    "primary": {"host": "127.0.0.1", "port": 65432}
+    "primary": {
+      "host": "127.0.0.1",
+      "port": 65432
+    }
   },
   "max_message_bytes": 1048576,
+  "client_timeout_seconds": 5,
+  "server_timeout_seconds": 10,
   "data_files": {
     "primary": "assets_primary.json"
   }

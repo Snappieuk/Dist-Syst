@@ -111,6 +111,9 @@ def send_request(request: dict, config: dict = None) -> dict:
     config = config or load_config()
     server = config["servers"]["primary"]
     message = {**request, "protocol_version": PROTOCOL_VERSION}
-    with socket.create_connection((server["host"], server["port"])) as sock:
+    # The timeout applies to connecting and to every read, so a stalled server
+    # cannot leave the client waiting forever.
+    timeout = config["client_timeout_seconds"]
+    with socket.create_connection((server["host"], server["port"]), timeout=timeout) as sock:
         send_message(sock, message, config["max_message_bytes"])
         return receive_message(sock, config["max_message_bytes"])

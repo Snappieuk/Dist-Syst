@@ -31,6 +31,9 @@ def make_config(folder: str) -> dict:
         config = json.load(file)
     for role in config["servers"]:
         config["servers"][role] = {"host": "127.0.0.1", "port": spare_port()}
+    # Short timeouts keep the tests quick.
+    config["server_timeout_seconds"] = 1
+    config["client_timeout_seconds"] = 2
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as file:
         json.dump(config, file)
@@ -135,6 +138,66 @@ class ProtocolTest(ServerTestCase):
         reply = self.request({"action": "REGISTER", "asset": "laptop"})
         self.assertEqual(reply["code"], common.BAD_REQUEST)
         self.assertEqual(reply["context"], {"field": "asset"})
+
+
+
+class ConcurrencyTest(ServerTestCase):
+    """NFR05, NFR07, NFR08, NFR20."""
+
+    def test_many_clients_at_once_complete_without_errors_or_lost_writes(self):
+        replies = []
+        errors = []
+
+        def register(n: int) -> None:
+            try:
+                replies.append(self.request({"action": "REGISTER", "asset": {"description": f"Asset {n}"}}))
+            except Exception as exc:  # any failure must fail the test, not vanish in a thread
+                errors.append(exc)
+
+        threads = [threading.Thread(target=register, args=(n,)) for n in range(50)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual([reply["status"] for reply in replies], ["OK"] * 50)
+        stored = sorted(asset["description"] for asset in self.request({"action": "LIST"})["assets"])
+        self.assertEqual(stored, sorted(f"Asset {n}" for n in range(50)))
+
+    def test_an_idle_client_does_not_block_others_and_is_disconnected(self):
+        idle = socket.create_connection(self.server.address)
+        self.addCleanup(idle.close)
+        started = time.monotonic()
+        self.assertEqual(self.request({"action": "LIST"})["status"], "OK")
+        self.assertLess(time.monotonic() - started, 0.5)  # not held up by the idle client
+
+        idle.settimeout(5)
+        self.assertEqual(idle.recv(1), b"")  # the server closed it after its timeout
+
+    def test_a_client_vanishing_mid_message_does_not_affect_the_server(self):
+        with socket.create_connection(self.server.address) as sock:
+            sock.sendall(b"\x00\x00")  # half a header, then gone
+        self.assertEqual(self.request({"action": "LIST"})["status"], "OK")
+
+    def test_an_exception_while_processing_affects_only_that_request(self):
+        original = self.server.process
+        self.server.process = lambda request: 1 / 0
+        try:
+            self.assertEqual(self.request({"action": "LIST"})["code"], common.INTERNAL)
+        finally:
+            self.server.process = original
+        self.assertEqual(self.request({"action": "LIST"})["status"], "OK")
+
+    def test_a_client_does_not_wait_forever_for_a_silent_server(self):
+        with socket.socket() as silent:
+            silent.bind(("127.0.0.1", 0))
+            silent.listen()
+            config = dict(self.config, servers={"primary": {"host": "127.0.0.1", "port": silent.getsockname()[1]}})
+            started = time.monotonic()
+            with self.assertRaises(OSError):
+                common.send_request({"action": "LIST"}, config)
+            self.assertLess(time.monotonic() - started, config["client_timeout_seconds"] + 1)
 
 
 if __name__ == "__main__":

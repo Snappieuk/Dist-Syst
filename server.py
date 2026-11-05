@@ -11,8 +11,9 @@ Every request must include "protocol_version". Every reply has "status": "OK"
 or "status": "ERROR" with a stable "code", a "message" and a "context".
 """
 
+import logging      # records errors and events with timestamps
 import socket       # provides the networking building blocks (sockets)
-import threading    # lets tests stop the server cleanly
+import threading    # one thread per client, and a lock for the shared data
 
 import common
 from common import (
@@ -30,6 +31,8 @@ from common import (
 
 SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
 
+logger = logging.getLogger("asset_server")
+
 
 class AssetServer:
     """One asset server: its data and the rules for changing it."""
@@ -39,7 +42,13 @@ class AssetServer:
         self.role = role
         self.address = (config["servers"][role]["host"], config["servers"][role]["port"])
         self.max_bytes = config["max_message_bytes"]
+        self.timeout = config["server_timeout_seconds"]
         self.assets = []  # registered assets, as a list of dicts
+
+        # Every client has its own thread, so two requests can arrive at the same
+        # moment. The lock makes each read or change of the data one indivisible
+        # step, so they cannot interfere with each other.
+        self.lock = threading.Lock()
 
     # ---- Requests -------------------------------------------------------------
 
@@ -59,10 +68,12 @@ class AssetServer:
             asset = request.get("asset")
             if not isinstance(asset, dict):
                 return error_reply(BAD_REQUEST, "'asset' must be an object", field="asset")
-            self.assets.append(asset)
+            with self.lock:
+                self.assets.append(asset)
             return {"status": "OK", "stored": asset}
         if action == "LIST":
-            return {"status": "OK", "assets": list(self.assets)}
+            with self.lock:
+                return {"status": "OK", "assets": list(self.assets)}
         return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
 
     # ---- Networking -----------------------------------------------------------
@@ -79,17 +90,26 @@ class AssetServer:
         try:
             return self.process(request)
         except Exception:
+            logger.exception("Could not complete a %s request", request.get("action"))
             return error_reply(INTERNAL, "The server could not complete the request")
 
-    def handle_connection(self, conn: socket.socket) -> None:
-        """Serve one connection: one request, one reply."""
-        with conn:
-            try:
+    def handle_connection(self, conn: socket.socket, addr: tuple = None) -> None:
+        """Serve one connection: one request, one reply. Runs on the client's own thread.
+
+        Nothing one client does may affect the server or other clients, so every
+        exception stops here. The timeout means an idle or stalled client is
+        disconnected instead of holding its thread forever.
+        """
+        try:
+            with conn:
+                conn.settimeout(self.timeout)
                 reply = self.read_and_process(conn)
                 send_message(conn, reply, self.max_bytes)
-            except OSError as exc:
-                # The client went away part-way through. There is nobody to reply to.
-                print(f"Lost connection to a client: {exc}")
+        except OSError as exc:
+            # The client went away or went quiet. There is nobody to reply to.
+            logger.warning("Lost connection to %s: %s", addr, exc)
+        except Exception:
+            logger.exception("Unexpected error serving %s", addr)
 
     def open_socket(self) -> socket.socket:
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -103,16 +123,18 @@ class AssetServer:
         stop = stop or threading.Event()
         with self.open_socket() as server_sock:
             server_sock.settimeout(0.5)  # wake up regularly to check `stop`
-            print(f"Asset Management {self.role} server listening on {self.address[0]}:{self.address[1]}")
+            logger.info("Asset Management %s server listening on %s:%s", self.role, *self.address)
             while not stop.is_set():
                 try:
-                    conn, _addr = server_sock.accept()
+                    conn, addr = server_sock.accept()
                 except socket.timeout:
                     continue
-                self.handle_connection(conn)
+                # Each client gets its own thread, so a slow client doesn't hold up the others.
+                threading.Thread(target=self.handle_connection, args=(conn, addr), daemon=True).start()
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     server = AssetServer(common.load_config())
     try:
         server.serve()
