@@ -11,7 +11,7 @@ terminal), Windows closes the console the instant the script finishes. The pause
 the end keeps the window open until you press Enter.
 """
 
-from common import STATUSES, new_request_id, send_request
+from common import STATUSES, log_in_from_prompt, new_request_id, send_request
 
 
 def prompt_for_status() -> str:
@@ -37,9 +37,12 @@ def prompt_for_asset() -> dict:
 
 
 def main(config: dict = None) -> None:
+    token = log_in_from_prompt(config)
+    if token is None:
+        return
     new_asset = prompt_for_asset()
     try:
-        request = {"action": "REGISTER", "request_id": new_request_id(), "asset": new_asset}
+        request = {"action": "REGISTER", "request_id": new_request_id(), "asset": new_asset, "token": token}
         response = send_request(request, config)
     except (OSError, ValueError) as exc:
         print(f"Could not register the asset: {exc}")

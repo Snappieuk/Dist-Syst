@@ -4,14 +4,16 @@ Asset Management System server.
     python server.py
 
 Understands these actions:
+    {"action": "LOGIN", "username": "...", "password": "..."}  -> a session token
     {"action": "REGISTER", "request_id": "...", "asset": {...}}
     {"action": "LIST", "query": "...", "filters": {"location": "..."}, "page": 1, "page_size": 20}
     {"action": "EDIT", "request_id": "...", "asset_id": "...", "expected_version": 1,
      "changes": {"description": "...", "category": "...", "location": "...", "status": "..."}}
     {"action": "DELETE", "request_id": "...", "asset_id": "...", "expected_version": 1}
 
-Every request must include "protocol_version", and every change must include a
-unique "request_id". Every reply has "status": "OK" or "status": "ERROR" with a
+Every request must include "protocol_version", every request except LOGIN must
+include the session "token", and every change must include a unique "request_id".
+Only users with the admin role may DELETE. Every reply has "status": "OK" or "status": "ERROR" with a
 stable "code", a "message" and a "context".
 """
 
@@ -24,17 +26,20 @@ import socket       # provides the networking building blocks (sockets)
 import threading    # one thread per client, and a lock for the shared data
 
 import common
+import users
 from common import (
     ASSET_FIELDS,
     BAD_REQUEST,
     CONFLICT,
     DUPLICATE_ASSET,
     EDITABLE_FIELDS,
+    FORBIDDEN,
     INTERNAL,
     NOT_FOUND,
     PROTOCOL_VERSION,
     STATUSES,
     TOO_LARGE,
+    UNAUTHENTICATED,
     UNKNOWN_ACTION,
     UNSUPPORTED_VERSION,
     MessageTooLargeError,
@@ -61,6 +66,10 @@ MAX_PAGE_SIZE = 100
 
 # Actions that change the data, and so must carry a request_id.
 CHANGE_ACTIONS = ("REGISTER", "EDIT", "DELETE")
+
+# The roles allowed to perform each action. Anything not listed is open to every
+# logged-in user.
+ALLOWED_ROLES = {"DELETE": ("admin",)}
 
 logger = logging.getLogger("asset_server")
 
@@ -153,6 +162,8 @@ class AssetServer:
         self.max_bytes = config["max_message_bytes"]
         self.timeout = config["server_timeout_seconds"]
         self.data_file = common.config_path(config, config["data_files"][role])
+        self.session_seconds = config["session_seconds"]
+        self.secret = users.read_secret(config)  # signs and checks session tokens
 
         # Every client has its own thread, so two requests can arrive at the same
         # moment. The lock makes each read or change of the data one indivisible
@@ -228,17 +239,80 @@ class AssetServer:
             "DELETE": self.delete,
             "LIST": self.list_assets,
         }
-        handler = handlers.get(action)
-        if handler is None:
+        if action != "LOGIN" and action not in handlers:
             return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
         try:
+            if action == "LOGIN":
+                return self.login(request)
+            user = self.authorise(request)
+            handler = handlers[action]
             if action in CHANGE_ACTIONS:
-                return self.change(request, handler)
-            return handler(request)
+                return self.change(request, handler, user)
+            return handler(request, user)
         except InvalidRequest as exc:
             return error_reply(exc.code, str(exc), **exc.context)
 
-    def change(self, request: dict, handler) -> dict:
+    # ---- Accounts -------------------------------------------------------------
+
+    def login(self, request: dict) -> dict:
+        """Check a username and password, and issue a time-limited session token.
+
+        An unknown username gets the same reply, after the same slow hashing, as a wrong
+        password, so neither the reply nor its timing reveals which usernames exist.
+        """
+        username = request.get("username")
+        password = request.get("password")
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise InvalidRequest("username and password must be text", field="username")
+        username = username.strip().lower()
+        record = users.load_users(self.config).get(username)
+        if record is None:
+            users.hash_password(password)  # same work as a real check
+            matched = False
+        else:
+            matched = users.password_matches(record, password)
+        if not matched:
+            logger.warning("Failed login for %r", username)
+            raise InvalidRequest("Wrong username or password", code=UNAUTHENTICATED)
+        token, expires = users.issue_token(username, self.secret, self.session_seconds)
+        logger.info("%s logged in", username)
+        return {
+            "status": "OK",
+            "token": token,
+            "username": username,
+            "role": record["role"],
+            "expires_at": datetime.datetime.fromtimestamp(expires, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+    def authorise(self, request: dict) -> dict:
+        """Return the user making a request, or raise InvalidRequest.
+
+        The token proves who the user is; their role is looked up now rather than read
+        from the token, so changing or removing an account takes effect at once.
+        """
+        try:
+            username = users.read_token(request.get("token"), self.secret)
+        except users.TokenError as exc:
+            raise InvalidRequest(str(exc), code=UNAUTHENTICATED) from exc
+        record = users.load_users(self.config).get(username)
+        if record is None:
+            raise InvalidRequest("This account no longer exists. Please log in again.", code=UNAUTHENTICATED)
+        user = {"username": username, "role": record["role"]}
+
+        allowed = ALLOWED_ROLES.get(request.get("action"))
+        if allowed and user["role"] not in allowed:
+            logger.warning("%s (%s) was refused %s", username, user["role"], request.get("action"))
+            raise InvalidRequest(
+                f"Only {' or '.join(allowed)} users may {request.get('action')}",
+                code=FORBIDDEN,
+                role=user["role"],
+                allowed_roles=list(allowed),
+            )
+        return user
+
+    # ---- Changes --------------------------------------------------------------
+
+    def change(self, request: dict, handler, user: dict) -> dict:
         """Apply a change exactly once, however many times the request is sent.
 
         The handler makes the change in memory and returns its reply and a way to undo
@@ -255,7 +329,7 @@ class AssetServer:
                     raise InvalidRequest("This request_id was already used for a different request", field="request_id")
                 return previous["reply"]
 
-            reply, undo = handler(request)
+            reply, undo = handler(request, user)
 
             def undo_all() -> None:
                 undo()
@@ -289,7 +363,7 @@ class AssetServer:
             )
         return asset
 
-    def register(self, request: dict) -> tuple:
+    def register(self, request: dict, user: dict) -> tuple:
         """Store a new asset, stamped with the server's time. The caller holds the lock."""
         asset = validate_asset(request.get("asset"))
         # IDs are compared ignoring capitals, so AST-1 and ast-1 can't both exist. A
@@ -305,10 +379,10 @@ class AssetServer:
         now = utc_now()
         asset.update(version=1, created_at=now, updated_at=now)
         self.assets[asset["asset_id"]] = asset
-        logger.info("Registered %s", asset["asset_id"])
+        logger.info("%s registered %s", user["username"], asset["asset_id"])
         return {"status": "OK", "stored": asset}, lambda: self.assets.pop(asset["asset_id"])
 
-    def edit(self, request: dict) -> tuple:
+    def edit(self, request: dict, user: dict) -> tuple:
         """Change some of an asset's description, category, location and status.
         The caller holds the lock."""
         changes = request.get("changes")
@@ -328,21 +402,21 @@ class AssetServer:
         # undoing is just putting the old record back.
         updated = dict(previous, **clean, version=previous["version"] + 1, updated_at=utc_now())
         self.assets[updated["asset_id"]] = updated
-        logger.info("Edited %s: %s", updated["asset_id"], ", ".join(clean))
+        logger.info("%s edited %s: %s", user["username"], updated["asset_id"], ", ".join(clean))
         return {"status": "OK", "stored": updated}, lambda: self.assets.__setitem__(updated["asset_id"], previous)
 
-    def delete(self, request: dict) -> tuple:
+    def delete(self, request: dict, user: dict) -> tuple:
         """Soft-delete an asset: the record is kept, marked deleted with the server's
         time, and left out of normal results. The caller holds the lock."""
         previous = self.current_asset(request.get("asset_id"), request.get("expected_version"))
         now = utc_now()
         deleted = dict(previous, deleted=True, deleted_at=now, updated_at=now, version=previous["version"] + 1)
         self.assets[deleted["asset_id"]] = deleted
-        logger.info("Deleted %s", deleted["asset_id"])
+        logger.info("%s deleted %s", user["username"], deleted["asset_id"])
         reply = {"status": "OK", "deleted": deleted["asset_id"], "stored": deleted}
         return reply, lambda: self.assets.__setitem__(deleted["asset_id"], previous)
 
-    def list_assets(self, request: dict) -> dict:
+    def list_assets(self, request: dict, user: dict) -> dict:
         """Return the assets that have not been deleted and match the search, one page
         at a time if a page_size is given.
 
@@ -456,6 +530,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         server = AssetServer(common.load_config())
+    except FileNotFoundError as exc:
+        logger.error("Could not start the server: %s. Create an account first: python users.py add admin admin", exc)
+        return
     except (OSError, ValueError) as exc:
         logger.error("Could not start the server: %s", exc)
         return

@@ -10,5 +10,8 @@
   "server_timeout_seconds": 10,
   "data_files": {
     "primary": "assets_primary.json"
-  }
+  },
+  "users_file": "users.json",
+  "secret_file": "secret.key",
+  "session_seconds": 3600
 }

@@ -9,6 +9,7 @@ This module is the single place that defines the wire format, the protocol
 version, the error codes and how settings are loaded from config.json.
 """
 
+import getpass   # asks for a password without showing it
 import json      # turns Python dicts into JSON text and back
 import os        # finds config.json next to this file
 import socket    # the networking building blocks (sockets)
@@ -30,6 +31,8 @@ INTERNAL = "INTERNAL"                          # the server failed; the request 
 DUPLICATE_ASSET = "DUPLICATE_ASSET"            # an asset with that asset_id already exists
 NOT_FOUND = "NOT_FOUND"                        # no current asset has that asset_id
 CONFLICT = "CONFLICT"                          # the asset changed since the client read it
+UNAUTHENTICATED = "UNAUTHENTICATED"            # wrong login, or a missing, invalid or expired token
+FORBIDDEN = "FORBIDDEN"                        # the user's role does not allow this action
 
 # The fields a client supplies for an asset, and the only statuses allowed.
 ASSET_FIELDS = ("asset_id", "description", "category", "location", "status")
@@ -121,6 +124,28 @@ def new_request_id() -> str:
     change twice.
     """
     return uuid.uuid4().hex
+
+
+def login(username: str, password: str, config: dict = None) -> dict:
+    """Log in, returning the server's reply. On success it holds "token", which must be
+    sent with every later request, and the user's "role"."""
+    return send_request({"action": "LOGIN", "username": username, "password": password}, config)
+
+
+def log_in_from_prompt(config: dict = None) -> str:
+    """Ask for a username and password at the command line and log in. Returns the
+    session token, or None after printing why the login failed."""
+    username = input("Username: ").strip()
+    password = getpass.getpass("Password: ")
+    try:
+        reply = login(username, password, config)
+    except (OSError, ValueError) as exc:
+        print(f"Could not reach the server: {exc}")
+        return None
+    if reply.get("status") != "OK":
+        print(f"Login failed: {reply.get('message')}")
+        return None
+    return reply["token"]
 
 
 def send_request(request: dict, config: dict = None) -> dict:

@@ -15,7 +15,7 @@ the end keeps the window open until you press Enter.
 
 import sys
 
-from common import send_request
+from common import log_in_from_prompt, send_request
 
 
 def search_from_arguments(arguments: list) -> dict:
@@ -45,8 +45,11 @@ def format_asset(asset: dict) -> str:
 
 def main(config: dict = None, arguments: list = None) -> None:
     search = search_from_arguments(sys.argv[1:] if arguments is None else arguments)
+    token = log_in_from_prompt(config)
+    if token is None:
+        return
     try:
-        response = send_request({"action": "LIST", **search}, config)
+        response = send_request({"action": "LIST", "token": token, **search}, config)
     except (OSError, ValueError) as exc:
         print(f"Could not retrieve the asset list: {exc}")
         return

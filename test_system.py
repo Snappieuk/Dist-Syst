@@ -23,6 +23,10 @@ import common
 import receive
 import send
 import server
+import users
+
+ADMIN_PASSWORD = "admin-password"
+USER_PASSWORD = "alice-password"
 
 
 def spare_port() -> int:
@@ -66,7 +70,16 @@ class ServerTestCase(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.folder = temp.name
         self.config = make_config(self.folder)
+        # Few hash rounds keep the tests quick; real accounts use users.HASH_ITERATIONS.
+        users.add_user(self.config, "admin", ADMIN_PASSWORD, "admin", iterations=1000)
+        users.add_user(self.config, "alice", USER_PASSWORD, "user", iterations=1000)
         self.server = self.start_server("primary")
+        self.token = self.log_in("admin", ADMIN_PASSWORD)
+
+    def log_in(self, username: str, password: str) -> str:
+        reply = common.login(username, password, self.config)
+        self.assertEqual(reply["status"], "OK", reply)
+        return reply["token"]
 
     def start_server(self, role: str) -> server.AssetServer:
         node = server.AssetServer(self.config, role)
@@ -89,6 +102,9 @@ class ServerTestCase(unittest.TestCase):
         self.fail(f"Server at {address} never started")
 
     def request(self, request: dict) -> dict:
+        """Send a request as the admin, unless it names its own token."""
+        if "token" not in request and request.get("action") != "LOGIN":
+            request = {**request, "token": self.token}
         return common.send_request(request, self.config)
 
     def register(self, asset: dict, request_id: str = None) -> dict:
@@ -114,6 +130,11 @@ class ServerTestCase(unittest.TestCase):
 
     def listed(self) -> list:
         return self.request({"action": "LIST"})["assets"]
+
+    def run_query_client(self, arguments: list) -> None:
+        """Run receive.py, logging in as alice."""
+        with mock.patch("builtins.input", return_value="alice"), mock.patch("getpass.getpass", return_value=USER_PASSWORD):
+            receive.main(self.config, arguments)
 
     def raw_exchange(self, payload: bytes) -> dict:
         """Send raw bytes to the primary and return its decoded reply."""
@@ -152,7 +173,7 @@ class ProtocolTest(ServerTestCase):
         self.assertEqual(self.raw_exchange(self.frame(body))["code"], common.UNSUPPORTED_VERSION)
 
     def test_messages_are_utf8_json_with_a_length_prefix(self):
-        body = json.dumps({"action": "LIST", "protocol_version": 1}).encode("utf-8")
+        body = json.dumps({"action": "LIST", "protocol_version": 1, "token": self.token}).encode("utf-8")
         reply = self.raw_exchange(self.frame(body))
         self.assertEqual((reply["status"], reply["assets"]), ("OK", []))
 
@@ -259,7 +280,7 @@ class AssetDataTest(ServerTestCase):
             server.AssetServer(self.config)
 
     def test_the_registration_client_prompts_for_each_field_and_registers(self):
-        answers = iter(["AST-0009", "Projector", "AV", "Room 2", "3", "2"])
+        answers = iter(["alice", "AST-0009", "Projector", "AV", "Room 2", "3", "2"])
         prompts = []
 
         def fake_input(prompt: str) -> str:
@@ -267,9 +288,10 @@ class AssetDataTest(ServerTestCase):
             return next(answers)
 
         output = io.StringIO()
-        with mock.patch("builtins.input", fake_input), contextlib.redirect_stdout(output):
+        with mock.patch("builtins.input", fake_input), mock.patch("getpass.getpass", return_value=USER_PASSWORD), \
+                contextlib.redirect_stdout(output):
             send.main(self.config)
-        for word in ("Asset ID", "Description", "Category", "Location", "Status"):
+        for word in ("Username", "Asset ID", "Description", "Category", "Location", "Status"):
             self.assertTrue(any(word in prompt for prompt in prompts), word)
         self.assertIn("Registered AST-0009", output.getvalue())
         self.assertIn("Please type a number", output.getvalue())  # "3" was not a valid choice
@@ -278,7 +300,7 @@ class AssetDataTest(ServerTestCase):
     def test_the_query_client_says_when_there_are_no_assets(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main(self.config, [])
+            self.run_query_client([])
         self.assertIn("No assets registered yet.", output.getvalue())
 
     def test_the_query_client_shows_every_asset(self):
@@ -286,7 +308,7 @@ class AssetDataTest(ServerTestCase):
         self.register(make_asset("AST-0002"))
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main(self.config, [])
+            self.run_query_client([])
         self.assertIn("2 asset(s) registered", output.getvalue())
         self.assertIn("AST-0002 | Laptop AST-0002 | IT Equipment | Site A | In Use", output.getvalue())
 
@@ -407,14 +429,101 @@ class SearchTest(ServerTestCase):
     def test_the_query_client_can_search(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main(self.config, ["location=site", "b"])
+            self.run_query_client(["location=site", "b"])
         self.assertIn("2 asset(s) found", output.getvalue())
         self.assertNotIn("AST-0001", output.getvalue())
 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main(self.config, ["tablet"])
+            self.run_query_client(["tablet"])
         self.assertIn("No assets match that search.", output.getvalue())
+
+
+class AccountTest(ServerTestCase):
+    """FR09, FR10."""
+
+    def test_only_salted_password_hashes_are_stored(self):
+        with open(os.path.join(self.folder, "users.json"), encoding="utf-8") as file:
+            text = file.read()
+        self.assertNotIn(ADMIN_PASSWORD, text)
+        record = json.loads(text)["admin"]
+        self.assertEqual(set(record), {"salt", "iterations", "hash", "role"})
+        same_password_twice = users.hash_password("same-password"), users.hash_password("same-password")
+        self.assertNotEqual(same_password_twice[0]["hash"], same_password_twice[1]["hash"])
+
+    def test_a_login_issues_a_time_limited_token_and_the_role(self):
+        reply = common.login("Alice", USER_PASSWORD, self.config)
+        self.assertEqual((reply["status"], reply["username"], reply["role"]), ("OK", "alice", "user"))
+        self.assertRegex(reply["expires_at"], r"Z$")
+        self.assertEqual(users.read_token(reply["token"], self.server.secret), "alice")
+
+    def test_a_wrong_password_and_an_unknown_user_get_the_same_error(self):
+        wrong = common.login("alice", "not-her-password", self.config)
+        unknown = common.login("nobody", "whatever-123", self.config)
+        self.assertEqual(wrong["code"], common.UNAUTHENTICATED)
+        self.assertEqual(wrong["message"], unknown["message"])
+        self.assertNotIn("token", wrong)
+
+    def test_every_action_except_login_needs_a_token(self):
+        for action in ("LIST", "REGISTER", "EDIT", "DELETE"):
+            reply = common.send_request({"action": action, "request_id": "x"}, self.config)
+            self.assertEqual(reply["code"], common.UNAUTHENTICATED, action)
+
+    def test_a_forged_or_altered_token_is_refused(self):
+        other_key = b"not-the-servers-key"
+        forged, _ = users.issue_token("admin", other_key, 3600)
+        self.assertEqual(self.request({"action": "LIST", "token": forged})["code"], common.UNAUTHENTICATED)
+        body, signature = self.token.split(".")
+        altered = body[:-1] + ("A" if body[-1] != "A" else "B") + "." + signature
+        self.assertEqual(self.request({"action": "LIST", "token": altered})["code"], common.UNAUTHENTICATED)
+
+    def test_an_expired_token_is_refused(self):
+        expired, _ = users.issue_token("admin", self.server.secret, -1)
+        reply = self.request({"action": "LIST", "token": expired})
+        self.assertEqual(reply["code"], common.UNAUTHENTICATED)
+        self.assertIn("expired", reply["message"])
+
+    def test_only_an_administrator_can_delete(self):
+        self.register(make_asset())
+        alice = self.log_in("alice", USER_PASSWORD)
+        reply = self.request({
+            "action": "DELETE", "request_id": "r", "asset_id": "AST-0001", "expected_version": 1, "token": alice,
+        })
+        self.assertEqual(reply["code"], common.FORBIDDEN)
+        self.assertEqual(reply["context"]["allowed_roles"], ["admin"])
+        self.assertEqual(len(self.listed()), 1)
+        self.assertEqual(self.delete("AST-0001", 1)["status"], "OK")  # as admin
+
+    def test_ordinary_users_can_register_list_search_and_edit(self):
+        alice = self.log_in("alice", USER_PASSWORD)
+        reply = self.request({"action": "REGISTER", "request_id": "a1", "asset": make_asset(), "token": alice})
+        self.assertEqual(reply["status"], "OK")
+        reply = self.request({
+            "action": "EDIT", "request_id": "a2", "asset_id": "AST-0001", "expected_version": 1,
+            "changes": {"location": "Site B"}, "token": alice,
+        })
+        self.assertEqual(reply["status"], "OK")
+        reply = self.request({"action": "LIST", "query": "site b", "token": alice})
+        self.assertEqual(reply["total"], 1)
+
+    def test_a_role_change_or_removed_account_takes_effect_at_once(self):
+        alice = self.log_in("alice", USER_PASSWORD)
+        users.add_user(self.config, "alice", USER_PASSWORD, "admin", iterations=1000)
+        self.register(make_asset())
+        reply = self.request({
+            "action": "DELETE", "request_id": "r", "asset_id": "AST-0001", "expected_version": 1, "token": alice,
+        })
+        self.assertEqual(reply["status"], "OK")
+
+        accounts = users.load_users(self.config)
+        del accounts["alice"]
+        users.write_private_file(os.path.join(self.folder, "users.json"), json.dumps(accounts))
+        self.assertEqual(self.request({"action": "LIST", "token": alice})["code"], common.UNAUTHENTICATED)
+
+    def test_unacceptable_accounts_are_refused(self):
+        for username, password, role in (("bad name", "long-enough", "user"), ("bob", "short", "user"), ("bob", "long-enough", "boss")):
+            with self.assertRaises(ValueError):
+                users.add_user(self.config, username, password, role)
 
 
 class ChangeTest(ServerTestCase):
@@ -524,7 +633,8 @@ class ChangeTest(ServerTestCase):
         first = self.register(make_asset(), request_id="before-restart")
         restarted = server.AssetServer(self.config)
         replay = restarted.process({
-            "action": "REGISTER", "protocol_version": 1, "request_id": "before-restart", "asset": make_asset(),
+            "action": "REGISTER", "protocol_version": 1, "request_id": "before-restart",
+            "asset": make_asset(), "token": self.token,
         })
         self.assertEqual(replay, first)
 

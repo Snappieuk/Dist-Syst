@@ -5,3 +5,7 @@ __pycache__/
 # Data and temporary files created when the server runs
 assets_*.json
 *.tmp
+
+# Accounts and the token-signing key, which must never be shared publicly
+users.json
+secret.key
