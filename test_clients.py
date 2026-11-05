@@ -10,6 +10,7 @@ import contextlib
 import io
 import os
 import re
+import time
 import unittest
 from unittest import mock
 
@@ -120,6 +121,72 @@ class GuiEditTest(unittest.TestCase):
 
         warning.assert_called_once()
         self.sent.assert_not_called()
+
+
+class GuiSearchTest(unittest.TestCase):
+    MATCH = {"asset_id": "AST-P000002", "description": "Dell monitor", "category": "IT", "location": "B",
+             "status": common.NOT_IN_USE, "version": 1, "tags": []}
+
+    def setUp(self):
+        self.root, self.app = make_gui()
+        self.addCleanup(self.root.destroy)
+
+    def wait_for_result(self) -> None:
+        """Wait for the GUI's background request to finish."""
+        deadline = time.monotonic() + 5
+        while self.app.results.empty():
+            self.assertLess(time.monotonic(), deadline, "the request never finished")
+            time.sleep(0.05)
+
+    def search_for(self, text: str = "", status: str = None) -> None:
+        self.app.search_box.delete(0, "end")
+        self.app.search_box.insert(0, text)
+        if status is not None:
+            self.app.status_filter.set(status)
+
+    def test_with_nothing_chosen_everything_is_listed(self):
+        self.assertEqual(self.app.list_request(), {"action": "LIST"})
+
+    def test_the_search_and_status_are_sent_to_the_server(self):
+        self.search_for("  dell ", common.NOT_IN_USE)
+        self.assertEqual(self.app.list_request(), {"action": "LIST", "query": "dell", "status": common.NOT_IN_USE})
+
+    def test_the_status_filter_is_a_read_only_list(self):
+        box = self.app.status_filter
+        self.assertEqual(str(box.cget("state")), "readonly")
+        self.assertEqual(tuple(box.cget("values")), ("All statuses",) + common.STATUSES)
+
+    def test_clearing_shows_everything_again(self):
+        self.search_for("dell", common.IN_USE)
+        with mock.patch.object(self.app, "_start_request") as sent:
+            self.app.clear_search()
+        sent.assert_called_once_with("list", {"action": "LIST"})
+
+    def test_the_table_shows_only_what_the_server_matched(self):
+        reply = {"status": "OK", "assets": [self.MATCH], "total": 1, "served_by": "primary"}
+        self.search_for("dell")
+
+        with mock.patch("gui.send_request", return_value=reply) as send:
+            self.app.refresh_assets()
+            self.wait_for_result()
+            self.app._process_results()
+
+        send.assert_called_once_with({"action": "LIST", "query": "dell"})
+        self.assertEqual(self.app.tree.get_children(), ("AST-P000002",))
+        self.assertIn("Showing 1 matching asset(s)", self.app.status_label.cget("text"))
+
+    def test_a_change_refreshes_the_table_with_the_same_search(self):
+        changed = {"status": "OK", "stored": dict(self.MATCH, version=2), "served_by": "primary"}
+        listing = {"status": "OK", "assets": [], "total": 0, "served_by": "primary"}
+        self.search_for("nothing matches")
+
+        with mock.patch("gui.send_request", side_effect=[changed, listing]) as send:
+            self.app._start_request("edit", {"action": "EDIT"})
+            self.wait_for_result()
+
+        self.assertEqual(send.call_args_list[1].args[0], {"action": "LIST", "query": "nothing matches"})
+        _, _, assets, _ = self.app.results.get_nowait()
+        self.assertEqual(assets, [])  # the changed asset isn't added when a search hides it
 
 
 class WebPageStatusTest(unittest.TestCase):

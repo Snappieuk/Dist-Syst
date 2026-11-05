@@ -33,6 +33,9 @@ SUCCESS_MESSAGES = {
     "delete": "Asset deleted",
 }
 
+# The status filter's choice that shows every status.
+ALL_STATUSES = "All statuses"
+
 # The fields shown in the form and in the edit window, with their labels.
 FIELD_LABELS = (
     ("description", "Description"),
@@ -87,6 +90,23 @@ class AssetManagementApp:
 
         listing = ttk.LabelFrame(self.root, text="Registered assets", padding=8)
         listing.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
+
+        # The search happens on the server, which only sends back the matching assets.
+        finder = ttk.Frame(listing)
+        finder.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
+        ttk.Label(finder, text="Search").pack(side=tk.LEFT)
+        self.search_box = ttk.Entry(finder, width=30)
+        self.search_box.pack(side=tk.LEFT, padx=(6, 12))
+        self.search_box.bind("<Return>", lambda event: self.refresh_assets())
+        ttk.Label(finder, text="Status").pack(side=tk.LEFT)
+        self.status_filter = ttk.Combobox(finder, values=(ALL_STATUSES,) + STATUSES, state="readonly", width=14)
+        self.status_filter.set(ALL_STATUSES)
+        self.status_filter.pack(side=tk.LEFT, padx=(6, 12))
+        self.status_filter.bind("<<ComboboxSelected>>", lambda event: self.refresh_assets())
+        self.search_button = ttk.Button(finder, text="Search", command=self.refresh_assets)
+        self.search_button.pack(side=tk.LEFT)
+        self.clear_button = ttk.Button(finder, text="Clear", command=self.clear_search)
+        self.clear_button.pack(side=tk.LEFT, padx=(8, 0))
 
         # Packed first, so the table cannot squeeze the buttons out of a small window.
         actions = ttk.Frame(listing)
@@ -150,6 +170,8 @@ class AssetManagementApp:
         for button in (
             self.register_button,
             self.refresh_button,
+            self.search_button,
+            self.clear_button,
             self.not_in_use_button,
             self.in_use_button,
             self.edit_button,
@@ -157,10 +179,27 @@ class AssetManagementApp:
         ):
             button.configure(state=state)
 
+    def list_request(self) -> dict:
+        """A LIST request for the assets matching the search box and status filter."""
+        request = {"action": "LIST"}
+        query = self.search_box.get().strip()
+        if query:
+            request["query"] = query
+        if self.status_filter.get() != ALL_STATUSES:
+            request["status"] = self.status_filter.get()
+        return request
+
+    def clear_search(self) -> None:
+        self.search_box.delete(0, tk.END)
+        self.status_filter.set(ALL_STATUSES)
+        self.refresh_assets()
+
     def _start_request(self, operation: str, request: dict) -> None:
         """Send a request on a background thread, keeping the window responsive."""
         self._set_busy(True)
         self.status_label.configure(text="Connecting to asset server...")
+        list_request = self.list_request()  # read on this thread, because it reads widgets
+        filtered = len(list_request) > 1
 
         def run() -> None:
             # This runs on the background thread, so it must not touch any
@@ -172,14 +211,16 @@ class AssetManagementApp:
 
                 # After a successful change, fetch the list again so the table shows
                 # it. A new asset is included even if the list came from a server
-                # that has not synced it yet.
+                # that has not synced it yet, unless a search is hiding other assets.
                 if operation != "list" and response.get("status") == "OK":
                     try:
-                        list_response = send_request({"action": "LIST"})
+                        list_response = send_request(list_request)
                         if list_response.get("status") != "OK":
                             error = list_response.get("detail", "Could not refresh the asset list")
                         else:
-                            assets = include_asset(list_response.get("assets", []), response.get("stored"))
+                            assets = list_response.get("assets", [])
+                            if not filtered:
+                                assets = include_asset(assets, response.get("stored"))
                     except (OSError, ValueError) as exc:
                         error = str(exc)
                 self.results.put((operation, response, assets, error))
@@ -213,8 +254,8 @@ class AssetManagementApp:
         self._start_request("register", pending)
 
     def refresh_assets(self) -> None:
-        """Ask the server for the current list of assets."""
-        self._start_request("list", {"action": "LIST"})
+        """Ask the server for the assets matching the search, or all of them."""
+        self._start_request("list", self.list_request())
 
     def _selected_asset_id(self) -> object:
         """Return the ID of the asset selected in the table, or None after asking
@@ -361,8 +402,14 @@ class AssetManagementApp:
                     self.status_label.configure(text=SUCCESS_MESSAGES[operation] + served_by)
                     self._show_assets(assets)
                 else:
-                    self._show_assets(response.get("assets", []))
-                    self.status_label.configure(text="Asset list refreshed" + served_by)
+                    shown = response.get("assets", [])
+                    self._show_assets(shown)
+                    if self.list_request() == {"action": "LIST"}:
+                        self.status_label.configure(text=f"Showing all {len(shown)} asset(s)" + served_by)
+                    else:
+                        self.status_label.configure(
+                            text=f"Showing {len(shown)} matching asset(s)" + served_by
+                        )
         except queue.Empty:
             pass  # nothing left to display for now
 

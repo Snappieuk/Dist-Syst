@@ -48,7 +48,7 @@ rule still load, and can be changed to one of the two.
 | `send.py` | Registers a new asset. |
 | `receive.py` | Lists the assets with their IDs, statuses and tags. |
 | `manage.py` | Marks an asset as "Not In Use" or "In Use", edits its details, or deletes it. |
-| `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. The status line shows which server answered. |
+| `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. |
 | `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
