@@ -11,6 +11,7 @@ programs do share secret.key, which is created beside the code if it doesn't exi
 """
 
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -118,6 +119,7 @@ class NodeTestCase(unittest.TestCase):
         node.ASSETS_FILE = os.path.join(self.temp_dir.name, "assets.json")
         node.assets.clear()
         node.deleted_ids.clear()
+        node.deleted_at.clear()
         node.last_seq = 0
         node.accepts_writes = True
         node.on_change = None
@@ -146,7 +148,7 @@ class SystemTest(NodeTestCase):
             set(stored),
             {
                 "asset_id", "description", "category", "location", "status",
-                "date_registered", "tags", "version", "request_id",
+                "date_registered", "tags", "version", "request_id", "created_at", "updated_at",
             },
         )
         self.assertEqual(stored["description"], "Dell laptop")
@@ -915,6 +917,89 @@ class ReplicaTest(NodeTestCase):
         self.assertEqual([asset["asset_id"] for asset in assets], ["AST-P000001"])
         self.assertEqual(deleted, {"AST-B000001": None})
         self.assertEqual(seq, 9)
+
+
+class TimestampTest(NodeTestCase):
+    """The server records when each asset was created, last changed and deleted, in UTC."""
+
+    FORMAT = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
+
+    def at(self, timestamp: str):
+        """Make the server's clock say `timestamp`."""
+        return mock.patch.object(node, "utc_timestamp", return_value=timestamp)
+
+    def test_a_new_asset_gets_both_times_from_the_server(self):
+        sent = make_asset(created_at="1999-01-01T00:00:00Z", updated_at="1999-01-01T00:00:00Z", deleted_at="x")
+
+        stored = node.register_asset(node.validate_asset(sent), None)["stored"]
+
+        self.assertRegex(stored["created_at"], self.FORMAT)
+        self.assertEqual(stored["created_at"], stored["updated_at"])
+        self.assertNotEqual(stored["created_at"], "1999-01-01T00:00:00Z")
+        self.assertNotIn("deleted_at", stored)
+
+    def test_the_real_clock_is_utc(self):
+        stamp = node.utc_timestamp()
+        self.assertRegex(stamp, self.FORMAT)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        parsed = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        self.assertLess(abs((now - parsed).total_seconds()), 5)
+
+    def test_a_change_moves_only_the_updated_time(self):
+        with self.at("2026-01-01T09:00:00Z"):
+            asset_id = node.register_asset(node.validate_asset(make_asset()), None)["stored"]["asset_id"]
+        with self.at("2026-01-02T10:30:00Z"):
+            changed = node.set_asset_status(asset_id, common.NOT_IN_USE)["stored"]
+
+        self.assertEqual(changed["created_at"], "2026-01-01T09:00:00Z")
+        self.assertEqual(changed["updated_at"], "2026-01-02T10:30:00Z")
+
+    def test_a_deletion_time_is_saved_and_copied_to_the_backup(self):
+        copies = []
+        node.on_change = copies.append
+        asset_id = node.register_asset(node.validate_asset(make_asset()), None)["stored"]["asset_id"]
+
+        with self.at("2026-03-04T05:06:07Z"):
+            node.delete_asset(asset_id)
+
+        self.assertEqual(node.load_data()["deleted_at"], {asset_id: "2026-03-04T05:06:07Z"})
+        self.assertEqual(copies[-1]["deleted_at"], "2026-03-04T05:06:07Z")
+
+    def test_the_backup_keeps_the_primarys_deletion_time(self):
+        node.accepts_writes = False
+        backup.apply_change({"seq": 1, "asset": make_record("AST-P000001")})
+
+        with self.at("2030-12-31T23:59:59Z"):
+            backup.apply_change({"seq": 2, "deleted": "AST-P000001", "request_id": None,
+                                 "deleted_at": "2026-03-04T05:06:07Z"})
+
+        self.assertEqual(node.deleted_at, {"AST-P000001": "2026-03-04T05:06:07Z"})
+
+    def test_deletion_times_survive_a_handover_and_merge(self):
+        node.deleted_at["AST-B000001"] = "2026-03-04T05:06:07Z"
+        node.deleted_ids["AST-B000001"] = None
+        handed = backup.hand_over({})
+        node.deleted_ids.clear()
+        node.deleted_at.clear()
+
+        server.merge_state([], handed["deleted"], handed["deleted_at"])
+
+        self.assertEqual(node.deleted_at, {"AST-B000001": "2026-03-04T05:06:07Z"})
+
+    def test_installed_state_includes_deletion_times(self):
+        backup.install_state({"assets": [], "deleted": {"AST-P000009": None},
+                              "deleted_at": {"AST-P000009": "2026-03-04T05:06:07Z"}, "seq": 3})
+
+        self.assertEqual(node.load_data()["deleted_at"], {"AST-P000009": "2026-03-04T05:06:07Z"})
+
+    def test_files_from_before_timestamps_still_load(self):
+        with open(node.ASSETS_FILE, "w", encoding="utf-8") as file:
+            json.dump({"seq": 2, "assets": [make_record()], "deleted": {"AST-P000002": None}}, file)
+
+        data = node.load_data()
+
+        self.assertEqual(data["deleted_at"], {})
+        self.assertEqual(node.load_assets(), ([make_record()], {"AST-P000002": None}, 2))
 
 
 class StartSyncTest(unittest.TestCase):

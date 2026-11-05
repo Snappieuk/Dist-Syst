@@ -26,7 +26,11 @@ found by name rather than by fixed addresses in the code.
 ```
 
 Each asset has an ID, description, category, location, status, registration date and
-tags. The server creates the ID, sets the date and generates the tags. The status says
+tags. The server creates the ID, sets the date and generates the tags. It also records
+`created_at` and `updated_at`, and `deleted_at` for each deleted ID, in UTC in ISO 8601 form,
+such as `2026-11-05T21:14:03Z`. These come from the server's clock, and any a client sends
+are ignored. UTC means times from servers in different time zones can be compared. Assets
+and deletions from before these were added have none. The status says
 whether the item is being used at the moment, for example "In Use" or "Not In Use".
 
 ## Files
@@ -331,9 +335,10 @@ Requests between the servers:
 | Request | Purpose |
 |---|---|
 | `{"action": "PING"}` | Heartbeat, sent in both directions |
-| `{"action": "REPLICATE", "seq": 5, "asset": {...}}` | Copies one change to the backup |
-| `{"action": "HANDOVER"}` | Tells the backup to go on standby and send all its data |
-| `{"action": "INSTALL_STATE", "assets": [...], "deleted": {...}, "seq": 5}` | Replaces the backup's data with the merged copy |
+| `{"action": "REPLICATE", "seq": 5, "asset": {...}}` | Copies one new or changed asset to the backup |
+| `{"action": "REPLICATE", "seq": 5, "deleted": "...", "request_id": "...", "deleted_at": "..."}` | Copies one deletion to the backup, with the primary's deletion time |
+| `{"action": "HANDOVER"}` | Tells the backup to go on standby and send all its data, including `deleted_at` |
+| `{"action": "INSTALL_STATE", "assets": [...], "deleted": {...}, "deleted_at": {...}, "seq": 5}` | Replaces the backup's data with the merged copy |
 
 Requests from the browser to `web.py`, over HTTP:
 

@@ -92,6 +92,11 @@ assets = []        # every registered asset, as a plain list of dicts
 # This stops an ID being issued again, and stops a late retry restoring the asset.
 deleted_ids = {}
 
+# When each asset was deleted, by ID, as a UTC timestamp. It is kept apart from
+# deleted_ids so data files from before timestamps were added still load unchanged.
+# IDs deleted before then have no entry.
+deleted_at = {}
+
 # How many changes have been made. The primary numbers its changes in the one order
 # they happened, and the backup applies them in that same order.
 last_seq = 0
@@ -102,9 +107,15 @@ last_seq = 0
 assets_lock = threading.Lock()
 
 
-def load_assets() -> tuple:
-    """Read the data file, returning the assets, deleted IDs and last sequence number.
-    It starts empty if the file does not exist yet.
+def utc_timestamp() -> str:
+    """The current time in UTC, in ISO 8601 form, such as 2026-11-05T21:14:03Z. UTC means
+    times from servers in different time zones can be compared directly."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_data() -> dict:
+    """Read the data file, returning its assets, deleted IDs, deletion times and last
+    sequence number. It starts empty if the file does not exist yet.
 
     A corrupt file raises an error rather than starting empty, because the next
     save would then overwrite whatever could still be recovered.
@@ -113,19 +124,28 @@ def load_assets() -> tuple:
         with open(ASSETS_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
     except FileNotFoundError:
-        return [], {}, 0  # normal on the first run
+        data = []  # normal on the first run
 
     # Files written before delete was added hold just the list of assets.
     if isinstance(data, list):
-        return data, {}, 0
+        return {"assets": data, "deleted": {}, "deleted_at": {}, "seq": 0}
 
     if (
         not isinstance(data, dict)
         or not isinstance(data.get("assets"), list)
         or not isinstance(data.get("deleted"), dict)
         or not isinstance(data.get("seq"), int)
+        # Files written before timestamps were added have no deletion times.
+        or not isinstance(data.get("deleted_at", {}), dict)
     ):
         raise ValueError(f"{ASSETS_FILE} does not contain valid asset data")
+    return {"assets": data["assets"], "deleted": data["deleted"],
+            "deleted_at": data.get("deleted_at", {}), "seq": data["seq"]}
+
+
+def load_assets() -> tuple:
+    """Read the data file, returning the assets, deleted IDs and last sequence number."""
+    data = load_data()
     return data["assets"], data["deleted"], data["seq"]
 
 
@@ -139,7 +159,7 @@ def save_assets() -> None:
     """
     temp_path = ASSETS_FILE + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump({"seq": last_seq, "assets": assets, "deleted": deleted_ids}, file, indent=2)
+        json.dump({"seq": last_seq, "assets": assets, "deleted": deleted_ids, "deleted_at": deleted_at}, file, indent=2)
 
         # flush() and fsync() push the data out of memory buffers and onto the
         # disk, so it survives a power cut as well as a program crash.
@@ -219,7 +239,7 @@ def validate_asset(asset: object) -> dict:
     # any asset_id the client sent.
     clean = {field: check_text(asset.get(field), field) for field in CLIENT_FIELDS}
 
-    # The date comes from the server, and anything the client sent is ignored,
+    # The date and times come from the server, and any the client sent are ignored,
     # because client clocks can be wrong or in other time zones.
     clean["date_registered"] = datetime.date.today().isoformat()
     return clean
@@ -310,7 +330,9 @@ def register_asset(clean: dict, request_id: object) -> dict:
                     existing_id=existing["asset_id"],
                 )
 
-        asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id, version=1)
+        now = utc_timestamp()
+        asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id, version=1,
+                     created_at=now, updated_at=now)
         asset["tags"] = generate_asset_tags(asset)
 
         assets.append(asset)
@@ -356,7 +378,7 @@ def set_asset_status(asset_id: str, status: str, expected_version: object = None
         if conflict:
             return conflict
 
-        updated = dict(previous, status=status, version=previous.get("version", 0) + 1)
+        updated = dict(previous, status=status, version=previous.get("version", 0) + 1, updated_at=utc_timestamp())
         updated["tags"] = generate_asset_tags(updated)
 
         assets[index] = updated
@@ -389,12 +411,14 @@ def delete_asset(asset_id: str, expected_version: object = None) -> dict:
         previous = assets.pop(index)
         request_id = previous.get("request_id")
         deleted_ids[asset_id] = request_id
+        deleted_at[asset_id] = utc_timestamp()
 
         def undo() -> None:
             assets.insert(index, previous)
             del deleted_ids[asset_id]
+            del deleted_at[asset_id]
 
-        commit_change({"deleted": asset_id, "request_id": request_id}, undo)
+        commit_change({"deleted": asset_id, "request_id": request_id, "deleted_at": deleted_at[asset_id]}, undo)
 
     return {"status": "OK", "deleted": asset_id}
 
@@ -590,9 +614,11 @@ def start_up(address: tuple) -> socket.socket:
     configure_logging(ROLE)
 
     try:
-        loaded_assets, loaded_deleted, last_seq = load_assets()
-        assets.extend(loaded_assets)
-        deleted_ids.update(loaded_deleted)
+        data = load_data()
+        assets.extend(data["assets"])
+        deleted_ids.update(data["deleted"])
+        deleted_at.update(data["deleted_at"])
+        last_seq = data["seq"]
         address = listening_address(address)
         server_sock = create_listening_socket(*address)
     except (OSError, ValueError) as exc:

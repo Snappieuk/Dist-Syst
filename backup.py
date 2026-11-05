@@ -53,7 +53,7 @@ def apply_change(request: dict) -> dict:
         if seq != node.last_seq + 1:
             return node.error_reply(OUT_OF_SYNC, f"Expected change {node.last_seq + 1}, but received {seq}")
 
-        previous = (list(node.assets), dict(node.deleted_ids))
+        previous = (list(node.assets), dict(node.deleted_ids), dict(node.deleted_at))
 
         if "asset" in request:
             asset = request["asset"]
@@ -68,15 +68,16 @@ def apply_change(request: dict) -> dict:
             if index is not None:
                 node.assets.pop(index)
             node.deleted_ids[asset_id] = request.get("request_id")
+            if isinstance(request.get("deleted_at"), str):
+                node.deleted_at[asset_id] = request["deleted_at"]  # the primary's time, not this server's
 
         node.last_seq = seq
         try:
             node.save_assets()
         except OSError:
             # Keep memory and disk in agreement. The primary will send everything later.
-            node.assets[:], restored_deleted = previous
-            node.deleted_ids.clear()
-            node.deleted_ids.update(restored_deleted)
+            node.assets[:], restored_deleted, restored_times = previous
+            restore_deleted(restored_deleted, restored_times)
             node.last_seq = seq - 1
             raise
 
@@ -102,25 +103,32 @@ def hand_over(request: dict) -> dict:
             "status": "OK",
             "assets": list(node.assets),
             "deleted": dict(node.deleted_ids),
+            "deleted_at": dict(node.deleted_at),
             "seq": node.last_seq,
         }
+
+
+def restore_deleted(deleted: dict, times: dict) -> None:
+    """Put back the deleted IDs and their deletion times. The caller must hold the lock."""
+    node.deleted_ids.clear()
+    node.deleted_ids.update(deleted)
+    node.deleted_at.clear()
+    node.deleted_at.update(times)
 
 
 def install_state(request: dict) -> dict:
     """Replace this server's data with the primary's reconciled copy."""
     with node.assets_lock:
-        previous = (list(node.assets), dict(node.deleted_ids), node.last_seq)
+        previous = (list(node.assets), dict(node.deleted_ids), dict(node.deleted_at), node.last_seq)
 
         node.assets[:] = request["assets"]
-        node.deleted_ids.clear()
-        node.deleted_ids.update(request["deleted"])
+        restore_deleted(request["deleted"], request.get("deleted_at", {}))
         node.last_seq = request["seq"]
         try:
             node.save_assets()
         except OSError:
-            node.assets[:], restored_deleted, node.last_seq = previous
-            node.deleted_ids.clear()
-            node.deleted_ids.update(restored_deleted)
+            node.assets[:], restored_deleted, restored_times, node.last_seq = previous
+            restore_deleted(restored_deleted, restored_times)
             raise
 
         logger.info("In sync with the primary, at change %s", node.last_seq)

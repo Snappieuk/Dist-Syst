@@ -63,12 +63,14 @@ def is_valid_peer_asset(record: object) -> bool:
         isinstance(tags, list)
         and all(isinstance(tag, str) for tag in tags)
         and isinstance(record.get("date_registered", ""), str)
+        and isinstance(record.get("created_at", ""), str)
+        and isinstance(record.get("updated_at", ""), str)
         and isinstance(version, int)
         and not isinstance(version, bool)  # in Python, True counts as an int
     )
 
 
-def merge_state(peer_assets: list, peer_deleted: dict) -> int:
+def merge_state(peer_assets: list, peer_deleted: dict, peer_deleted_at: dict = None) -> int:
     """Combine the backup's data into this server's, returning how many records
     changed. The caller must hold the lock.
 
@@ -80,9 +82,14 @@ def merge_state(peer_assets: list, peer_deleted: dict) -> int:
       - Of two different copies, the one with the higher version wins.
       - With equal versions, each server made one change. The primary's copy wins.
       - If each server registered the same item, the primary's record is kept.
+    A deletion keeps the time the backup recorded for it, if it sent one.
     """
     newly_deleted = {key: value for key, value in peer_deleted.items() if key not in node.deleted_ids}
     all_deleted = {**node.deleted_ids, **newly_deleted}
+    for asset_id in newly_deleted:
+        time_deleted = (peer_deleted_at or {}).get(asset_id)
+        if isinstance(time_deleted, str):
+            node.deleted_at[asset_id] = time_deleted
 
     # A dict keeps its order and makes each asset quick to find by ID.
     merged = {asset["asset_id"]: asset for asset in node.assets if asset["asset_id"] not in all_deleted}
@@ -106,6 +113,7 @@ def merge_state(peer_assets: list, peer_deleted: dict) -> int:
         identity = node.identity_of(merged[asset_id])
         if identity in identities:
             all_deleted[asset_id] = merged.pop(asset_id).get("request_id")
+            node.deleted_at[asset_id] = node.utc_timestamp()
             changed += 1
         identities.add(identity)
 
@@ -131,35 +139,40 @@ def catch_up_backup() -> bool:
     global backup_in_sync
 
     with node.assets_lock:
-        previous = (list(node.assets), dict(node.deleted_ids), node.last_seq)
+        previous = (list(node.assets), dict(node.deleted_ids), dict(node.deleted_at), node.last_seq)
         try:
             reply = request_from(backup_address, {"action": "HANDOVER"})
             if reply.get("status") != "OK":
                 raise ValueError(f"It replied with an error: {reply.get('detail')}")
 
             records, deleted, peer_seq = reply.get("assets"), reply.get("deleted"), reply.get("seq")
-            if not isinstance(records, list) or not isinstance(deleted, dict) or not isinstance(peer_seq, int):
+            deleted_at = reply.get("deleted_at", {})
+            if (not isinstance(records, list) or not isinstance(deleted, dict) or not isinstance(peer_seq, int)
+                    or not isinstance(deleted_at, dict)):
                 raise ValueError("Its reply has no valid data")
 
             valid_records = [record for record in records if is_valid_peer_asset(record)]
             if len(valid_records) != len(records):
                 logger.warning("Skipped %s invalid record(s) from the backup", len(records) - len(valid_records))
 
-            changed = merge_state(valid_records, deleted)
+            changed = merge_state(valid_records, deleted, deleted_at)
             node.last_seq = max(node.last_seq, peer_seq) + 1
             try:
                 node.save_assets()
             except OSError:
                 # Keep memory and disk in agreement. The next check will try again.
-                node.assets[:], restored_deleted, node.last_seq = previous
+                node.assets[:], restored_deleted, restored_times, node.last_seq = previous
                 node.deleted_ids.clear()
                 node.deleted_ids.update(restored_deleted)
+                node.deleted_at.clear()
+                node.deleted_at.update(restored_times)
                 raise
 
             reply = request_from(backup_address, {
                 "action": "INSTALL_STATE",
                 "assets": node.assets,
                 "deleted": node.deleted_ids,
+                "deleted_at": node.deleted_at,
                 "seq": node.last_seq,
             })
             if reply.get("status") != "OK":

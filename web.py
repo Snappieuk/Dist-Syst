@@ -48,7 +48,8 @@ BROWSER_TIMEOUT_SECONDS = 10
 
 # The asset fields a browser may see. Anything else a server stores, such as the
 # request_id, is internal to the system.
-PUBLIC_FIELDS = ("asset_id", "description", "category", "location", "status", "date_registered")
+PUBLIC_FIELDS = ("asset_id", "description", "category", "location", "status", "date_registered",
+                 "created_at", "updated_at")
 
 # The folder holding the page's files, found relative to this script so that it works
 # whichever folder the program is started from.

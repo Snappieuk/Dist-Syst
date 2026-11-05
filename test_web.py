@@ -71,6 +71,7 @@ class WebTestCase(unittest.TestCase):
         node.ASSETS_FILE = os.path.join(temp_dir.name, "assets.json")
         node.assets.clear()
         node.deleted_ids.clear()
+        node.deleted_at.clear()
         node.last_seq = 0
         node.accepts_writes = True
 
@@ -301,7 +302,8 @@ class AssetsApiTest(WebTestCase):
 
         self.assertEqual(
             set(body["assets"][0]),
-            {"asset_id", "description", "category", "location", "status", "date_registered", "tags", "version"},
+            {"asset_id", "description", "category", "location", "status", "date_registered", "tags", "version",
+             "created_at", "updated_at"},
         )
 
     def test_assets_saved_without_tags_still_get_them(self):
