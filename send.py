@@ -15,7 +15,19 @@ it.
 """
 
 # The shared networking code used by every client.
-from common import new_register_request, send_request
+from common import STATUSES, new_register_request, send_request
+
+
+def choose_status() -> str:
+    """Ask for a status by number, offering only the ones the server accepts."""
+    print("  Status:")
+    for number, status in enumerate(STATUSES, start=1):
+        print(f"    {number}. {status}")
+    while True:
+        answer = input(f"  Choose 1-{len(STATUSES)}: ").strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(STATUSES):
+            return STATUSES[int(answer) - 1]
+        print(f"  Please type a number from 1 to {len(STATUSES)}.")
 
 
 def prompt_for_asset() -> dict:
@@ -28,7 +40,7 @@ def prompt_for_asset() -> dict:
     description = input("  Description (e.g. Dell Latitude 5440 laptop): ").strip()
     category = input("  Category (e.g. IT Equipment): ").strip()
     location = input("  Location (e.g. Site A - IT Store): ").strip()
-    status = input("  Status (e.g. In Use): ").strip()
+    status = choose_status()
 
     # Build and return the asset as a dict. The server validates these fields and
     # rejects anything invalid. It also creates the asset_id, date_registered and

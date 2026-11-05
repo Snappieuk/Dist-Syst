@@ -324,6 +324,29 @@ class SystemTest(NodeTestCase):
 
         self.assertEqual(list_assets()[0]["version"], 1)
 
+    def test_only_the_two_statuses_are_accepted(self):
+        for status in ("Broken", "in use", "In  Use", "Spare", "Not in use"):
+            with self.subTest(status):
+                reply = register(make_asset(status=status))
+                self.assertEqual(reply["code"], common.BAD_REQUEST)
+                self.assertIn("In Use, Not In Use", reply["detail"])
+        self.assertEqual(list_ids(), [])
+
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        reply = common.send_request({"action": "SET_STATUS", "asset_id": asset_id, "status": "Broken"})
+        self.assertEqual(reply["code"], common.BAD_REQUEST)
+        self.assertEqual(list_assets()[0]["status"], common.IN_USE)
+
+    def test_surrounding_spaces_around_a_status_are_ignored(self):
+        self.assertEqual(register(make_asset(status="  Not In Use "))["stored"]["status"], common.NOT_IN_USE)
+
+    def test_older_assets_with_other_statuses_still_load_and_can_be_changed(self):
+        node.assets.append(make_record("AST-OLD", status="Spare", version=1))
+
+        reply = common.send_request({"action": "SET_STATUS", "asset_id": "AST-OLD", "status": common.IN_USE})
+
+        self.assertEqual(reply["stored"]["status"], common.IN_USE)
+
     def test_status_of_an_unknown_asset_is_not_found(self):
         reply = common.send_request({"action": "SET_STATUS", "asset_id": "AST-X", "status": common.NOT_IN_USE})
         self.assertEqual(reply["code"], common.NOT_FOUND)
@@ -363,7 +386,7 @@ class SystemTest(NodeTestCase):
         self.assertEqual(common.send_request(first)["status"], "OK")
 
         # The second person has not seen that, so their change must not overwrite it.
-        second = {"action": "SET_STATUS", "asset_id": asset_id, "status": "Broken", "expected_version": 1}
+        second = {"action": "SET_STATUS", "asset_id": asset_id, "status": common.IN_USE, "expected_version": 1}
         self.assertEqual(common.send_request(second)["code"], common.CONFLICT)
         self.assertEqual(list_assets()[0]["status"], common.NOT_IN_USE)
 
@@ -401,14 +424,15 @@ class SystemTest(NodeTestCase):
             time.sleep(0.05)
             return result
 
+        # There are only two statuses, so once one request has changed it, the rest ask
+        # for what is already true and change nothing. Only one may change the asset.
         with mock.patch.object(node, "version_conflict", slow_check):
             replies = self.run_at_once([
-                {"action": "SET_STATUS", "asset_id": asset_id, "status": f"Status {n}", "expected_version": 1}
+                {"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE, "expected_version": 1}
                 for n in range(20)
             ])
 
-        self.assertEqual(sum(reply["status"] == "OK" for reply in replies), 1)
-        self.assertEqual(sum(reply.get("code") == common.CONFLICT for reply in replies), 19)
+        self.assertTrue(all(reply["status"] == "OK" for reply in replies))
         self.assertEqual(list_assets()[0]["version"], 2)
 
     def test_50_concurrent_clients_lose_nothing_and_get_unique_ids(self):
@@ -549,7 +573,7 @@ class SystemTest(NodeTestCase):
 
     def test_largest_allowed_asset_gets_a_reply_and_can_be_listed(self):
         longest = "€" * node.MAX_FIELD_LENGTH
-        asset = make_asset(longest, category=longest, location=longest, status=longest)
+        asset = make_asset(longest, category=longest, location=longest)
 
         self.assertEqual(register(asset)["status"], "OK")
         self.assertEqual(list_descriptions(), [longest])

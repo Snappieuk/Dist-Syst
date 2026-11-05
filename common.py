@@ -119,9 +119,11 @@ SUPPORTED_PROTOCOL_VERSIONS = (1,)
 NOT_STANDBY = "NOT_STANDBY"  # the backup has taken over, so it cannot receive copies
 OUT_OF_SYNC = "OUT_OF_SYNC"  # the backup missed a change, so it needs all the data
 
-# The two standard asset statuses. Registration also accepts other text.
+# The only two statuses an asset can have. Every client offers just these, and the
+# server rejects anything else, because any program could send other text.
 IN_USE = "In Use"
 NOT_IN_USE = "Not In Use"
+STATUSES = (IN_USE, NOT_IN_USE)
 
 
 class MessageTooLargeError(ValueError):

@@ -17,6 +17,7 @@ from tkinter import messagebox, ttk
 from common import (
     IN_USE,
     NOT_IN_USE,
+    STATUSES,
     format_asset_tags,
     generate_asset_tags,
     include_asset,
@@ -65,8 +66,12 @@ class AssetManagementApp:
         )
         for row, (key, label) in enumerate(labels):
             ttk.Label(form, text=label).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
-            # Status offers the standard choices, but other text can be typed too.
-            entry = ttk.Combobox(form, values=(IN_USE, NOT_IN_USE)) if key == "status" else ttk.Entry(form)
+            # Status is a read-only list of the only two statuses the server accepts.
+            if key == "status":
+                entry = ttk.Combobox(form, values=STATUSES, state="readonly")
+                entry.set(IN_USE)
+            else:
+                entry = ttk.Entry(form)
             entry.grid(row=row, column=1, sticky=tk.EW, pady=3)
             self.fields[key] = entry
 
@@ -245,8 +250,11 @@ class AssetManagementApp:
     def _finish_registration(self) -> None:
         """Clear the form after a registration the server has confirmed."""
         self.unconfirmed_registration = None
-        for entry in self.fields.values():
-            entry.delete(0, tk.END)
+        for key, entry in self.fields.items():
+            if key == "status":
+                entry.set(IN_USE)  # a read-only list can't be emptied
+            else:
+                entry.delete(0, tk.END)
 
     def _process_results(self) -> None:
         """Display any finished requests. Runs on the main thread, every 100 ms."""

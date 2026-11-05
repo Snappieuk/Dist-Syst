@@ -31,7 +31,11 @@ tags. The server creates the ID, sets the date and generates the tags. It also r
 such as `2026-11-05T21:14:03Z`. These come from the server's clock, and any a client sends
 are ignored. UTC means times from servers in different time zones can be compared. Assets
 and deletions from before these were added have none. The status says
-whether the item is being used at the moment, for example "In Use" or "Not In Use".
+whether the item is being used at the moment, and can only be "In Use" or "Not In Use".
+Every client offers just these two: a read-only list in the GUI and on the web page, and a
+numbered choice in `send.py`. The server also rejects anything else with `BAD_REQUEST`,
+because any program could send other text. Assets saved with other statuses before this
+rule still load, and can be changed to one of the two.
 
 ## Files
 
@@ -51,7 +55,7 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `demo.py` | Shows a failover step by step on a running system. |
 | `setup.py` | First-time setup, which creates the shared secret and the first web account, and a full reset with `--reset`. |
 | `logs/` | Created as the programs run. Each program's own log file: `primary.log`, `backup.log`, `web.log` and `start.log`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py` | The automated tests. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py` | The automated tests. |
 
 ## Running it on one machine
 
@@ -265,8 +269,10 @@ log line. The `logs/` folder is ignored by git, and a full reset deletes it.
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging
+python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging test_clients
 ```
+
+Or run every test file at once with `python -m unittest discover -p "test_*.py"`.
 
 The tests start real servers on spare ports and use temporary files for data and accounts,
 so yours aren't touched. They do use `secret.key`, and create it if it doesn't exist yet.
@@ -498,7 +504,7 @@ Other limitations:
 - `secret.key` has to be copied to each machine by hand, and every program shares it.
 - Duplicates are judged only by description, category and location, because nothing
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
-  different items. Status and category are free text.
+  different items. Category and location are free text.
 - Nothing is encrypted. The shared secret, web passwords and all data cross the network
   as plain text, so someone watching a network could read them. Only run this across a
   trusted network, or add TLS first.

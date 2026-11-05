@@ -36,6 +36,7 @@ from common import (
     INTERNAL,
     NOT_FOUND,
     NOT_PRIMARY,
+    STATUSES,
     SUPPORTED_PROTOCOL_VERSIONS,
     TOO_LARGE,
     UNAUTHORIZED,
@@ -211,6 +212,14 @@ def check_text(value: object, name: str) -> str:
     return value.strip()
 
 
+def check_status(value: object) -> str:
+    """Return a valid status, or raise ValueError if it isn't one of STATUSES."""
+    status = check_text(value, "status")
+    if status not in STATUSES:
+        raise ValueError(f"status must be one of: {', '.join(STATUSES)}")
+    return status
+
+
 def check_expected_version(request: dict) -> object:
     """Return a request's expected_version, or None if it has none."""
     expected = request.get("expected_version")
@@ -238,6 +247,7 @@ def validate_asset(asset: object) -> dict:
     # Copying only the expected fields means any extra fields are dropped, including
     # any asset_id the client sent.
     clean = {field: check_text(asset.get(field), field) for field in CLIENT_FIELDS}
+    clean["status"] = check_status(clean["status"])
 
     # The date and times come from the server, and any the client sent are ignored,
     # because client clocks can be wrong or in other time zones.
@@ -462,7 +472,7 @@ def process_request(request: dict) -> dict:
 
         if action == "SET_STATUS":
             asset_id = check_text(request.get("asset_id"), "asset_id")
-            status = check_text(request.get("status"), "status")
+            status = check_status(request.get("status"))
             return set_asset_status(asset_id, status, check_expected_version(request))
 
         if action == "DELETE":
