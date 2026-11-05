@@ -141,16 +141,19 @@ def load_or_create_password() -> dict:
     return record
 
 
-def set_password_from_prompt() -> None:
-    """Ask for a new web password and store it."""
+def set_password_from_prompt() -> bool:
+    """Ask for a new web password and store it, returning whether that worked."""
     password = getpass.getpass("New web password: ")
     if len(password) < MINIMUM_PASSWORD_LENGTH:
         print(f"Nothing changed: it must be at least {MINIMUM_PASSWORD_LENGTH} characters.")
-    elif password != getpass.getpass("Type it again: "):
+        return False
+    if password != getpass.getpass("Type it again: "):
         print("Nothing changed: the two did not match.")
-    else:
-        save_password(password)
-        print("Password changed. Restart web.py if it is running.")
+        return False
+
+    save_password(password)
+    print("Password saved. Restart web.py if it is running.")
+    return True
 
 
 def create_session() -> str:
