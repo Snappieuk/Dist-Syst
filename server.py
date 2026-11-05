@@ -1,7 +1,8 @@
 """
 Asset Management System server.
 
-    python server.py
+    python server.py            (the primary server)
+    python server.py backup     (the backup server)
 
 Understands these actions:
     {"action": "LOGIN", "username": "...", "password": "..."}  -> a session token
@@ -13,17 +14,29 @@ Understands these actions:
 
 Every request must include "protocol_version", every request except LOGIN must
 include the session "token", and every change must include a unique "request_id".
-Only users with the admin role may DELETE. Every reply has "status": "OK" or "status": "ERROR" with a
-stable "code", a "message" and a "context".
+Only users with the admin role may DELETE. Every reply has "status": "OK" or
+"status": "ERROR" with a stable "code", a "message" and a "context".
+
+Replication: the primary copies its data to the backup after every change, and
+every sync_interval_seconds. Clients try the primary first and the backup if the
+primary can't be reached, so the backup keeps the service running. When the primary
+comes back, it takes over any changes the backup made meanwhile. The servers use
+these actions between themselves, authenticated with a key derived from secret.key:
+    SYNC_STATUS -> the server's change number and a digest of its data
+    STATE       -> all of the server's data
+    REPLICATE   -> replace the server's data with the copy sent
 """
 
 import datetime     # creates the server's timestamps
+import hashlib      # compares the two servers' data
+import hmac         # checks the key the servers use with each other
 import json         # the data file is JSON
 import logging      # records errors and events with timestamps
 import os           # saves the data file safely
 import re           # checks the format of asset IDs
 import socket       # provides the networking building blocks (sockets)
 import ssl          # encrypts every connection with TLS
+import sys          # reads which server to run from the command line
 import threading    # one thread per client, and a lock for the shared data
 
 import common
@@ -64,6 +77,9 @@ MAX_REMEMBERED_REQUESTS = 1000
 
 # The most assets one page of a LIST reply may hold.
 MAX_PAGE_SIZE = 100
+
+# Actions only the servers use with each other.
+SERVER_ACTIONS = ("SYNC_STATUS", "STATE", "REPLICATE")
 
 # Actions that change the data, and so must carry a request_id.
 CHANGE_ACTIONS = ("REGISTER", "EDIT", "DELETE")
@@ -184,7 +200,14 @@ class AssetServer:
 
         self.assets = {}    # every asset, by asset_id, including soft-deleted ones
         self.requests = {}  # recent request IDs: {request_id: {"fingerprint", "reply"}}
+        self.seq = 0        # counts every change, so the servers can tell whose data is newer
         self.load()
+
+        # Replication (only the primary starts it; see sync_with_backup).
+        self.server_key = users.server_key(self.secret)
+        self.sync_interval = config["sync_interval_seconds"]
+        self.changed = threading.Event()  # set after each change, to copy it at once
+        self.backup_reachable = None      # unknown until the first attempt
 
     # ---- Audit trail ----------------------------------------------------------
 
@@ -219,6 +242,7 @@ class AssetServer:
             raise ValueError(f"{self.data_file} does not contain valid asset data")
         self.assets = {asset["asset_id"]: asset for asset in data["assets"]}
         self.requests = data.get("requests", {})
+        self.seq = data.get("seq", 0)
 
     def save(self) -> None:
         """Write all the data to disk. The caller must hold the lock.
@@ -230,10 +254,15 @@ class AssetServer:
         """
         temp_path = self.data_file + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as file:
-            json.dump({"assets": list(self.assets.values()), "requests": self.requests}, file, indent=2)
+            json.dump(self.snapshot(), file, indent=2)
             file.flush()
             os.fsync(file.fileno())
         os.replace(temp_path, self.data_file)
+
+    def snapshot(self) -> dict:
+        """All of this server's data, as saved to disk and copied between servers.
+        The caller must hold the lock."""
+        return {"seq": self.seq, "assets": list(self.assets.values()), "requests": self.requests}
 
     def commit(self, undo) -> None:
         """Save a change just made in memory. The caller must hold the lock.
@@ -268,11 +297,13 @@ class AssetServer:
             "DELETE": self.delete,
             "LIST": self.list_assets,
         }
-        if action != "LOGIN" and action not in handlers:
+        if action not in handlers and action not in ("LOGIN",) + SERVER_ACTIONS:
             return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
         try:
             if action == "LOGIN":
                 return self.login(request)
+            if action in SERVER_ACTIONS:
+                return self.server_action(request)
             user = self.authorise(request)
             handler = handlers[action]
             if action in CHANGE_ACTIONS:
@@ -375,9 +406,12 @@ class AssetServer:
             def undo_all() -> None:
                 undo()
                 del self.requests[request_id]
+                self.seq -= 1
 
             self.requests[request_id] = {"fingerprint": fingerprint(request), "reply": reply}
+            self.seq += 1
             self.commit(undo_all)
+            self.changed.set()  # copy it to the backup straight away
             while len(self.requests) > MAX_REMEMBERED_REQUESTS:
                 del self.requests[next(iter(self.requests))]  # forget the oldest
             stored = reply["stored"]
@@ -520,6 +554,101 @@ class AssetServer:
             "pages": max(1, -(-total // page_size)),  # total / page_size, rounded up
         }
 
+    # ---- Replication ----------------------------------------------------------
+
+    def server_action(self, request: dict) -> dict:
+        """Answer another server. These actions need the servers' shared key, not a
+        user's token, so no client can read or overwrite a server's data this way."""
+        sent = request.get("server_key")
+        if not isinstance(sent, str) or not hmac.compare_digest(sent, self.server_key):
+            self.audit("unauthenticated", action=request.get("action"), reason="wrong server key")
+            raise InvalidRequest("Only the other server may use this action", code=UNAUTHENTICATED)
+        action = request["action"]
+        with self.lock:
+            if action == "SYNC_STATUS":
+                return {"status": "OK", "seq": self.seq, "digest": self.digest()}
+            if action == "STATE":
+                return {"status": "OK", **self.snapshot()}
+            self.install(request)
+        return {"status": "OK", "seq": self.seq}
+
+    def digest(self) -> str:
+        """A fingerprint of the assets, to spot two servers whose data differs even
+        though they have made the same number of changes. The caller holds the lock."""
+        text = json.dumps(sorted(self.assets.values(), key=lambda a: a["asset_id"]), sort_keys=True)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def install(self, data: dict) -> None:
+        """Replace this server's data with another server's copy, and save it. The
+        caller holds the lock."""
+        assets, requests, seq = data.get("assets"), data.get("requests"), data.get("seq")
+        if (
+            not isinstance(assets, list)
+            or not all(isinstance(a, dict) and isinstance(a.get("asset_id"), str) for a in assets)
+            or not isinstance(requests, dict)
+            or not isinstance(seq, int)
+        ):
+            raise InvalidRequest("The copy sent is not valid asset data", field="assets")
+        previous = (self.assets, self.requests, self.seq)
+
+        def undo() -> None:
+            self.assets, self.requests, self.seq = previous
+
+        self.assets = {asset["asset_id"]: asset for asset in assets}
+        self.requests, self.seq = requests, seq
+        self.commit(undo)
+
+    def ask_backup(self, action: str, **fields) -> dict:
+        reply = common.request_from(
+            self.config["servers"]["backup"], {"action": action, "server_key": self.server_key, **fields}, self.config
+        )
+        if reply.get("status") != "OK":
+            raise ValueError(f"The backup refused {action}: {reply.get('message')}")
+        return reply
+
+    def sync_with_backup(self) -> None:
+        """Make the primary and backup hold the same data. Runs on the primary.
+
+        Each server counts its changes in `seq`. If the backup has counted more, it
+        must have taken changes while the primary was down, so the primary takes its
+        data. Otherwise, if the backup is behind or its data differs, the primary sends
+        its own copy. Raises OSError or ValueError if the backup can't be reached.
+        """
+        status = self.ask_backup("SYNC_STATUS")
+        with self.lock:
+            mine = (self.seq, self.digest())
+        if status["seq"] > mine[0]:
+            state = self.ask_backup("STATE")
+            with self.lock:
+                self.install(state)
+            logger.warning("Took %s change(s) the backup made while this server was away", state["seq"] - mine[0])
+            self.audit("took_backup_data", seq=state["seq"], previous_seq=mine[0])
+        elif (status["seq"], status["digest"]) != mine:
+            with self.lock:
+                copy = self.snapshot()
+            self.ask_backup("REPLICATE", **copy)
+            logger.info("Copied the data to the backup, at change %s", copy["seq"])
+
+    def keep_backup_in_sync(self, stop: threading.Event) -> None:
+        """Copy every change to the backup as soon as it happens, and check every
+        sync_interval_seconds in case the backup has restarted or fallen behind.
+        Runs on its own thread on the primary."""
+        while not stop.is_set():
+            self.changed.wait(self.sync_interval)
+            self.changed.clear()
+            if stop.is_set():
+                return
+            try:
+                self.sync_with_backup()
+                if self.backup_reachable is not True:
+                    logger.info("The backup is up to date")
+                self.backup_reachable = True
+            except (OSError, ValueError) as exc:
+                if self.backup_reachable is not False:
+                    logger.warning("Cannot reach the backup, carrying on alone: %s", exc)
+                    self.audit("backup_unreachable", reason=str(exc))
+                self.backup_reachable = False
+
     # ---- Networking -----------------------------------------------------------
 
     def read_and_process(self, conn: socket.socket) -> dict:
@@ -582,6 +711,28 @@ class AssetServer:
     def serve(self, stop: threading.Event = None) -> None:
         """Accept connections until `stop` is set (or forever)."""
         stop = stop or threading.Event()
+        if self.role == "primary" and "backup" in self.config["servers"]:
+            # Before taking any client changes, pick up whatever the backup did while
+            # this server was away, so those changes aren't overwritten.
+            try:
+                self.sync_with_backup()
+                self.backup_reachable = True
+            except (OSError, ValueError) as exc:
+                logger.warning("Cannot reach the backup at start-up: %s", exc)
+                self.backup_reachable = False
+            sync_thread = threading.Thread(target=self.keep_backup_in_sync, args=(stop,), daemon=True)
+            sync_thread.start()
+        else:
+            sync_thread = None
+        try:
+            self.accept_connections(stop)
+        finally:
+            stop.set()
+            if sync_thread is not None:
+                self.changed.set()  # wake it so it sees `stop` and finishes
+                sync_thread.join()
+
+    def accept_connections(self, stop: threading.Event) -> None:
         with self.open_socket() as server_sock:
             server_sock.settimeout(0.2)  # wake up regularly to check `stop`
             logger.info("Asset Management %s server listening on %s:%s", self.role, *self.address)
@@ -598,7 +749,11 @@ class AssetServer:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        server = AssetServer(common.load_config())
+        role = sys.argv[1] if len(sys.argv) > 1 else "primary"
+        if role not in ("primary", "backup"):
+            print("Usage: python server.py [primary|backup]")
+            return
+        server = AssetServer(common.load_config(), role)
     except FileNotFoundError as exc:
         logger.error(
             "Could not start the server: %s. First run: python certificate.py, then "

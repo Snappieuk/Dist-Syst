@@ -9,6 +9,7 @@ and talks to them over real sockets.
 
 import json
 import os
+import shutil
 import socket
 import tempfile
 import threading
@@ -47,6 +48,7 @@ def make_config(folder: str) -> dict:
     # Short timeouts keep the tests quick.
     config["server_timeout_seconds"] = 1
     config["client_timeout_seconds"] = 2
+    config["sync_interval_seconds"] = 0.2
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as file:
         json.dump(config, file)
@@ -71,9 +73,10 @@ class ServerTestCase(unittest.TestCase):
     """Starts a primary server in a background thread for each test."""
 
     def setUp(self) -> None:
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.folder = temp.name
+        self.folder = tempfile.mkdtemp()
+        # Server threads may still be finishing a write as a test ends, so errors
+        # while deleting the folder are ignored.
+        self.addCleanup(shutil.rmtree, self.folder, True)
         self.config = make_config(self.folder)
         # Few hash rounds keep the tests quick; real accounts use users.HASH_ITERATIONS.
         users.add_user(self.config, "admin", ADMIN_PASSWORD, "admin", iterations=1000)
@@ -93,8 +96,16 @@ class ServerTestCase(unittest.TestCase):
         thread.start()
         self.addCleanup(thread.join, 5)
         self.addCleanup(stop.set)
+        self.running = getattr(self, "running", {})
+        self.running[role] = (stop, thread)
         self.wait_for_port(node.address)
         return node
+
+    def stop_server(self, role: str) -> None:
+        """Stop a server as if it had failed: it stops answering and its port closes."""
+        stop, thread = self.running.pop(role)
+        stop.set()
+        thread.join(5)
 
     def wait_for_port(self, address: tuple) -> None:
         deadline = time.monotonic() + 5
@@ -612,7 +623,7 @@ class TlsTest(ServerTestCase):
     def test_a_client_rejects_a_server_with_an_untrusted_certificate(self):
         with tempfile.TemporaryDirectory() as other_folder:
             impostor_config = make_config(other_folder)  # a different, self-signed certificate
-            impostor_config["servers"] = self.config["servers"]
+            impostor_config["servers"] = {"primary": self.config["servers"]["primary"]}
             with self.assertRaises(ssl.SSLCertVerificationError):
                 common.send_request({"action": "LOGIN", "username": "admin", "password": ADMIN_PASSWORD}, impostor_config)
         self.assertEqual(len(self.events_named("login")), 1)  # only setUp's login reached the server
@@ -679,6 +690,92 @@ class TlsTest(ServerTestCase):
                 return
             time.sleep(0.05)
         self.fail(f"{name} was never logged")
+
+
+class ReplicationTest(ServerTestCase):
+    """NFR09."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.backup = self.start_server("backup")
+
+    def wait_until(self, condition, explanation: str) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if condition():
+                return
+            time.sleep(0.05)
+        self.fail(f"Never {explanation}")
+
+    def ids_on(self, node: server.AssetServer) -> list:
+        with node.lock:
+            return sorted(asset_id for asset_id, asset in node.assets.items() if not asset.get("deleted"))
+
+    def test_each_change_reaches_the_backup_and_its_disk(self):
+        self.register(make_asset("AST-0001"))
+        self.edit("AST-0001", 1, location="Site B")
+        self.register(make_asset("AST-0002"))
+        self.delete("AST-0002", 1)
+        self.wait_until(lambda: self.backup.seq == self.server.seq == 4, "copied every change")
+        with self.backup.lock:
+            self.assertEqual(self.backup.assets, self.server.assets)
+        with open(self.backup.data_file, encoding="utf-8") as file:
+            self.assertEqual(json.load(file)["seq"], 4)
+
+    def test_clients_carry_on_with_the_backup_when_the_primary_fails(self):
+        self.register(make_asset("AST-0001"))
+        self.wait_until(lambda: self.backup.seq == 1, "copied the first asset")
+        self.stop_server("primary")
+
+        # The same client code, the same token: it moves to the backup by itself.
+        self.assertEqual(self.listed()[0]["asset_id"], "AST-0001")
+        self.assertEqual(self.register(make_asset("AST-0002"))["status"], "OK")
+        self.assertEqual(self.ids_on(self.backup), ["AST-0001", "AST-0002"])
+        self.assertEqual(self.log_in("alice", USER_PASSWORD).count("."), 1)  # logins work too
+
+    def test_a_returning_primary_takes_the_changes_made_on_the_backup(self):
+        self.register(make_asset("AST-0001"))
+        self.wait_until(lambda: self.backup.seq == 1, "copied the first asset")
+        self.stop_server("primary")
+        self.register(make_asset("AST-0002"))
+        self.edit("AST-0001", 1, location="Moved during the outage")
+
+        returned = self.start_server("primary")
+        self.assertEqual(self.ids_on(returned), ["AST-0001", "AST-0002"])
+        self.assertEqual(returned.assets["AST-0001"]["location"], "Moved during the outage")
+
+        self.register(make_asset("AST-0003"))  # and new changes flow to the backup again
+        self.wait_until(lambda: self.ids_on(self.backup) == ["AST-0001", "AST-0002", "AST-0003"], "copied AST-0003")
+
+    def test_a_backup_that_was_down_is_brought_up_to_date(self):
+        self.stop_server("backup")
+        self.register(make_asset("AST-0001"))
+        self.register(make_asset("AST-0002"))
+        restarted = self.start_server("backup")
+        self.wait_until(lambda: self.ids_on(restarted) == ["AST-0001", "AST-0002"], "caught the backup up")
+
+    def test_a_retry_on_the_backup_of_a_change_the_primary_made_is_not_repeated(self):
+        first = self.register(make_asset("AST-0001"), request_id="lost-reply")
+        self.wait_until(lambda: self.backup.seq == 1, "copied the change")
+        self.stop_server("primary")
+        self.assertEqual(self.register(make_asset("AST-0001"), request_id="lost-reply"), first)
+        self.assertEqual(self.backup.seq, 1)
+
+    def test_clients_cannot_use_the_servers_own_actions(self):
+        for action in ("STATE", "REPLICATE", "SYNC_STATUS"):
+            reply = self.request({"action": action, "assets": [], "requests": {}, "seq": 99})
+            self.assertEqual(reply["code"], common.UNAUTHENTICATED, action)
+        self.assertEqual(self.backup.seq, 0)
+
+    def test_a_client_reports_clearly_when_both_servers_are_down(self):
+        self.stop_server("primary")
+        self.stop_server("backup")
+        with self.assertRaises(OSError):
+            self.listed()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.run_query_client([])
+        self.assertIn("Could not reach the server", output.getvalue())
 
 
 class ChangeTest(ServerTestCase):

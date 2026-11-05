@@ -102,6 +102,12 @@ def read_secret(config: dict) -> bytes:
         return file.read().strip().encode("utf-8")
 
 
+def server_key(secret: bytes) -> str:
+    """The key the two servers prove themselves to each other with. It is derived from
+    the token-signing key, so it can't be used as a token and reveals nothing about it."""
+    return hmac.new(secret, b"server-to-server", hashlib.sha256).hexdigest()
+
+
 def _encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 

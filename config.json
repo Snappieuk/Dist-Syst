@@ -3,16 +3,23 @@
     "primary": {
       "host": "127.0.0.1",
       "port": 65432
+    },
+    "backup": {
+      "host": "127.0.0.1",
+      "port": 65433
     }
   },
   "max_message_bytes": 1048576,
   "client_timeout_seconds": 5,
   "server_timeout_seconds": 10,
+  "sync_interval_seconds": 2,
   "data_files": {
-    "primary": "assets_primary.json"
+    "primary": "assets_primary.json",
+    "backup": "assets_backup.json"
   },
   "audit_files": {
-    "primary": "audit_primary.log"
+    "primary": "audit_primary.log",
+    "backup": "audit_backup.log"
   },
   "users_file": "users.json",
   "secret_file": "secret.key",

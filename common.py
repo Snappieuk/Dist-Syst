@@ -162,20 +162,40 @@ def client_tls_context(config: dict) -> ssl.SSLContext:
     return context
 
 
-def send_request(request: dict, config: dict = None) -> dict:
-    """Send one request to the server and return its reply.
+def request_from(server: dict, request: dict, config: dict) -> dict:
+    """Send one request to one server ({"host", "port"}) over TLS and return its reply.
 
-    The protocol version is added here, so every client sends it without having to
-    remember to.
+    The protocol version is added here, so every program sends it without having to
+    remember to. The timeout applies to connecting and to every read, so a stalled
+    server cannot leave the caller waiting forever.
     """
-    config = config or load_config()
-    server = config["servers"]["primary"]
     message = {**request, "protocol_version": PROTOCOL_VERSION}
-    # The timeout applies to connecting and to every read, so a stalled server
-    # cannot leave the client waiting forever.
     timeout = config["client_timeout_seconds"]
     context = client_tls_context(config)
     with socket.create_connection((server["host"], server["port"]), timeout=timeout) as raw_sock:
         with context.wrap_socket(raw_sock, server_hostname=server["host"]) as sock:
             send_message(sock, message, config["max_message_bytes"])
             return receive_message(sock, config["max_message_bytes"])
+
+
+def send_request(request: dict, config: dict = None) -> dict:
+    """Send a request to the primary server, or to the backup if the primary can't be
+    reached, and return the reply.
+
+    This is failover: the user does nothing when the primary fails. Retrying a change
+    on the backup is safe because it carries the same request_id, so a change the
+    primary already made (and copied to the backup) is recognised and not repeated.
+
+    Raises OSError if no server can be reached.
+    """
+    config = config or load_config()
+    last_error = None
+    for role in ("primary", "backup"):
+        server = config["servers"].get(role)
+        if server is None:
+            continue
+        try:
+            return request_from(server, request, config)
+        except OSError as exc:  # refused, timed out, dropped, or failed TLS
+            last_error = exc
+    raise last_error
