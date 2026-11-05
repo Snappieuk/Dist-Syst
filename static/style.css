@@ -1,0 +1,88 @@
+/* Follows the viewer's light or dark setting. */
+:root {
+  color-scheme: light dark;
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2128;
+  --muted: #5b6573;
+  --border: #d8dde3;
+  --accent: #1f5fa8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #14171b;
+    --surface: #1d2126;
+    --text: #e6e9ed;
+    --muted: #a0a9b4;
+    --border: #363c44;
+    --accent: #7db4ee;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  line-height: 1.45;
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.6rem;
+}
+
+#message {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+/* A wide table scrolls inside this box, so a phone's page itself does not scroll sideways. */
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Keep IDs, statuses and dates on one line, and let long unbroken text wrap rather than overflow. */
+td:first-child,
+td:nth-child(5),
+td:last-child {
+  white-space: nowrap;
+}
+
+td {
+  overflow-wrap: anywhere;
+}

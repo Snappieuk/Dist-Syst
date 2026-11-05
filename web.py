@@ -40,6 +40,7 @@ STATIC_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
 logger = logging.getLogger("asset_web")

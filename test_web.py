@@ -161,11 +161,12 @@ class PageTest(WebTestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn(b"Asset Browser", body)
 
-    def test_the_script_is_served(self):
-        status, headers, _ = self.fetch("/app.js")
-
-        self.assertEqual(status, 200)
-        self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+    def test_the_script_and_styles_are_served(self):
+        for path, content_type in (("/app.js", "text/javascript"), ("/style.css", "text/css")):
+            with self.subTest(path):
+                status, headers, _ = self.fetch(path)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Type"], f"{content_type}; charset=utf-8")
 
     def test_the_script_never_adds_asset_details_as_html(self):
         _, _, body = self.fetch("/app.js")
