@@ -42,6 +42,7 @@ class SetupTestCase(unittest.TestCase):
         self.folder = temp_dir.name
 
         self.patch_value(common, "SECRET_FILE", self.path("secret.key"))
+        self.patch_value(common, "LOG_FOLDER", self.path("logs"))
         self.patch_value(common, "_secret", None)
         self.patch_value(web, "PASSWORD_FILE", self.path("web_password.json"))
         self.patch_value(web, "USERS_FILE", self.path("web_users.json"))
@@ -191,6 +192,23 @@ class ResetTest(SetupTestCase):
         self.assertTrue(result)
         self.assertIn("Reset complete", output)
         self.assertEqual(self.remaining(), {"my_notes.txt", "server.py", "static"})
+
+    def test_the_logs_are_deleted_too(self):
+        os.mkdir(self.path("logs"))
+        self.create("logs/primary.log", "logs/primary.log.1", "logs/web.log", "logs/start.log")
+
+        _, output = self.run_quietly(setup.reset, answers=[setup.RESET_WORD])
+
+        self.assertIn("primary.log.1", output)
+        self.assertNotIn("logs", self.remaining())
+
+    def test_other_files_in_the_log_folder_are_kept(self):
+        os.mkdir(self.path("logs"))
+        self.create("logs/backup.log", "logs/my_notes.txt")
+
+        self.run_quietly(setup.reset, answers=[setup.RESET_WORD])
+
+        self.assertEqual(os.listdir(self.path("logs")), ["my_notes.txt"])
 
     def test_anything_but_the_exact_word_deletes_nothing(self):
         for answer in ("", "y", "yes", "reset", "RESET NOW"):

@@ -7,8 +7,8 @@ First-time setup and full reset of the Asset Management System.
 Setup creates the secret the programs share, and asks you to create the first web account.
 start.py runs it by itself the first time, so you rarely need to run it directly.
 
-Reset permanently deletes every asset, account and secret on this machine, leaving the
-system as if it had just been downloaded. It doesn't touch the code or the git history.
+Reset permanently deletes every asset, account, secret and log on this machine, leaving
+the system as if it had just been downloaded. It doesn't touch the code or the git history.
 """
 
 import json    # reads how many assets a reset would delete
@@ -80,7 +80,12 @@ def generated_files() -> list:
     """Every file the system creates as it runs. A reset deletes only these, by exact name,
     so that it can never remove anything else."""
     data_and_accounts = [server.ASSETS_FILE, backup.ASSETS_FILE, web.USERS_FILE, web.PASSWORD_FILE]
-    return data_and_accounts + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_accounts]
+    logs = []
+    for name in common.LOG_NAMES:
+        current = common.log_path(name)
+        logs += [current] + [f"{current}.{number}" for number in range(1, common.LOG_FILE_COPIES + 1)]
+    return (data_and_accounts + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_accounts]
+            + logs)
 
 
 def is_running(address: tuple) -> bool:
@@ -133,7 +138,7 @@ def reset() -> bool:
     for path in existing:
         print(f"  {os.path.basename(path)}")
     assets = max(count_assets(server.ASSETS_FILE), count_assets(backup.ASSETS_FILE))
-    print(f"\nThat includes {assets} asset(s), every web account and the shared secret.")
+    print(f"\nThat includes {assets} asset(s), every web account, the shared secret and the logs.")
     print("It can't be undone.")
 
     if input(f"Type {RESET_WORD} to continue: ").strip() != RESET_WORD:
@@ -146,6 +151,11 @@ def reset() -> bool:
             os.remove(path)
         except OSError as exc:
             failed.append(f"{os.path.basename(path)} ({exc})")
+
+    try:
+        os.rmdir(common.LOG_FOLDER)  # only succeeds if nothing else was put in it
+    except OSError:
+        pass
 
     if failed:
         print("These could not be deleted, so the reset is not complete:")
