@@ -73,6 +73,55 @@ class GuiStatusTest(unittest.TestCase):
         self.assertEqual(self.app.fields["status"].get(), common.IN_USE)
 
 
+class GuiEditTest(unittest.TestCase):
+    ASSET = {"asset_id": "AST-P000001", "description": "Dell laptop", "category": "IT Equipment",
+             "location": "Site A", "status": common.IN_USE, "version": 3, "tags": []}
+
+    def setUp(self):
+        self.root, self.app = make_gui()
+        self.addCleanup(self.root.destroy)
+        self.app._show_assets([self.ASSET])
+        sender = mock.patch.object(self.app, "_start_request")
+        self.sent = sender.start()
+        self.addCleanup(sender.stop)
+
+    def test_the_window_starts_with_the_assets_details(self):
+        _, boxes, _ = self.app.open_edit_window("AST-P000001")
+
+        self.assertEqual({key: box.get() for key, box in boxes.items()},
+                         {"description": "Dell laptop", "category": "IT Equipment",
+                          "location": "Site A", "status": common.IN_USE})
+        self.assertEqual(str(boxes["status"].cget("state")), "readonly")
+
+    def test_saving_sends_only_the_changes_with_the_version_shown(self):
+        _, boxes, save = self.app.open_edit_window("AST-P000001")
+        boxes["location"].delete(0, "end")
+        boxes["location"].insert(0, "Site B")
+        boxes["status"].set(common.NOT_IN_USE)
+
+        save()
+
+        self.sent.assert_called_once_with("edit", {
+            "action": "EDIT", "asset_id": "AST-P000001", "expected_version": 3,
+            "changes": {"location": "Site B", "status": common.NOT_IN_USE},
+        })
+
+    def test_saving_with_no_changes_sends_nothing(self):
+        _, _, save = self.app.open_edit_window("AST-P000001")
+        save()
+        self.sent.assert_not_called()
+
+    def test_an_emptied_field_is_not_sent(self):
+        _, boxes, save = self.app.open_edit_window("AST-P000001")
+        boxes["description"].delete(0, "end")
+
+        with mock.patch("tkinter.messagebox.showwarning") as warning:
+            save()
+
+        warning.assert_called_once()
+        self.sent.assert_not_called()
+
+
 class WebPageStatusTest(unittest.TestCase):
     def test_the_add_form_offers_only_the_two_statuses(self):
         with open(os.path.join(FOLDER, "static", "index.html"), encoding="utf-8") as file:

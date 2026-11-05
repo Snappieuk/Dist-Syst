@@ -29,13 +29,22 @@ from common import (
 SUCCESS_MESSAGES = {
     "register": "Asset registered successfully",
     "set_status": "Asset status updated",
+    "edit": "Asset details updated",
     "delete": "Asset deleted",
 }
+
+# The fields shown in the form and in the edit window, with their labels.
+FIELD_LABELS = (
+    ("description", "Description"),
+    ("category", "Category"),
+    ("location", "Location"),
+    ("status", "Status"),
+)
 
 
 class AssetManagementApp:
     """The main window: a form to register assets, a table listing them, and buttons
-    to change or delete the selected one."""
+    to change, edit or delete the selected one."""
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -46,6 +55,7 @@ class AssetManagementApp:
         self.fields = {}  # the form's text boxes, by asset field name
         self.unconfirmed_registration = None  # see register_asset()
         self.versions = {}  # the version of each asset the table shows, by asset ID
+        self.assets_by_id = {}  # each asset the table shows, by asset ID
         self._build_ui()
 
         # Start checking for finished requests, then load the table.
@@ -58,13 +68,7 @@ class AssetManagementApp:
         form.pack(fill=tk.X, padx=12, pady=(12, 8))
 
         # The server creates the asset ID, so there is no box for it.
-        labels = (
-            ("description", "Description"),
-            ("category", "Category"),
-            ("location", "Location"),
-            ("status", "Status"),
-        )
-        for row, (key, label) in enumerate(labels):
+        for row, (key, label) in enumerate(FIELD_LABELS):
             ttk.Label(form, text=label).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
             # Status is a read-only list of the only two statuses the server accepts.
             if key == "status":
@@ -95,6 +99,8 @@ class AssetManagementApp:
             actions, text="Mark In Use", command=lambda: self.set_selected_status(IN_USE)
         )
         self.in_use_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.edit_button = ttk.Button(actions, text="Edit Details", command=self.edit_selected)
+        self.edit_button.pack(side=tk.LEFT, padx=(8, 0))
         self.delete_button = ttk.Button(actions, text="Delete Asset", command=self.delete_selected)
         self.delete_button.pack(side=tk.RIGHT)
 
@@ -146,6 +152,7 @@ class AssetManagementApp:
             self.refresh_button,
             self.not_in_use_button,
             self.in_use_button,
+            self.edit_button,
             self.delete_button,
         ):
             button.configure(state=state)
@@ -229,6 +236,60 @@ class AssetManagementApp:
                 "expected_version": self.versions.get(asset_id),
             })
 
+    def edit_selected(self) -> None:
+        """Open a window to edit the details of the asset selected in the table."""
+        asset_id = self._selected_asset_id()
+        if asset_id is not None:
+            self.open_edit_window(asset_id)
+
+    def open_edit_window(self, asset_id: str) -> tuple:
+        """Show the asset's details for editing, returning the window, its boxes and the
+        function that saves it. Only the fields the user changes are sent, along with the
+        version shown, so a change someone else has made meanwhile isn't overwritten."""
+        asset = self.assets_by_id.get(asset_id, {})
+        window = tk.Toplevel(self.root)
+        window.title(f"Edit {asset_id}")
+        window.transient(self.root)
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        boxes = {}
+        for row, (key, label) in enumerate(FIELD_LABELS):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
+            if key == "status":
+                box = ttk.Combobox(frame, values=STATUSES, state="readonly")
+                box.set(asset.get("status", IN_USE))
+            else:
+                box = ttk.Entry(frame, width=45)
+                box.insert(0, asset.get(key, ""))
+            box.grid(row=row, column=1, sticky=tk.EW, pady=3)
+            boxes[key] = box
+
+        def save() -> None:
+            values = {key: box.get().strip() for key, box in boxes.items()}
+            missing = [label for key, label in FIELD_LABELS if not values[key]]
+            if missing:
+                messagebox.showwarning("Missing information", "Please fill in: " + ", ".join(missing), parent=window)
+                return
+            changes = {key: value for key, value in values.items() if value != asset.get(key)}
+            window.destroy()
+            if not changes:
+                self.status_label.configure(text="Nothing was changed")
+                return
+            self._start_request("edit", {
+                "action": "EDIT",
+                "asset_id": asset_id,
+                "changes": changes,
+                "expected_version": self.versions.get(asset_id),
+            })
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=len(FIELD_LABELS), column=0, columnspan=2, sticky=tk.E, pady=(10, 0))
+        ttk.Button(buttons, text="Save Changes", command=save).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side=tk.LEFT, padx=(8, 0))
+        frame.columnconfigure(1, weight=1)
+        return window, boxes, save
+
     def delete_selected(self) -> None:
         """Delete the asset selected in the table, once the user has confirmed it."""
         asset_id = self._selected_asset_id()
@@ -287,7 +348,7 @@ class AssetManagementApp:
 
                     # The table may be out of date, for example if someone else
                     # changed the asset, so show the user what is there now.
-                    if operation in ("set_status", "delete"):
+                    if operation in ("set_status", "edit", "delete"):
                         self.refresh_assets()
                     continue
 
@@ -313,6 +374,7 @@ class AssetManagementApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.versions = {asset.get("asset_id"): asset.get("version", 0) for asset in assets}
+        self.assets_by_id = {asset.get("asset_id"): asset for asset in assets}
 
         # Assets saved before tagging was added have no tags, so those are
         # worked out here for display.

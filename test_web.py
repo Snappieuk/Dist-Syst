@@ -404,6 +404,80 @@ class DeleteAssetTest(WebTestCase):
         self.assertEqual([asset["asset_id"] for asset in node.assets], [self.asset_id])
 
 
+class EditAssetTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.asset_id = register(make_asset())["stored"]["asset_id"]
+
+    def edit(self, changes: object, version: object = 1, asset_id: str = None, **options) -> tuple:
+        body = {"changes": changes}
+        if version is not None:
+            body["version"] = version
+        status, _, reply = self.fetch(f"/api/assets/{asset_id or self.asset_id}", "PATCH", body, **options)
+        return status, json.loads(reply)
+
+    def test_an_asset_can_be_edited(self):
+        status, body = self.edit({"location": "Site B", "status": common.NOT_IN_USE})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["asset"]["location"], "Site B")
+        self.assertEqual(body["asset"]["version"], 2)
+        self.assertEqual(body["served_by"], "primary")
+        self.assertEqual(node.assets[0]["status"], common.NOT_IN_USE)
+        self.assertNotIn("request_id", body["asset"])
+
+    def test_editing_needs_a_login(self):
+        self.assertEqual(self.edit({"location": "Site B"}, cookie=None)[0], 401)
+        self.assertEqual(node.assets[0]["location"], "Site A")
+
+    def test_editing_from_another_site_is_refused(self):
+        status, _ = self.edit({"location": "Site B"}, extra_headers={"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+
+    def test_the_version_is_required(self):
+        for version in (None, "1", True):
+            with self.subTest(version):
+                self.assertEqual(self.edit({"location": "Site B"}, version=version)[0], 400)
+        self.assertEqual(node.assets[0]["version"], 1)
+
+    def test_a_change_someone_else_made_is_not_overwritten(self):
+        self.edit({"location": "Site B"})
+
+        status, body = self.edit({"location": "Site C"}, version=1)
+
+        self.assertEqual(status, 409)
+        self.assertIn("changed by someone else", body["error"])
+        self.assertEqual(node.assets[0]["location"], "Site B")
+
+    def test_an_edit_that_makes_a_duplicate_is_refused(self):
+        register(make_asset("HP laptop"))
+
+        status, _ = self.edit({"description": "HP laptop"})
+
+        self.assertEqual(status, 409)
+
+    def test_invalid_changes_are_refused(self):
+        for changes in ({}, {"status": "Broken"}, {"asset_id": "MINE"}, "description"):
+            with self.subTest(changes):
+                self.assertEqual(self.edit(changes)[0], 400)
+
+    def test_an_unknown_asset_is_not_found(self):
+        self.assertEqual(self.edit({"location": "Site B"}, asset_id="AST-NOPE")[0], 404)
+
+    def test_the_edit_is_recorded_with_who_made_it(self):
+        with self.assertLogs("asset_web", "INFO") as logs:
+            self.edit({"location": "Site B", "status": common.NOT_IN_USE})
+        self.assertIn(f"{USERNAME} edited '{self.asset_id}' (location, status)", "\n".join(logs.output))
+
+    def test_the_page_has_an_edit_form_offering_only_the_two_statuses(self):
+        _, _, page = self.fetch("/", cookie=None)
+        page = page.decode("utf-8")
+        self.assertIn('id="edit-form"', page)
+        edit_form = page[page.index('id="edit-form"'):]
+        edit_form = edit_form[:edit_form.index("</form>")]
+        self.assertEqual(edit_form.count("<option>"), 2)
+
+
 class AddAssetTest(WebTestCase):
     def add(self, asset: object = None, request_id: object = "request-1", **options) -> tuple:
         body = {"request_id": request_id, "asset": make_asset() if asset is None else asset}

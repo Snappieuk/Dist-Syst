@@ -47,8 +47,8 @@ rule still load, and can be changed to one of the two.
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `send.py` | Registers a new asset. |
 | `receive.py` | Lists the assets with their IDs, statuses and tags. |
-| `manage.py` | Marks an asset as "Not In Use" or "In Use", or deletes it. |
-| `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
+| `manage.py` | Marks an asset as "Not In Use" or "In Use", edits its details, or deletes it. |
+| `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. The status line shows which server answered. |
 | `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
@@ -100,8 +100,8 @@ To use the web page, run this as well and open http://127.0.0.1:8080:
 python web.py
 ```
 
-After logging in, you can search, filter by status, sort by clicking a column heading, add
-and delete assets, and create accounts for other people. The page refreshes every 5 seconds.
+After logging in, you can search, filter by status, sort by clicking a column heading, add,
+edit and delete assets, and create accounts for other people. The page refreshes every 5 seconds.
 Its summary row shows the totals and which server answered. Only this machine can open it
 unless you change its address in the settings below.
 
@@ -351,8 +351,15 @@ Requests from clients:
 | `{"action": "REGISTER", "request_id": "...", "asset": {...}}` | `{"status": "OK", "stored": {...}}` |
 | `{"action": "LIST"}` | `{"status": "OK", "assets": [...]}` |
 | `{"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use", "expected_version": 1}` | `{"status": "OK", "stored": {...}}` |
+| `{"action": "EDIT", "asset_id": "...", "changes": {"location": "Site B"}, "expected_version": 1}` | `{"status": "OK", "stored": {...}}`, the updated record |
 | `{"action": "DELETE", "asset_id": "...", "expected_version": 1}` | `{"status": "OK", "deleted": "..."}` |
 | `{"action": "STOP"}` | `{"status": "OK"}`, then the server ends abruptly, as if it had crashed. Used by `demo.py` |
+
+`EDIT` changes any of `description`, `category`, `location` and `status`, and leaves the
+others alone. Each is checked as on registration, the edit is refused with
+`DUPLICATE_ASSET` if it would make the asset the same item as another, and it gets a new
+version and `updated_at`. Like every change, it is copied to the backup as the whole
+updated record.
 
 `request_id` is a random value the client picks for each new registration. Sending the
 same one again returns the same asset. `expected_version` is the version of the asset
@@ -377,6 +384,7 @@ Requests from the browser to `web.py`, over HTTP:
 | `POST /api/logout` | Logs out | No |
 | `GET /api/assets` | Lists the assets, who is logged in and which server answered | Yes |
 | `POST /api/assets` with `{"request_id": "...", "asset": {...}}` | Adds an asset | Yes |
+| `PATCH /api/assets/<id>` with `{"version": n, "changes": {...}}` | Edits an asset, if it is still at that version | Yes |
 | `DELETE /api/assets/<id>?version=<n>` | Deletes an asset, if it is still at that version | Yes |
 | `POST /api/users` with `{"username": "...", "password": "..."}` | Creates an account | Yes |
 
@@ -541,13 +549,12 @@ Other limitations:
   they don't protect against losing that machine.
 - A password can't be changed from the web page, only with `python web.py --set-password`,
   and `web.py` must then be restarted.
-- The web page can add and delete assets, but can't change an asset's status. Use the GUI
-  or `manage.py` for that.
 - Don't change the web address to expose the web page on a network you don't trust, because
   passwords would travel unencrypted.
 - The web page fetches the whole list on every refresh and searches it in the browser, so
   this will get slow with a very large number of assets.
-- The servers can't search assets, and only the status can be changed after registration.
+- The servers can't search assets. An asset's ID can't be changed, so an item can't be moved
+  to a different ID.
 - The list of deleted IDs only ever grows.
 - Every change rewrites the whole file, changes happen one at a time, every asset is held
   in memory and each `LIST` returns everything. Once the data is over the 10 MiB message
@@ -560,7 +567,6 @@ Other limitations:
 ## Further development
 
 The scaling steps above come first, especially a third server and a majority vote. Other
-ideas are editing assets from the web page, editing more fields, a serial number to identify
-items, search on the servers, encryption with TLS, the shared secret supplied through an
+ideas are a serial number to identify items, search on the servers, encryption with TLS, the shared secret supplied through an
 environment variable, account roles including deleting accounts, and sending every
 machine's logs to one place.

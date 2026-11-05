@@ -1,5 +1,5 @@
 // Runs the web page: logging in and out, showing the assets that match the filters in the
-// chosen order, adding and deleting assets, and creating accounts.
+// chosen order, adding, editing and deleting assets, and creating accounts.
 //
 // Asset details are typed in by people, so they are only ever added to the page as
 // plain text (textContent), never as HTML. A description containing a <script> tag is
@@ -16,7 +16,7 @@ const filters = document.getElementById("filters");
 const search = document.getElementById("search");
 const statusFilter = document.getElementById("status-filter");
 
-// The last heading is for the Delete buttons, and isn't sortable.
+// The last heading is for the Edit and Delete buttons, and isn't sortable.
 const headings = [...document.querySelectorAll("thead th")].slice(0, COLUMNS.length);
 const loginSection = document.getElementById("login-section");
 const appSection = document.getElementById("app-section");
@@ -32,6 +32,14 @@ const addButton = document.getElementById("add-button");
 const actionMessage = document.getElementById("action-message");
 const accountForm = document.getElementById("account-form");
 const accountButton = document.getElementById("account-button");
+const editPanel = document.getElementById("edit-panel");
+const editHeading = document.getElementById("edit-heading");
+const editForm = document.getElementById("edit-form");
+const editButton = document.getElementById("edit-button");
+const editCancel = document.getElementById("edit-cancel");
+
+const EDITABLE_FIELDS = ["description", "category", "location", "status"];
+let editingAsset = null; // the asset the edit form is showing, as it was when opened
 
 let allAssets = [];
 let servedBy = "";
@@ -132,17 +140,87 @@ function statusBadge(status) {
   return badge;
 }
 
-function deleteCell(asset) {
+function actionButton(text, className, label, action) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "delete";
-  button.textContent = "Delete";
-  button.setAttribute("aria-label", `Delete ${asset.asset_id}`);
-  button.addEventListener("click", () => deleteAsset(asset));
+  button.className = className;
+  button.textContent = text;
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", action);
+  return button;
+}
 
+function actionsCell(asset) {
   const cell = document.createElement("td");
-  cell.append(button);
+  cell.className = "actions";
+  cell.append(
+    actionButton("Edit", "edit secondary", `Edit ${asset.asset_id}`, () => startEdit(asset)),
+    actionButton("Delete", "delete", `Delete ${asset.asset_id}`, () => deleteAsset(asset)),
+  );
   return cell;
+}
+
+// The form starts with the asset as this page last showed it. Saving sends only the fields
+// that were changed, with that version, so the server refuses if someone else has changed
+// the asset since.
+function startEdit(asset) {
+  editingAsset = asset;
+  editHeading.textContent = `Edit ${asset.asset_id}`;
+  for (const field of EDITABLE_FIELDS) {
+    editForm.elements[field].value = asset[field];
+  }
+  editPanel.hidden = false;
+  editForm.elements.description.focus();
+}
+
+function stopEdit() {
+  editingAsset = null;
+  editForm.reset();
+  editPanel.hidden = true;
+}
+
+async function saveEdit(event) {
+  event.preventDefault();
+  const asset = editingAsset;
+  const values = Object.fromEntries(new FormData(editForm));
+  const changes = {};
+  for (const field of EDITABLE_FIELDS) {
+    // An older asset may have a status that isn't in the list. The list then shows
+    // nothing, and the status is left as it is unless one is chosen.
+    const value = (values[field] ?? "").trim();
+    if (value !== asset[field] && !(field === "status" && !value)) {
+      changes[field] = value;
+    }
+  }
+  if (Object.keys(changes).length === 0) {
+    stopEdit();
+    showActionResult("Nothing was changed");
+    return;
+  }
+
+  editButton.disabled = true;
+  try {
+    const response = await fetch(`/api/assets/${encodeURIComponent(asset.asset_id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: asset.version, changes }),
+    });
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error);
+    }
+    stopEdit();
+    showActionResult(`Saved the changes to ${asset.asset_id}`);
+  } catch (error) {
+    showActionResult(`Could not save the changes to ${asset.asset_id}: ${error.message}`, true);
+  } finally {
+    editButton.disabled = false;
+  }
+  await loadAssets();
 }
 
 // The version is the one this page was showing, so if someone else has changed the asset
@@ -212,7 +290,7 @@ function showAssets() {
       }
       row.append(cell);
     }
-    row.append(deleteCell(asset));
+    row.append(actionsCell(asset));
     return row;
   });
   tableBody.replaceChildren(...rows);
@@ -247,6 +325,7 @@ function showLogin() {
   unconfirmedAdd = null;
   addForm.reset();
   accountForm.reset();
+  stopEdit();
   showActionResult("");
   tableBody.replaceChildren();
   appSection.hidden = true;
@@ -381,6 +460,8 @@ loginForm.addEventListener("submit", logIn);
 logoutButton.addEventListener("click", logOut);
 addForm.addEventListener("submit", addAsset);
 accountForm.addEventListener("submit", createAccount);
+editForm.addEventListener("submit", saveEdit);
+editCancel.addEventListener("click", stopEdit);
 
 makeHeadingsSortable();
 refreshRepeatedly();

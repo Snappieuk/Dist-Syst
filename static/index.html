@@ -85,6 +85,34 @@
           <button id="account-button" type="submit">Create account</button>
         </form>
       </details>
+      <section id="edit-panel" class="panel edit-panel" hidden>
+        <h2 id="edit-heading">Edit an asset</h2>
+        <form id="edit-form" class="add-form">
+          <label>
+            Description
+            <input name="description" required maxlength="1000">
+          </label>
+          <label>
+            Category
+            <input name="category" required maxlength="1000">
+          </label>
+          <label>
+            Location
+            <input name="location" required maxlength="1000">
+          </label>
+          <label>
+            Status
+            <select name="status">
+              <option>In Use</option>
+              <option>Not In Use</option>
+            </select>
+          </label>
+          <div class="edit-buttons">
+            <button id="edit-button" type="submit">Save changes</button>
+            <button id="edit-cancel" type="button" class="secondary">Cancel</button>
+          </div>
+        </form>
+      </section>
       <p id="action-message" role="alert"></p>
       <form id="filters" class="filters">
         <label>

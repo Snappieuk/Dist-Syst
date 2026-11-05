@@ -195,6 +195,29 @@ h1::before {
   color: var(--accent);
 }
 
+.edit-panel {
+  margin-bottom: 12px;
+  border-color: var(--accent);
+}
+
+.edit-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.edit-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+td.actions {
+  white-space: nowrap;
+}
+
+td.actions button + button {
+  margin-left: 6px;
+}
+
 .add-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

@@ -376,6 +376,99 @@ class SystemTest(NodeTestCase):
         self.assertEqual(reply["code"], common.INTERNAL)
         self.assertEqual(list_assets()[0]["status"], common.IN_USE)
 
+    # ---- Editing an asset ----
+
+    def edit(self, asset_id: str, expected_version: object = None, **changes) -> dict:
+        request = {"action": "EDIT", "asset_id": asset_id, "changes": changes}
+        if expected_version is not None:
+            request["expected_version"] = expected_version
+        return common.send_request(request)
+
+    def test_any_of_the_four_fields_can_be_edited(self):
+        original = register(make_asset())["stored"]
+
+        reply = self.edit(original["asset_id"], 1, description="HP EliteBook", category="Laptops",
+                          location="Site B", status=common.NOT_IN_USE)
+
+        stored = reply["stored"]
+        self.assertEqual(reply["status"], "OK")
+        self.assertEqual((stored["description"], stored["category"], stored["location"], stored["status"]),
+                         ("HP EliteBook", "Laptops", "Site B", common.NOT_IN_USE))
+        self.assertEqual(stored["version"], 2)
+        self.assertEqual(stored["created_at"], original["created_at"])
+        self.assertIn("elitebook", stored["tags"])
+        self.assertNotIn("dell", stored["tags"])
+        self.assertEqual(list_assets(), [stored])
+        self.assertEqual(node.load_assets()[0], [stored])
+
+    def test_only_the_fields_sent_are_changed(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        stored = self.edit(asset_id, location="  Site C  ")["stored"]
+
+        self.assertEqual(stored["location"], "Site C")
+        self.assertEqual(stored["description"], "Dell laptop")
+
+    def test_an_edit_that_changes_nothing_keeps_the_version(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        reply = self.edit(asset_id, 1, description="Dell laptop")
+
+        self.assertEqual(reply["stored"]["version"], 1)
+
+    def test_an_edit_based_on_an_old_version_is_rejected(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        self.edit(asset_id, 1, description="First")
+
+        reply = self.edit(asset_id, 1, description="Second")
+
+        self.assertEqual(reply["code"], common.CONFLICT)
+        self.assertEqual(list_descriptions(), ["First"])
+
+    def test_an_edit_cannot_make_a_duplicate(self):
+        register(make_asset("Dell laptop"))
+        other_id = register(make_asset("HP laptop"))["stored"]["asset_id"]
+
+        reply = self.edit(other_id, description="dell  LAPTOP")
+
+        self.assertEqual(reply["code"], common.DUPLICATE_ASSET)
+        self.assertEqual(sorted(list_descriptions()), ["Dell laptop", "HP laptop"])
+
+    def test_an_asset_can_be_edited_to_differ_only_in_capitals_from_itself(self):
+        asset_id = register(make_asset("dell laptop"))["stored"]["asset_id"]
+        self.assertEqual(self.edit(asset_id, description="Dell Laptop")["status"], "OK")
+
+    def test_invalid_edits_are_rejected(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        requests = {
+            "no changes": {"asset_id": asset_id},
+            "empty changes": {"asset_id": asset_id, "changes": {}},
+            "changes not an object": {"asset_id": asset_id, "changes": ["description"]},
+            "unknown field": {"asset_id": asset_id, "changes": {"asset_id": "MINE"}},
+            "server field": {"asset_id": asset_id, "changes": {"created_at": "2000-01-01T00:00:00Z"}},
+            "empty value": {"asset_id": asset_id, "changes": {"description": "  "}},
+            "other status": {"asset_id": asset_id, "changes": {"status": "Broken"}},
+            "too long": {"asset_id": asset_id, "changes": {"location": "x" * (node.MAX_FIELD_LENGTH + 1)}},
+            "no asset_id": {"changes": {"description": "New"}},
+            "bad version": {"asset_id": asset_id, "changes": {"description": "New"}, "expected_version": "1"},
+        }
+        for name, request in requests.items():
+            with self.subTest(name):
+                self.assertEqual(common.send_request({"action": "EDIT", **request})["code"], common.BAD_REQUEST)
+        self.assertEqual(list_assets()[0]["version"], 1)
+
+    def test_editing_an_unknown_asset_is_not_found(self):
+        self.assertEqual(self.edit("AST-X", description="New")["code"], common.NOT_FOUND)
+
+    def test_a_failed_edit_save_leaves_nothing_behind(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+        blocker = node.ASSETS_FILE + ".tmp"
+        os.mkdir(blocker)
+        self.addCleanup(os.rmdir, blocker)
+
+        self.assertEqual(self.edit(asset_id, description="New")["code"], common.INTERNAL)
+        self.assertEqual(list_descriptions(), ["Dell laptop"])
+
     # ---- Simultaneous changes ----
 
     def test_a_change_based_on_an_old_version_is_rejected(self):
@@ -424,15 +517,16 @@ class SystemTest(NodeTestCase):
             time.sleep(0.05)
             return result
 
-        # There are only two statuses, so once one request has changed it, the rest ask
-        # for what is already true and change nothing. Only one may change the asset.
+        # Each request makes a different edit, so none of them is already true.
         with mock.patch.object(node, "version_conflict", slow_check):
             replies = self.run_at_once([
-                {"action": "SET_STATUS", "asset_id": asset_id, "status": common.NOT_IN_USE, "expected_version": 1}
+                {"action": "EDIT", "asset_id": asset_id, "changes": {"description": f"Edit {n}"},
+                 "expected_version": 1}
                 for n in range(20)
             ])
 
-        self.assertTrue(all(reply["status"] == "OK" for reply in replies))
+        self.assertEqual(sum(reply["status"] == "OK" for reply in replies), 1)
+        self.assertEqual(sum(reply.get("code") == common.CONFLICT for reply in replies), 19)
         self.assertEqual(list_assets()[0]["version"], 2)
 
     def test_50_concurrent_clients_lose_nothing_and_get_unique_ids(self):
@@ -531,6 +625,32 @@ class SystemTest(NodeTestCase):
         with mock.patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(output):
             manage.main()
         return output.getvalue()
+
+    def test_manage_client_edits_only_what_is_typed(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        output = self.run_manage(asset_id, "4", "HP laptop", "", "Site B", "2")
+
+        stored = list_assets()[0]
+        self.assertEqual((stored["description"], stored["category"], stored["location"], stored["status"]),
+                         ("HP laptop", "IT Equipment", "Site B", common.NOT_IN_USE))
+        self.assertIn("'status': 'OK'", output)
+
+    def test_manage_client_asks_again_for_a_bad_status_number(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        output = self.run_manage(asset_id, "4", "", "", "", "Broken", "9", "2")
+
+        self.assertEqual(output.count("Please type a number"), 2)
+        self.assertEqual(list_assets()[0]["status"], common.NOT_IN_USE)
+
+    def test_manage_client_sends_nothing_if_nothing_changed(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        output = self.run_manage(asset_id, "4", "Dell laptop", "", "", "")  # the same description
+
+        self.assertIn("Nothing was changed", output)
+        self.assertEqual(list_assets()[0]["version"], 1)
 
     def test_manage_client_changes_status(self):
         asset_id = register(make_asset())["stored"]["asset_id"]
@@ -918,6 +1038,7 @@ class ReplicaTest(NodeTestCase):
         for reply in (
             node.register_asset(make_asset(), None),
             node.set_asset_status("AST-P000001", common.NOT_IN_USE),
+            node.edit_asset("AST-P000001", {"description": "New"}),
             node.delete_asset("AST-P000001"),
         ):
             self.assertEqual(reply["code"], common.NOT_PRIMARY)
@@ -1178,6 +1299,19 @@ class DistributedTest(unittest.TestCase):
 
         self.assertEqual(reply["code"], common.NOT_PRIMARY)
         self.assertEqual(reply["served_by"], "backup")
+
+    def test_an_edit_reaches_the_backup_immediately(self):
+        self.start_backup()
+        self.start_primary()
+        self.wait_until_in_sync()
+        asset_id = register(make_asset("Before"))["stored"]["asset_id"]
+
+        reply = common.send_request({"action": "EDIT", "asset_id": asset_id, "expected_version": 1,
+                                     "changes": {"description": "After", "status": common.NOT_IN_USE}})
+
+        self.assertEqual(reply["status"], "OK")
+        on_backup = self.assets_on(self.backup)
+        self.assertEqual(on_backup, [reply["stored"]])
 
     def test_the_backup_takes_over_and_hands_back_when_the_primary_returns(self):
         primary = self.start_primary()

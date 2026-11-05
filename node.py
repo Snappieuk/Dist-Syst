@@ -397,6 +397,65 @@ def set_asset_status(asset_id: str, status: str, expected_version: object = None
     return {"status": "OK", "stored": updated}
 
 
+def check_changes(changes: object) -> dict:
+    """Return a clean copy of an EDIT's changes, or raise ValueError if they are invalid.
+    Only the fields a client registers can be changed, and each is checked as it would be
+    on registration."""
+    if not isinstance(changes, dict) or not changes:
+        raise ValueError("'changes' must be an object with at least one field to change")
+    unknown = sorted(set(changes) - set(CLIENT_FIELDS))
+    if unknown:
+        raise ValueError(f"These fields can't be changed: {', '.join(unknown)}. "
+                         f"Only these can: {', '.join(CLIENT_FIELDS)}")
+    clean = {field: check_text(value, field) for field, value in changes.items()}
+    if "status" in clean:
+        clean["status"] = check_status(clean["status"])
+    return clean
+
+
+def edit_asset(asset_id: str, changes: dict, expected_version: object = None) -> dict:
+    """Change some of an asset's fields and return the reply, with the updated record.
+
+    Like a status change, a new record replaces the old one, and asking for what is
+    already true changes nothing. The changed asset must not become a duplicate of
+    another one, just as a new asset mustn't.
+    """
+    with assets_lock:
+        if not accepts_writes:
+            return not_primary_reply()
+
+        index = find_asset(asset_id)
+        if index is None:
+            return error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
+
+        previous = assets[index]
+        if all(previous.get(field) == value for field, value in changes.items()):
+            return {"status": "OK", "stored": previous}  # nothing to change
+
+        conflict = version_conflict(previous, expected_version)
+        if conflict:
+            return conflict
+
+        updated = dict(previous, **changes)
+        identity = identity_of(updated)
+        for other in assets:
+            if other is not previous and identity_of(other) == identity:
+                return error_reply(
+                    DUPLICATE_ASSET,
+                    f"This would make it the same item as {other['asset_id']}",
+                    existing_id=other["asset_id"],
+                )
+
+        updated["version"] = previous.get("version", 0) + 1
+        updated["updated_at"] = utc_timestamp()
+        updated["tags"] = generate_asset_tags(updated)
+
+        assets[index] = updated
+        commit_change({"asset": updated}, lambda: assets.__setitem__(index, previous))
+
+    return {"status": "OK", "stored": updated}
+
+
 def delete_asset(asset_id: str, expected_version: object = None) -> dict:
     """Remove an asset for good and return the reply.
 
@@ -474,6 +533,11 @@ def process_request(request: dict) -> dict:
             asset_id = check_text(request.get("asset_id"), "asset_id")
             status = check_status(request.get("status"))
             return set_asset_status(asset_id, status, check_expected_version(request))
+
+        if action == "EDIT":
+            asset_id = check_text(request.get("asset_id"), "asset_id")
+            changes = check_changes(request.get("changes"))
+            return edit_asset(asset_id, changes, check_expected_version(request))
 
         if action == "DELETE":
             asset_id = check_text(request.get("asset_id"), "asset_id")

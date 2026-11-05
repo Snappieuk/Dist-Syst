@@ -1,8 +1,9 @@
 """
 Management client.
 
-Changes the status of one asset, or deletes it. At least one server must already
-be running (run start.py or server.py first), and receive.py shows each asset's ID.
+Changes the status of one asset, edits its details, or deletes it. At least one server
+must already be running (run start.py or server.py first), and receive.py shows each
+asset's ID.
 
     python manage.py
 
@@ -11,7 +12,33 @@ terminal), the pause at the end keeps the window open, as in send.py.
 """
 
 # The shared networking code used by every client.
-from common import IN_USE, NOT_IN_USE, send_request
+from common import IN_USE, NOT_IN_USE, STATUSES, send_request
+
+# The fields that can be edited, with what the user is asked for each.
+EDITABLE_FIELDS = (("description", "Description"), ("category", "Category"), ("location", "Location"))
+
+
+def prompt_for_changes(asset: dict) -> dict:
+    """Ask for a new value for each field, where pressing Enter keeps the current one.
+    Returns only the fields the user changed."""
+    print("Type a new value, or press Enter to keep the one shown.")
+    changes = {}
+    for field, label in EDITABLE_FIELDS:
+        value = input(f"  {label} [{asset.get(field, '')}]: ").strip()
+        if value and value != asset.get(field):
+            changes[field] = value
+
+    choices = ", ".join(f"{number} {status}" for number, status in enumerate(STATUSES, start=1))
+    while True:
+        answer = input(f"  Status [{asset.get('status', '')}] ({choices}): ").strip()
+        if not answer:
+            break
+        if answer.isdigit() and 1 <= int(answer) <= len(STATUSES):
+            if STATUSES[int(answer) - 1] != asset.get("status"):
+                changes["status"] = STATUSES[int(answer) - 1]
+            break
+        print(f"  Please type a number from 1 to {len(STATUSES)}, or press Enter.")
+    return changes
 
 
 def prompt_for_request(asset: dict) -> object:
@@ -26,7 +53,8 @@ def prompt_for_request(asset: dict) -> object:
     print(f"  1. Mark as {NOT_IN_USE}")
     print(f"  2. Mark as {IN_USE}")
     print("  3. Delete it for good")
-    choice = input("Choose 1, 2 or 3: ").strip()
+    print("  4. Edit its details")
+    choice = input("Choose 1, 2, 3 or 4: ").strip()
 
     request = {"asset_id": asset_id, "expected_version": asset.get("version", 0)}
 
@@ -40,6 +68,12 @@ def prompt_for_request(asset: dict) -> object:
             return {"action": "DELETE", **request}
         print("Nothing was deleted.")
         return None
+    if choice == "4":
+        changes = prompt_for_changes(asset)
+        if not changes:
+            print("Nothing was changed.")
+            return None
+        return {"action": "EDIT", "changes": changes, **request}
 
     print("That is not one of the choices.")
     return None

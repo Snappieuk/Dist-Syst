@@ -407,6 +407,26 @@ def delete_asset_reply(asset_id: str, query: str, username: str = "someone") -> 
     return status, result
 
 
+def edit_asset_reply(asset_id: str, body: dict, username: str = "someone") -> tuple:
+    """Edit an asset for `username`, returning an HTTP status and a JSON body. The body
+    holds the changed fields and the version the user was looking at, which is required,
+    so that a change someone else has just made can't be overwritten by accident."""
+    version = body.get("version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        return 400, {"error": "The version of the asset is needed"}
+
+    status, reply, result = change_reply(
+        {"action": "EDIT", "asset_id": asset_id, "changes": body.get("changes"), "expected_version": version}, 200
+    )
+    if reply is not None:
+        result["asset"] = public_asset(reply["stored"])
+        logger.info("%s edited %r (%s), served by the %s", username, asset_id,
+                    ", ".join(sorted(body["changes"])), reply.get("served_by"))
+    else:
+        logger.info("%s could not edit %r: %s", username, asset_id, result.get("error"))
+    return status, result
+
+
 def create_account_reply(body: dict, created_by: str) -> tuple:
     """Create an account for a logged-in user, returning an HTTP status and a JSON body.
 
@@ -495,6 +515,24 @@ class WebHandler(BaseHTTPRequestHandler):
                 return
             asset_id = unquote(address.path[len(ASSET_ADDRESS_PREFIX):])
             self.send_json(*delete_asset_reply(asset_id, address.query, username))
+
+    def do_PATCH(self) -> None:
+        if not self.is_from_this_site():
+            self.send_json(403, {"error": "This request came from another site"})
+            return
+
+        path = urlsplit(self.path).path
+        if not path.startswith(ASSET_ADDRESS_PREFIX) or path == ASSET_ADDRESS_PREFIX:
+            self.send_json(404, {"error": "There is nothing at this address"})
+            return
+        username = session_username(self.session_token())
+        if username is None:
+            self.send_json(401, {"error": "Please log in"})
+            return
+        body = self.read_json_body()
+        if body is not None:
+            asset_id = unquote(path[len(ASSET_ADDRESS_PREFIX):])
+            self.send_json(*edit_asset_reply(asset_id, body, username))
 
     def handle_login(self) -> None:
         body = self.read_json_body()
