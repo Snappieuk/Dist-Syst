@@ -485,6 +485,69 @@ class AddAssetTest(WebTestCase):
         self.assertIn("try again", body["error"])
 
 
+class CreateAccountTest(WebTestCase):
+    def create(self, username: object = "newuser", password: object = "new password", **options) -> tuple:
+        body = {"username": username, "password": password}
+        status, _, reply = self.fetch("/api/users", "POST", body, **options)
+        return status, json.loads(reply)
+
+    def test_a_logged_in_user_can_create_an_account_that_can_log_in(self):
+        status, body = self.create("NewUser")
+
+        self.assertEqual(status, 201)
+        self.assertEqual(body["username"], "newuser")
+        login = {"username": "newuser", "password": "new password"}
+        self.assertEqual(self.fetch("/api/login", "POST", login, cookie=None)[0], 200)
+
+    def test_the_new_account_survives_a_restart(self):
+        self.create()
+
+        web.users.clear()
+        web.load_accounts()
+
+        self.assertIn("newuser", web.users)
+
+    def test_creating_an_account_needs_a_login(self):
+        status, _ = self.create(cookie=None)
+
+        self.assertEqual(status, 401)
+        self.assertNotIn("newuser", web.users)
+
+    def test_creating_an_account_from_another_site_is_refused(self):
+        status, _ = self.create(extra_headers={"Origin": "http://evil.example"})
+
+        self.assertEqual(status, 403)
+        self.assertNotIn("newuser", web.users)
+
+    def test_a_taken_username_is_refused_and_keeps_its_password(self):
+        before = web.users[USERNAME]
+
+        status, body = self.create(USERNAME.upper())
+
+        self.assertEqual(status, 409)
+        self.assertIn("taken", body["error"])
+        self.assertEqual(web.users[USERNAME], before)
+
+    def test_bad_details_are_refused_with_a_useful_message(self):
+        for username, password, reason in (
+            ("x", "new password", "username"),
+            ("<script>", "new password", "username"),
+            ("newuser", "short", "password"),
+            (7, "new password", "needed"),
+            ("newuser", None, "needed"),
+        ):
+            with self.subTest(username=username, password=password):
+                status, body = self.create(username, password)
+                self.assertEqual(status, 400)
+                self.assertIn(reason, body["error"])
+        self.assertEqual(list(web.users), [USERNAME])
+
+    def test_password_hashes_are_never_sent_to_the_browser(self):
+        _, reply = self.create()
+        self.assertNotIn("hash", json.dumps(reply))
+        self.assertNotIn("hash", json.dumps(self.fetch_json("/api/assets")[1]))
+
+
 class LoginTest(WebTestCase):
     def test_the_reply_says_who_is_logged_in(self):
         self.assertEqual(self.fetch_json("/api/assets")[1]["username"], USERNAME)

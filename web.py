@@ -70,6 +70,8 @@ USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_users
 # Usernames are short and plain, so they are easy to type and safe to display.
 USERNAME_PATTERN = re.compile(r"[a-z0-9._-]{3,32}")
 
+USERNAME_TAKEN = "That username is already taken"
+
 # The username offered during setup, and the account an older password is converted to.
 FIRST_USERNAME = "admin"
 
@@ -212,7 +214,7 @@ def add_account(username: str, password: str, replace: bool = False) -> object:
     with users_lock:
         accounts = read_users_file()
         if username in accounts and not replace:
-            return "That username is already taken"
+            return USERNAME_TAKEN
         accounts[username] = record
         write_users_file(accounts)
         users.clear()
@@ -379,6 +381,27 @@ def delete_asset_reply(asset_id: str, query: str) -> tuple:
     return status, result
 
 
+def create_account_reply(body: dict, created_by: str) -> tuple:
+    """Create an account for a logged-in user, returning an HTTP status and a JSON body.
+
+    Only someone already logged in can get here. Open sign-up would let anyone who can
+    reach the page give themselves an account, which would make the login pointless.
+    """
+    username, password = body.get("username"), body.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return 400, {"error": "A username and password are needed"}
+
+    problem = add_account(username, password)
+    if problem == USERNAME_TAKEN:
+        return 409, {"error": problem}
+    if problem:
+        return 400, {"error": problem}
+
+    username = normalise_username(username)
+    logger.info("%s created the account %s", created_by, username)
+    return 201, {"username": username}
+
+
 class WebHandler(BaseHTTPRequestHandler):
     """Answers one browser request. Each request runs on its own thread."""
 
@@ -415,14 +438,21 @@ class WebHandler(BaseHTTPRequestHandler):
             self.handle_login()
         elif path == "/api/logout":
             self.handle_logout()
-        elif path != "/api/assets":
+        elif path not in ("/api/assets", "/api/users"):
             self.send_json(404, {"error": "There is nothing at this address"})
-        elif not self.is_logged_in():
-            self.send_json(401, {"error": "Please log in"})
         else:
+            username = session_username(self.session_token())
+            if username is None:
+                self.send_json(401, {"error": "Please log in"})
+                return
+
             body = self.read_json_body()
-            if body is not None:
+            if body is None:
+                return
+            if path == "/api/assets":
                 self.send_json(*add_asset_reply(body))
+            else:
+                self.send_json(*create_account_reply(body, username))
 
     def do_DELETE(self) -> None:
         if not self.is_from_this_site():
