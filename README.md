@@ -46,7 +46,8 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
 | `demo.py` | Shows a failover step by step on a running system. |
 | `setup.py` | First-time setup, which creates the shared secret and the first web account, and a full reset with `--reset`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py` | The automated tests. |
+| `logs/` | Created as the programs run. Each program's own log file: `primary.log`, `backup.log`, `web.log` and `start.log`. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py` | The automated tests. |
 
 ## Running it on one machine
 
@@ -145,8 +146,8 @@ To put everything back to a fresh install, stop the system and run:
 python setup.py --reset
 ```
 
-**This permanently deletes every asset, every web account and the shared secret on this
-machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
+**This permanently deletes every asset, every web account, the shared secret and the logs
+on this machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
 the code or the git history. If you use several machines, reset each of them, because a
 server that still has the data would copy it straight back. The next `python start.py` runs
 setup again.
@@ -223,10 +224,40 @@ logins in a row, on any usernames, logins are refused for a minute.
 
 `secret.key` and `web_users.json` are ignored by git and should never be shared publicly.
 
+## Logs
+
+Every program logs to the console and to its own file in `logs/`:
+
+| File | Written by | Records |
+|---|---|---|
+| `primary.log` | `server.py` | Requests it couldn't complete, each change copied to the backup, the backup falling behind or catching up, and taking back control |
+| `backup.log` | `backup.py` | Each change applied, missed heartbeats, taking over and returning to standby |
+| `web.log` | `web.py` | Logins and failed logins with where they came from, logouts, and which account added, deleted or created what |
+| `start.log` | `start.py` | When the system started and stopped, and each program that stopped and was restarted |
+
+Each program has its own file because they are separate processes, possibly on separate
+machines. Processes sharing one file can mix up each other's lines, and can't safely take
+turns starting a new file when it fills up. Every line starts with the time, the level, the
+program and the thread, for example:
+
+```
+2026-11-05 23:10:25,238 WARNING [backup] [heartbeat] The primary missed 3 heartbeats. TAKING OVER: now accepting changes.
+```
+
+so lines from different files can be put in order to follow one event, such as a failover,
+across the system. A file that reaches 1 MB is renamed to `primary.log.1` and a new one is
+started, and only the 5 newest old files are kept, so the logs can't fill the disk. A crash
+is recorded with its full error before the program stops.
+
+Passwords and the shared secret are never logged, including the password `web.py` creates
+when nobody is at the keyboard, which is only printed. Anything a user typed, such as a
+description, is logged in quotes with line breaks shown as `\n`, so it can't fake an extra
+log line. The `logs/` folder is ignored by git, and a full reset deletes it.
+
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start test_setup test_config test_demo
+python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging
 ```
 
 The tests start real servers on spare ports and use temporary files for data and accounts,
@@ -235,8 +266,10 @@ so yours aren't touched. They do use `secret.key`, and create it if it doesn't e
 part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and
 `backup.py` as separate programs and kills them partway through. `test_config.py` starts
 programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
-it can't listen on. `test_demo.py` runs the whole demo against real servers. Some tests make a save fail on purpose, so you will see logged errors and
-tracebacks in the output.
+it can't listen on. `test_demo.py` runs the whole demo against real servers.
+`test_logging.py` checks that the servers write separate files, that full files are replaced
+and that crashes are recorded. Tests write logs to temporary folders, never to `logs/`. Some
+tests make a save fail on purpose, so you will see logged errors and tracebacks in the output.
 
 ## Distributed systems concepts used
 
@@ -363,6 +396,8 @@ limitations cover what happens if both do.
 - Programs need a shared secret, and the web page needs a login, with accounts that can be
   created from the page.
 - A web page, a single start command, first-time setup and a full reset were added.
+- Each program logs to its own file, and the web log records who changed what.
+- `demo.py` shows a failover, and `start.py` restarts a server that stops.
 
 ### ACID properties
 
@@ -454,7 +489,12 @@ Other limitations:
   as plain text, so someone watching a network could read them. Only run this across a
   trusted network, or add TLS first.
 - Every web account can do everything, including creating more accounts, because there are
-  no roles. Accounts can't be deleted from the page, and nothing records who changed an asset.
+  no roles. Accounts can't be deleted from the page.
+- Only `web.py` knows who made a change, so only changes made on the web page are logged with
+  a name. Changes from the GUI or the command-line clients are logged by the servers, but not
+  who made them.
+- Each machine keeps its own logs. Following an event across machines means collecting
+  their files, and their clocks must agree for the times to line up.
 - Accounts belong to `web.py` and are stored beside it. They aren't copied to the backup, so
   they don't protect against losing that machine.
 - A password can't be changed from the web page, only with `python web.py --set-password`,
@@ -480,5 +520,5 @@ Other limitations:
 The scaling steps above come first, especially a third server and a majority vote. Other
 ideas are editing assets from the web page, editing more fields, a serial number to identify
 items, search on the servers, encryption with TLS, the shared secret supplied through an
-environment variable, and account roles, including deleting accounts and recording who
-changed what.
+environment variable, account roles including deleting accounts, and sending every
+machine's logs to one place.
