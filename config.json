@@ -16,5 +16,7 @@
   },
   "users_file": "users.json",
   "secret_file": "secret.key",
+  "certificate_file": "server.crt",
+  "private_key_file": "server.key",
   "session_seconds": 3600
 }

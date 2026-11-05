@@ -19,6 +19,9 @@ import contextlib
 import io
 from unittest import mock
 
+import ssl
+
+import certificate
 import common
 import receive
 import send
@@ -47,7 +50,9 @@ def make_config(folder: str) -> dict:
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as file:
         json.dump(config, file)
-    return common.load_config(path)
+    config = common.load_config(path)
+    certificate.create_certificate(config)
+    return config
 
 
 def make_asset(asset_id: str = "AST-0001", **changes) -> dict:
@@ -137,10 +142,12 @@ class ServerTestCase(unittest.TestCase):
             receive.main(self.config, arguments)
 
     def raw_exchange(self, payload: bytes) -> dict:
-        """Send raw bytes to the primary and return its decoded reply."""
-        with socket.create_connection(self.server.address, timeout=5) as sock:
-            sock.sendall(payload)
-            return common.receive_message(sock, self.config["max_message_bytes"])
+        """Send raw bytes to the primary over TLS and return its decoded reply."""
+        context = common.client_tls_context(self.config)
+        with socket.create_connection(self.server.address, timeout=5) as raw_sock:
+            with context.wrap_socket(raw_sock, server_hostname="127.0.0.1") as sock:
+                sock.sendall(payload)
+                return common.receive_message(sock, self.config["max_message_bytes"])
 
     def frame(self, body: bytes) -> bytes:
         return len(body).to_bytes(4, "big") + body
@@ -590,6 +597,88 @@ class AuditTest(ServerTestCase):
         self.raw_exchange(self.frame(json.dumps({"action": "LIST"}).encode("utf-8")))
         self.assertEqual(len(self.events("rejected_message")), 1)
         self.assertEqual(len(self.events("rejected_version")), 1)
+
+
+class TlsTest(ServerTestCase):
+    """NFR06."""
+
+    def test_connections_use_tls_1_2_or_later(self):
+        context = common.client_tls_context(self.config)
+        with socket.create_connection(self.server.address, timeout=5) as raw_sock:
+            with context.wrap_socket(raw_sock, server_hostname="127.0.0.1") as sock:
+                self.assertIn(sock.version(), ("TLSv1.2", "TLSv1.3"))
+                self.assertIsNotNone(sock.cipher())
+
+    def test_a_client_rejects_a_server_with_an_untrusted_certificate(self):
+        with tempfile.TemporaryDirectory() as other_folder:
+            impostor_config = make_config(other_folder)  # a different, self-signed certificate
+            impostor_config["servers"] = self.config["servers"]
+            with self.assertRaises(ssl.SSLCertVerificationError):
+                common.send_request({"action": "LOGIN", "username": "admin", "password": ADMIN_PASSWORD}, impostor_config)
+        self.assertEqual(len(self.events_named("login")), 1)  # only setUp's login reached the server
+
+    def test_unencrypted_requests_are_refused(self):
+        body = json.dumps({"action": "LOGIN", "protocol_version": 1, "username": "admin", "password": ADMIN_PASSWORD})
+        with socket.create_connection(self.server.address, timeout=5) as sock:
+            sock.sendall(self.frame(body.encode("utf-8")))
+            sock.settimeout(5)
+            try:
+                received = sock.recv(4096)
+            except ConnectionResetError:
+                received = b""
+        self.assertNotIn(b"token", received)
+        self.wait_until_logged("tls_failed")
+
+    def test_the_password_does_not_cross_the_network_as_plain_text(self):
+        # Capture what the client actually sends by putting a relay in the middle.
+        captured = bytearray()
+        relay = socket.socket()
+        relay.bind(("127.0.0.1", 0))
+        relay.listen()
+        self.addCleanup(relay.close)
+
+        def forward(source, destination):
+            try:
+                while True:
+                    data = source.recv(65536)
+                    if not data:
+                        break
+                    if source is client_side[0]:
+                        captured.extend(data)
+                    destination.sendall(data)
+            except OSError:
+                pass
+            finally:
+                destination.close()
+
+        client_side = []
+
+        def accept():
+            conn, _ = relay.accept()
+            client_side.append(conn)
+            upstream = socket.create_connection(self.server.address)
+            threading.Thread(target=forward, args=(conn, upstream), daemon=True).start()
+            forward(upstream, conn)
+
+        threading.Thread(target=accept, daemon=True).start()
+        relayed = dict(self.config, servers={"primary": {"host": "127.0.0.1", "port": relay.getsockname()[1]}})
+        reply = common.login("admin", ADMIN_PASSWORD, relayed)
+        self.assertEqual(reply["status"], "OK")
+        self.assertGreater(len(captured), 0)
+        self.assertNotIn(ADMIN_PASSWORD.encode("utf-8"), bytes(captured))
+        self.assertNotIn(b"LOGIN", bytes(captured))
+
+    def events_named(self, name: str) -> list:
+        with open(self.server.audit_file, encoding="utf-8") as file:
+            return [record for record in map(json.loads, file) if record["event"] == name]
+
+    def wait_until_logged(self, name: str) -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.events_named(name):
+                return
+            time.sleep(0.05)
+        self.fail(f"{name} was never logged")
 
 
 class ChangeTest(ServerTestCase):

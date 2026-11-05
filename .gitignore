@@ -12,3 +12,7 @@ secret.key
 
 # Audit logs written by the servers
 *.log
+
+# The private key for TLS, which must never be shared
+server.key
+server.crt

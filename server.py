@@ -23,6 +23,7 @@ import logging      # records errors and events with timestamps
 import os           # saves the data file safely
 import re           # checks the format of asset IDs
 import socket       # provides the networking building blocks (sockets)
+import ssl          # encrypts every connection with TLS
 import threading    # one thread per client, and a lock for the shared data
 
 import common
@@ -166,6 +167,15 @@ class AssetServer:
         self.audit_lock = threading.Lock()  # one line at a time from many threads
         self.session_seconds = config["session_seconds"]
         self.secret = users.read_secret(config)  # signs and checks session tokens
+
+        # Every connection is encrypted with TLS 1.2 or later, using the system's
+        # certificate and private key (made by certificate.py).
+        self.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.tls.minimum_version = ssl.TLSVersion.TLSv1_2
+        self.tls.load_cert_chain(
+            common.config_path(config, config["certificate_file"]),
+            common.config_path(config, config["private_key_file"]),
+        )
 
         # Every client has its own thread, so two requests can arrive at the same
         # moment. The lock makes each read or change of the data one indivisible
@@ -543,10 +553,19 @@ class AssetServer:
         disconnected instead of holding its thread forever.
         """
         try:
-            with conn:
-                conn.settimeout(self.timeout)
-                reply = self.read_and_process(conn)
-                send_message(conn, reply, self.max_bytes)
+            conn.settimeout(self.timeout)
+            # The TLS handshake happens here, on the client's own thread, so a slow or
+            # failed handshake never holds up the accept loop. A client that doesn't
+            # speak TLS, or rejects the certificate, fails here and is disconnected.
+            try:
+                tls_conn = self.tls.wrap_socket(conn, server_side=True)
+            except (ssl.SSLError, OSError) as exc:
+                conn.close()
+                self.audit("tls_failed", client=f"{addr[0]}:{addr[1]}" if addr else None, reason=str(exc))
+                return
+            with tls_conn:
+                reply = self.read_and_process(tls_conn)
+                send_message(tls_conn, reply, self.max_bytes)
         except OSError as exc:
             # The client went away or went quiet. There is nobody to reply to.
             logger.warning("Lost connection to %s: %s", addr, exc)
@@ -581,7 +600,11 @@ def main() -> None:
     try:
         server = AssetServer(common.load_config())
     except FileNotFoundError as exc:
-        logger.error("Could not start the server: %s. Create an account first: python users.py add admin admin", exc)
+        logger.error(
+            "Could not start the server: %s. First run: python certificate.py, then "
+            "python users.py add admin admin",
+            exc,
+        )
         return
     except (OSError, ValueError) as exc:
         logger.error("Could not start the server: %s", exc)

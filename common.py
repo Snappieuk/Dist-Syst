@@ -13,6 +13,7 @@ import getpass   # asks for a password without showing it
 import json      # turns Python dicts into JSON text and back
 import os        # finds config.json next to this file
 import socket    # the networking building blocks (sockets)
+import ssl       # encrypts every connection with TLS
 import uuid      # creates the unique ID sent with every change
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
@@ -148,6 +149,19 @@ def log_in_from_prompt(config: dict = None) -> str:
     return reply["token"]
 
 
+def client_tls_context(config: dict) -> ssl.SSLContext:
+    """TLS settings for connecting to a server.
+
+    Only the system's own certificate (certificate_file in config.json) is trusted, and
+    the server must present it for the host name being connected to. A server with
+    any other certificate is refused, so a client never sends anything, including a
+    password, to an impostor, and never falls back to an unencrypted connection.
+    """
+    context = ssl.create_default_context(cafile=config_path(config, config["certificate_file"]))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def send_request(request: dict, config: dict = None) -> dict:
     """Send one request to the server and return its reply.
 
@@ -160,6 +174,8 @@ def send_request(request: dict, config: dict = None) -> dict:
     # The timeout applies to connecting and to every read, so a stalled server
     # cannot leave the client waiting forever.
     timeout = config["client_timeout_seconds"]
-    with socket.create_connection((server["host"], server["port"]), timeout=timeout) as sock:
-        send_message(sock, message, config["max_message_bytes"])
-        return receive_message(sock, config["max_message_bytes"])
+    context = client_tls_context(config)
+    with socket.create_connection((server["host"], server["port"]), timeout=timeout) as raw_sock:
+        with context.wrap_socket(raw_sock, server_hostname=server["host"]) as sock:
+            send_message(sock, message, config["max_message_bytes"])
+            return receive_message(sock, config["max_message_bytes"])
