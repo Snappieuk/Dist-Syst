@@ -26,7 +26,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from common import generate_asset_tags, send_request
+from common import BAD_REQUEST, CONFLICT, DUPLICATE_ASSET, NOT_FOUND, generate_asset_tags, send_request
 
 # Where the web interface listens. 127.0.0.1 means only this machine can open it.
 WEB_ADDRESS = ("127.0.0.1", 8080)
@@ -70,6 +70,14 @@ LOCKOUT_SECONDS = 60
 
 # The largest request body accepted. Everything sent here is small.
 MAX_BODY_BYTES = 64 * 1024
+
+# The server's errors that a user can act on, and the HTTP status of each.
+USER_ERROR_STATUSES = {
+    BAD_REQUEST: 400,
+    NOT_FOUND: 404,
+    DUPLICATE_ASSET: 409,
+    CONFLICT: 409,
+}
 
 logger = logging.getLogger("asset_web")
 
@@ -228,6 +236,41 @@ def session_cookie(token: str, max_age: int) -> str:
     return f"session={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict"
 
 
+def change_reply(request: dict, success_status: int) -> tuple:
+    """Send a change to the servers, returning an HTTP status, the server's reply and a
+    JSON body holding any error.
+
+    All the rules, such as rejecting duplicates, stay on the servers. Errors the user can
+    act on pass through, because those details are written for people. Others are only
+    logged, because internal details can help an attacker.
+    """
+    try:
+        reply = send_request(request)
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not send a change: %s", exc)
+        return 503, None, {"error": "No asset server can be reached at the moment"}
+
+    if reply.get("status") == "OK":
+        return success_status, reply, {"served_by": reply.get("served_by", "unknown")}
+
+    if reply.get("code") in USER_ERROR_STATUSES:
+        return USER_ERROR_STATUSES[reply["code"]], None, {"error": reply.get("detail", "The change was refused")}
+
+    logger.warning("A server could not make a change: %s", reply.get("detail"))
+    return 503, None, {"error": "The asset server could not make the change. Please try again."}
+
+
+def add_asset_reply(body: dict) -> tuple:
+    """Register an asset, returning an HTTP status and a JSON body. Only the expected
+    values are passed on, so a browser cannot add anything else to the request."""
+    status, reply, result = change_reply(
+        {"action": "REGISTER", "request_id": body.get("request_id"), "asset": body.get("asset")}, 201
+    )
+    if reply is not None:
+        result["asset"] = public_asset(reply["stored"])
+    return status, result
+
+
 class WebHandler(BaseHTTPRequestHandler):
     """Answers one browser request. Each request runs on its own thread."""
 
@@ -261,8 +304,14 @@ class WebHandler(BaseHTTPRequestHandler):
             self.handle_login()
         elif path == "/api/logout":
             self.handle_logout()
-        else:
+        elif path != "/api/assets":
             self.send_json(404, {"error": "There is nothing at this address"})
+        elif not self.is_logged_in():
+            self.send_json(401, {"error": "Please log in"})
+        else:
+            body = self.read_json_body()
+            if body is not None:
+                self.send_json(*add_asset_reply(body))
 
     def handle_login(self) -> None:
         body = self.read_json_body()

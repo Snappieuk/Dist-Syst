@@ -236,11 +236,95 @@ class AssetsApiTest(WebTestCase):
     def test_changing_data_is_not_possible(self):
         register(make_asset())
 
-        for method, expected in (("POST", 404), ("PUT", 501), ("DELETE", 501)):
+        for method, expected in (("PUT", 501), ("DELETE", 501)):
             with self.subTest(method):
                 status, _, _ = self.fetch("/api/assets", method)
                 self.assertEqual(status, expected)
         self.assertEqual(len(node.assets), 1)
+
+
+class AddAssetTest(WebTestCase):
+    def add(self, asset: object = None, request_id: object = "request-1", **options) -> tuple:
+        body = {"request_id": request_id, "asset": make_asset() if asset is None else asset}
+        status, _, reply = self.fetch("/api/assets", "POST", body, **options)
+        return status, json.loads(reply)
+
+    def test_an_asset_can_be_added(self):
+        status, body = self.add()
+
+        self.assertEqual(status, 201)
+        self.assertEqual(body["asset"]["description"], "Dell laptop")
+        self.assertEqual(body["served_by"], "primary")
+        self.assertNotIn("request_id", body["asset"])
+        self.assertEqual([asset["asset_id"] for asset in node.assets], [body["asset"]["asset_id"]])
+
+    def test_adding_needs_a_login(self):
+        self.assertEqual(self.add(cookie=None)[0], 401)
+        self.assertEqual(node.assets, [])
+
+    def test_adding_from_another_site_is_refused(self):
+        status, _ = self.add(extra_headers={"Origin": "http://evil.example"})
+
+        self.assertEqual(status, 403)
+        self.assertEqual(node.assets, [])
+
+    def test_a_retry_does_not_add_a_second_asset(self):
+        first = self.add()
+        second = self.add()
+
+        self.assertEqual(first[1]["asset"]["asset_id"], second[1]["asset"]["asset_id"])
+        self.assertEqual(len(node.assets), 1)
+
+    def test_a_duplicate_item_is_refused_with_a_useful_message(self):
+        self.add(request_id="request-1")
+
+        status, body = self.add(request_id="request-2")
+
+        self.assertEqual(status, 409)
+        self.assertIn("already registered", body["error"])
+        self.assertEqual(len(node.assets), 1)
+
+    def test_an_invalid_asset_is_refused_with_a_useful_message(self):
+        status, body = self.add(make_asset(description=""))
+
+        self.assertEqual(status, 400)
+        self.assertIn("description", body["error"])
+
+    def test_invalid_requests_are_refused(self):
+        for asset in ([1, 2], "text", 7):
+            with self.subTest(asset=asset):
+                self.assertEqual(self.add(asset)[0], 400)
+        self.assertEqual(node.assets, [])
+
+    def test_a_browser_cannot_set_the_id_or_the_shared_secret(self):
+        body = {"request_id": "r", "asset": make_asset(asset_id="MY-ID"), "auth": "wrong", "action": "DELETE"}
+
+        status, _, reply = self.fetch("/api/assets", "POST", body)
+
+        self.assertEqual(status, 201)
+        self.assertNotEqual(json.loads(reply)["asset"]["asset_id"], "MY-ID")
+
+    def test_every_server_being_down_gives_a_clear_error(self):
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            common.SERVERS = [spare.getsockname()]
+
+        status, body = self.add()
+
+        self.assertEqual(status, 503)
+        self.assertIn("No asset server", body["error"])
+
+    def test_a_failed_save_gives_a_general_error(self):
+        blocker = node.ASSETS_FILE + ".tmp"
+        os.mkdir(blocker)
+        self.addCleanup(os.rmdir, blocker)
+        logging.getLogger("asset_server").disabled = True
+        self.addCleanup(setattr, logging.getLogger("asset_server"), "disabled", False)
+
+        status, body = self.add()
+
+        self.assertEqual(status, 503)
+        self.assertIn("try again", body["error"])
 
 
 class LoginTest(WebTestCase):
