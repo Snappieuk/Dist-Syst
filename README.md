@@ -39,10 +39,10 @@ whether the item is being used at the moment, for example "In Use" or "Not In Us
 | `receive.py` | Lists the assets with their IDs, statuses and tags. |
 | `manage.py` | Marks an asset as "Not In Use" or "In Use", or deletes it. |
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change or delete that asset. The status line shows which server answered. |
-| `web.py` | A web interface for browsing, adding and deleting assets, behind a password. It serves the page in `static/` and talks to the servers like any other client. |
+| `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface with one command, running setup first if needed. |
-| `setup.py` | First-time setup, and a full reset with `--reset`. |
+| `setup.py` | First-time setup, which creates the first web account, and a full reset with `--reset`. |
 | `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py` | The automated tests. |
 
 ## Running it
@@ -55,10 +55,13 @@ The quickest way to start everything is:
 python start.py
 ```
 
-The first time, this asks you to choose a password for the web page. It then starts the
+The first time, this asks you to create your account for the web page. It then starts the
 primary, the backup and the web interface, opens the web page, and stops them all when you
-press Ctrl+C. To change the password or replace a lost one, run
+press Ctrl+C. To create an account from the command line, or replace a lost password, run
 `python web.py --set-password`.
+
+If you had a web password from before accounts were added, it keeps working as an account
+called `admin`.
 
 To put everything back to a fresh install, stop the system and run:
 
@@ -66,7 +69,7 @@ To put everything back to a fresh install, stop the system and run:
 python setup.py --reset
 ```
 
-**This permanently deletes every asset, the web password and the shared secret on this
+**This permanently deletes every asset, every web account and the shared secret on this
 machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
 the code or the git history. If you use several machines, reset each of them, because a
 server that still has the data would copy it straight back. The next `python start.py` runs
@@ -92,14 +95,16 @@ python web.py
 ```
 
 After logging in, you can search, filter by status, sort by clicking a column heading, add
-assets and delete them. The page refreshes every 5 seconds and says which server answered.
-Only this machine can open it unless you change `WEB_ADDRESS` in `web.py`.
+and delete assets, and create accounts for other people. The page refreshes every 5 seconds.
+Its summary row shows the totals and which server answered. Only this machine can open it
+unless you change `WEB_ADDRESS` in `web.py`.
 
 The system runs without the backup, but it won't survive the primary failing.
 
 To run it across several machines, put each server's IP address in `SERVERS` in
 `common.py` and use the same list on every machine. Copy `secret.key` to every machine too,
-after it has been created by the first run. Each server's firewall must allow its port. So far this has only been run as separate processes on one machine.
+after it has been created by the first run. Each server's firewall must allow its port. So
+far this has only been run as separate processes on one machine.
 
 ## Demo
 
@@ -115,9 +120,9 @@ Start both servers and the GUI, and keep the server logs visible.
 4. Open two GUI windows showing the same asset with the status "In Use". Click "Mark Not
    In Use" in one, then "Delete Asset" in the other without refreshing. The delete is
    refused because that window hasn't seen the change.
-5. Run `web.py`, log in and repeat steps 2 and 3. Without reloading, the page switches to
-   `from the backup server` and back, and you can still add and delete assets during the
-   outage. If you stop both servers, it keeps the last list on screen with a warning.
+5. Run `web.py`, log in and repeat steps 2 and 3. Without reloading, the summary row
+   changes to `Backup` and back, and you can still add and delete assets during the outage.
+   If you stop both servers, it keeps the last list on screen with a warning.
 
 ## Authentication
 
@@ -128,14 +133,23 @@ Between programs, every request to a server carries a shared secret from `secret
 first program to run creates this file. Servers refuse any request without the right value
 with `UNAUTHORIZED`, including the messages between the servers themselves.
 
-On the web page, one shared password, chosen during setup, protects everything except the
-login page itself. If `web.py` is started with nobody at the keyboard to choose one, it
-creates a random password and prints it once. Only
-a salted PBKDF2 hash is stored, in `web_password.json`. Logging in gives the browser a
-random session token that lasts 8 hours, in a cookie that scripts can't read and other
-websites can't send. After 5 wrong passwords in a row, logins are refused for a minute.
+On the web page, everything except the login page itself needs an account. You create the
+first one during setup. If `web.py` is started with nobody at the keyboard to do that, it
+creates an `admin` account with a random password and prints it once.
 
-`secret.key` and `web_password.json` are ignored by git and should never be shared publicly.
+There is no public sign-up, because that would let anyone who can reach the page give
+themselves an account. Instead, anyone logged in can create more accounts. Creating an
+account can't change an existing one, so only `python web.py --set-password`, run on the
+machine itself, can replace a password.
+
+Usernames ignore capitals and can only contain letters, numbers, dots, dashes and
+underscores. Passwords must be at least 8 characters. Only a salted PBKDF2 hash is stored,
+in `web_users.json`. Logging in gives the browser a random session token that lasts 8 hours,
+in a cookie that scripts can't read and other websites can't send. A wrong username gets the
+same reply as a wrong password, so neither reveals which accounts exist. After 5 failed
+logins in a row, on any usernames, logins are refused for a minute.
+
+`secret.key` and `web_users.json` are ignored by git and should never be shared publicly.
 
 ## Tests
 
@@ -143,11 +157,12 @@ websites can't send. After 5 wrong passwords in a row, logins are refused for a 
 python -m unittest -v test_system test_web test_start test_setup
 ```
 
-The tests start real servers on spare ports and use temporary data files, so your data
-isn't touched. `test_web.py` makes real HTTP requests but doesn't run the page's script in
-a browser, so that part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and `backup.py` as separate programs
-and kills them partway through. Some tests make a save fail on purpose, so you will see
-logged errors and tracebacks in the output.
+The tests start real servers on spare ports and use temporary files for data and accounts,
+so yours aren't touched. They do use `secret.key`, and create it if it doesn't exist yet.
+`test_web.py` makes real HTTP requests but doesn't run the page's script in a browser, so that
+part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and
+`backup.py` as separate programs and kills them partway through. Some tests make a save fail
+on purpose, so you will see logged errors and tracebacks in the output.
 
 ## Distributed systems concepts used
 
@@ -169,7 +184,7 @@ logged errors and tracebacks in the output.
 | Optimistic concurrency control | A change names the version it was based on and is refused if that is out of date | `node.py`: `version_conflict` |
 | Tombstones | Deleted IDs are kept so another server's old copy can't bring an asset back | `node.py`: `deleted_ids` |
 | Independent failure | One client or server failing doesn't bring down the others | `node.py`: `handle_client` |
-| Authentication | Programs prove themselves with a shared secret, and people log in to the web page with a password | `node.py`: `is_authorized`, `web.py`: `try_login` |
+| Authentication | Programs prove themselves with a shared secret, and people log in to the web page with a username and password | `node.py`: `is_authorized`, `web.py`: `try_login` |
 | Multi-tier architecture | The browser talks to `web.py`, which talks to the servers, so the servers don't need to know about HTTP | `web.py` |
 | Failure transparency | A browser keeps working through a failover without knowing which server is in charge | `web.py`: `assets_reply` |
 | CAP trade-off | In a network split both servers stay available, and the data is made consistent afterwards | See known limitations |
@@ -202,7 +217,19 @@ Requests between the servers:
 | `{"action": "HANDOVER"}` | Tells the backup to go on standby and send all its data |
 | `{"action": "INSTALL_STATE", "assets": [...], "deleted": {...}, "seq": 5}` | Replaces the backup's data with the merged copy |
 
-Errors look like `{"status": "ERROR", "code": "NOT_FOUND", "detail": "..."}`.
+Requests from the browser to `web.py`, over HTTP:
+
+| Request | Purpose | Needs a login? |
+|---|---|---|
+| `GET /`, `/app.js`, `/style.css` | The page itself, which holds no data | No |
+| `POST /api/login` with `{"username": "...", "password": "..."}` | Logs in, and sets the session cookie | No |
+| `POST /api/logout` | Logs out | No |
+| `GET /api/assets` | Lists the assets, who is logged in and which server answered | Yes |
+| `POST /api/assets` with `{"request_id": "...", "asset": {...}}` | Adds an asset | Yes |
+| `DELETE /api/assets/<id>?version=<n>` | Deletes an asset, if it is still at that version | Yes |
+| `POST /api/users` with `{"username": "...", "password": "..."}` | Creates an account | Yes |
+
+Errors from the servers look like `{"status": "ERROR", "code": "NOT_FOUND", "detail": "..."}`.
 
 | Code | Meaning |
 |---|---|
@@ -254,6 +281,9 @@ limitations cover what happens if both do.
 - Errors have clear codes, and clients show a message instead of a traceback when no
   server can be reached.
 - A separate backup server takes over if the primary fails.
+- Programs need a shared secret, and the web page needs a login, with accounts that can be
+  created from the page.
+- A web page, a single start command, first-time setup and a full reset were added.
 
 ### ACID properties
 
@@ -296,15 +326,19 @@ Other limitations:
 - Duplicates are judged only by description, category and location, because nothing
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
   different items. Status and category are free text.
-- Nothing is encrypted. The shared secret, the web password and all data cross the network
+- Nothing is encrypted. The shared secret, web passwords and all data cross the network
   as plain text, so someone watching a network could read them. Only run this across a
   trusted network, or add TLS first.
-- There is one web password and one shared secret, not separate accounts. Everyone who logs
-  in can do everything, and nothing records who made a change.
+- Every web account can do everything, including creating more accounts, because there are
+  no roles. Accounts can't be deleted from the page, and nothing records who changed an asset.
+- Accounts belong to `web.py` and are stored beside it. They aren't copied to the backup, so
+  they don't protect against losing that machine. All programs share one secret.
+- A password can't be changed from the web page, only with `python web.py --set-password`,
+  and `web.py` must then be restarted.
 - The web page can add and delete assets, but can't change an asset's status. Use the GUI
   or `manage.py` for that.
 - Don't change `WEB_ADDRESS` to expose the web page on a network you don't trust, because
-  the password would travel unencrypted.
+  passwords would travel unencrypted.
 - The web page fetches the whole list on every refresh and searches it in the browser, so
   this will get slow with a very large number of assets.
 - The servers can't search assets, and only the status can be changed after registration.
@@ -322,4 +356,5 @@ Other limitations:
 A third server would let a majority decide which server leads, so a network split couldn't
 leave two leaders. Other ideas are editing assets from the web page, editing more fields, a
 serial number to identify items, search and paging on the servers, a database instead of the
-JSON file, encryption with TLS, and separate user accounts.
+JSON file, encryption with TLS, and account roles, including deleting accounts and recording
+who changed what.
