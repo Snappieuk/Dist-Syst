@@ -2,7 +2,7 @@
 Management client.
 
 Changes the status of one asset, or deletes it. At least one server must already
-be running (start server.py first), and receive.py shows each asset's ID.
+be running (run start.py or server.py first), and receive.py shows each asset's ID.
 
     python manage.py
 

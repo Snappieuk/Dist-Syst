@@ -3,8 +3,8 @@ Tests for the program that starts the whole system.
 
     python -m unittest -v test_start
 
-These run short stand-in programs rather than the real servers, so they do not need the
-system's ports and never touch your data.
+These run short stand-in programs rather than the real servers, and replace setup with a
+stand-in, so they do not need the system's ports and never touch your data.
 """
 
 import contextlib
@@ -48,8 +48,7 @@ class StartTest(unittest.TestCase):
 
 class FirstStartTest(unittest.TestCase):
     def ensure(self, set_up: bool, at_keyboard: bool, setup_result: object = True) -> tuple:
-        """Run the check with setup replaced, returning its result, whether setup ran, and
-        whether any programs were started."""
+        """Run the check with setup replaced, returning its result and whether setup ran."""
         effect = setup_result if isinstance(setup_result, type) else None
         with mock.patch.object(start.setup, "is_set_up", return_value=set_up), \
                 mock.patch.object(start.setup, "can_ask_questions", return_value=at_keyboard), \

@@ -13,6 +13,7 @@ Requests from clients:
     {"action": "SET_STATUS", "asset_id": "...", "status": "...", "expected_version": 1}
     {"action": "DELETE", "asset_id": "...", "expected_version": 1}
 
+Every request also carries the shared secret in "auth", which common.request_from() adds.
 Replies always contain "status", and "served_by" names the server that answered.
 Failures look like this:
 

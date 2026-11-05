@@ -2,7 +2,7 @@
 Registration client.
 
 Prompts you for the details of one asset, then registers it with the
-server. At least one server must already be running (start server.py first).
+server. At least one server must already be running (run start.py or server.py first).
 
     python send.py
 

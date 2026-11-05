@@ -5,7 +5,8 @@ Tests for the web interface.
 
 These run a real asset server and a real web server, and make real HTTP requests, so
 they test the whole path from a browser to the data. The asset server uses a temporary
-data file and spare ports, so your real assets.json is never touched.
+data file and spare ports, so your real assets.json and accounts are never touched. The
+programs do share secret.key, which is created beside the code if it doesn't exist yet.
 """
 
 import contextlib

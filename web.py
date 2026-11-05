@@ -1,29 +1,29 @@
 """
 The web interface of the Asset Management System, for browsing, adding and deleting assets.
 
-    python web.py
-    python web.py --set-password
+    python web.py                  (runs the web interface)
+    python web.py --set-password   (creates an account, or resets a lost password)
 
 This is a separate program that sits between a browser and the servers. It speaks HTTP
 to the browser, and the system's own TCP protocol to the servers, exactly as the other
 clients do. It therefore needs no knowledge of which server is in charge, and keeps
 working through a failover.
 
-Everything except the login page needs an account. It listens only on this machine by
-default, and the connection is not encrypted, so passwords should not cross a network you
-don't trust.
+Everything except the login page needs an account, and anyone logged in can create more.
+It listens only on this machine by default, and the connection is not encrypted, so
+passwords should not cross a network you don't trust.
 """
 
 import getpass    # asks for a new password without showing it on screen
-import hashlib    # hashes the password, so that the password itself is never stored
+import hashlib    # hashes passwords, so that the passwords themselves are never stored
 import hmac       # compares password hashes safely
 import json       # the data sent to the browser is JSON
 import logging    # records what happens, including errors, without stopping
 import os         # os.path finds the page's files
 import re         # checks that a username is acceptable
-import secrets    # generates the first password
+import secrets    # generates login tokens, password salts and a first password
 import sys        # sys.argv holds the --set-password option
-import threading  # the lock protects the login data shared between request threads
+import threading  # the locks protect the data shared between request threads
 import time       # sessions and lockouts expire
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

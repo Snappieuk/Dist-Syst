@@ -6,7 +6,8 @@ Tests for the Asset Management System.
 These run real servers and talk to them over real TCP sockets, so they test the
 whole path a client uses. SystemTest runs one server on a background thread, and
 DistributedTest runs the primary and backup as separate programs. Every server uses
-temporary data files and spare ports, so your real assets.json is never touched.
+temporary data files and spare ports, so your real assets.json is never touched. The
+programs do share secret.key, which is created beside the code if it doesn't exist yet.
 """
 
 import contextlib

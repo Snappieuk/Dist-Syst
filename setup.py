@@ -115,8 +115,8 @@ def reset() -> bool:
     """Delete everything the system has generated, once the user confirms. Returns whether
     anything was deleted.
 
-    It refuses while the system is running. A running server holds its data in memory and
-    would simply save it all again, and it syncs with the other server.
+    It refuses while the system is running. A running server holds its data in memory, so
+    it would simply save it all again, or give it to the other server when they reconcile.
     """
     running = running_programs()
     if running:

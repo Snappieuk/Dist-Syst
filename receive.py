@@ -3,7 +3,7 @@ Query client.
 
 Asks the server for the current list of registered assets and prints
 each one's ID, status and tags. At least one server must already be running
-(start server.py first).
+(run start.py or server.py first).
 
     python receive.py
 

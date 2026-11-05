@@ -1,10 +1,10 @@
 """
-Tests for first-time setup.
+Tests for first-time setup and the full reset.
 
     python -m unittest -v test_setup
 
-Every file these use is in a temporary folder, so your real data and secrets are never
-touched, and a test that went wrong could not delete them.
+Every file these use is in a temporary folder, so your real data, accounts and secrets
+are never touched, and a test that went wrong could not delete them.
 """
 
 import contextlib

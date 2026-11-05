@@ -1,5 +1,5 @@
-// Fetches the assets from the web program, and shows those matching the filters in the
-// chosen order.
+// Runs the web page: logging in and out, showing the assets that match the filters in the
+// chosen order, adding and deleting assets, and creating accounts.
 //
 // Asset details are typed in by people, so they are only ever added to the page as
 // plain text (textContent), never as HTML. A description containing a <script> tag is
