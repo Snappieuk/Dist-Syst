@@ -100,6 +100,36 @@ th {
   white-space: nowrap;
 }
 
+th button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+th button:hover {
+  color: var(--accent);
+}
+
+th button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+th[aria-sort] {
+  color: var(--accent);
+}
+
+th[aria-sort="ascending"] button::after {
+  content: " \25B2";
+}
+
+th[aria-sort="descending"] button::after {
+  content: " \25BC";
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }
