@@ -122,6 +122,16 @@ async function createAccount(event) {
   }
 }
 
+// Status is free text, so only the two standard values get their own colour.
+function statusBadge(status) {
+  const badge = document.createElement("span");
+  badge.className = "status-badge";
+  badge.classList.toggle("in-use", status === "In Use");
+  badge.classList.toggle("not-in-use", status === "Not In Use");
+  badge.textContent = status;
+  return badge;
+}
+
 function deleteCell(asset) {
   const button = document.createElement("button");
   button.type = "button";
@@ -180,7 +190,11 @@ function showAssets() {
     const row = document.createElement("tr");
     for (const column of COLUMNS) {
       const cell = document.createElement("td");
-      cell.textContent = cellText(asset, column);
+      if (column === "status") {
+        cell.append(statusBadge(asset.status));
+      } else {
+        cell.textContent = cellText(asset, column);
+      }
       row.append(cell);
     }
     row.append(deleteCell(asset));
