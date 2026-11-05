@@ -21,8 +21,10 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import common
+import manage
 import receive
 import server
 
@@ -399,6 +401,34 @@ class SystemTest(NodeTestCase):
         self.assertEqual(server.deleted_ids, {})
 
     # ---- The management client ----
+
+    def run_manage(self, *answers) -> str:
+        """Run manage.py, giving it these answers to its prompts, and return its output."""
+        output = io.StringIO()
+        with mock.patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(output):
+            manage.main()
+        return output.getvalue()
+
+    def test_manage_client_changes_status(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        self.run_manage(asset_id, "1")
+        self.assertEqual(list_assets()[0]["status"], common.NOT_IN_USE)
+
+        self.run_manage(asset_id, "2")
+        self.assertEqual(list_assets()[0]["status"], common.IN_USE)
+
+    def test_manage_client_deletes_only_after_confirmation(self):
+        asset_id = register(make_asset())["stored"]["asset_id"]
+
+        self.assertIn("Nothing was deleted", self.run_manage(asset_id, "3", "no"))
+        self.assertEqual(list_ids(), [asset_id])
+
+        self.run_manage(asset_id, "3", "DELETE")
+        self.assertEqual(list_ids(), [])
+
+    def test_manage_client_reports_an_unknown_id(self):
+        self.assertIn("No asset has the ID", self.run_manage("AST-X"))
 
     # ---- Validation ----
 

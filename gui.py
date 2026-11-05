@@ -14,11 +14,27 @@ import threading  # runs network requests without freezing the window
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from common import format_asset_tags, generate_asset_tags, include_asset, new_register_request, send_request
+from common import (
+    IN_USE,
+    NOT_IN_USE,
+    format_asset_tags,
+    generate_asset_tags,
+    include_asset,
+    new_register_request,
+    send_request,
+)
+
+# What the status line says when each kind of change succeeds.
+SUCCESS_MESSAGES = {
+    "register": "Asset registered successfully",
+    "set_status": "Asset status updated",
+    "delete": "Asset deleted",
+}
 
 
 class AssetManagementApp:
-    """The main window: a form to register assets and a table listing them."""
+    """The main window: a form to register assets, a table listing them, and buttons
+    to change or delete the selected one."""
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -48,7 +64,8 @@ class AssetManagementApp:
         )
         for row, (key, label) in enumerate(labels):
             ttk.Label(form, text=label).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
-            entry = ttk.Entry(form)
+            # Status offers the standard choices, but other text can be typed too.
+            entry = ttk.Combobox(form, values=(IN_USE, NOT_IN_USE)) if key == "status" else ttk.Entry(form)
             entry.grid(row=row, column=1, sticky=tk.EW, pady=3)
             self.fields[key] = entry
 
@@ -61,6 +78,20 @@ class AssetManagementApp:
         listing = ttk.LabelFrame(self.root, text="Registered assets", padding=8)
         listing.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
 
+        # Packed first, so the table cannot squeeze the buttons out of a small window.
+        actions = ttk.Frame(listing)
+        actions.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+        self.not_in_use_button = ttk.Button(
+            actions, text="Mark Not In Use", command=lambda: self.set_selected_status(NOT_IN_USE)
+        )
+        self.not_in_use_button.pack(side=tk.LEFT)
+        self.in_use_button = ttk.Button(
+            actions, text="Mark In Use", command=lambda: self.set_selected_status(IN_USE)
+        )
+        self.in_use_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.delete_button = ttk.Button(actions, text="Delete Asset", command=self.delete_selected)
+        self.delete_button.pack(side=tk.RIGHT)
+
         columns = (
             "asset_id",
             "description",
@@ -70,7 +101,7 @@ class AssetManagementApp:
             "tags",
             "date_registered",
         )
-        self.tree = ttk.Treeview(listing, columns=columns, show="headings")
+        self.tree = ttk.Treeview(listing, columns=columns, show="headings", selectmode=tk.BROWSE)
         headings = {
             "asset_id": "Asset ID",
             "description": "Description",
@@ -104,8 +135,14 @@ class AssetManagementApp:
     def _set_busy(self, busy: bool) -> None:
         """Disable the buttons during a request, so it cannot be sent twice."""
         state = tk.DISABLED if busy else tk.NORMAL
-        self.register_button.configure(state=state)
-        self.refresh_button.configure(state=state)
+        for button in (
+            self.register_button,
+            self.refresh_button,
+            self.not_in_use_button,
+            self.in_use_button,
+            self.delete_button,
+        ):
+            button.configure(state=state)
 
     def _start_request(self, operation: str, request: dict) -> None:
         """Send a request on a background thread, keeping the window responsive."""
@@ -120,10 +157,10 @@ class AssetManagementApp:
                 assets = None
                 error = None
 
-                # After a successful registration, fetch the list again so the
-                # table includes the new asset, even if the list came from a
-                # server that has not synced it yet.
-                if operation == "register" and response.get("status") == "OK":
+                # After a successful change, fetch the list again so the table shows
+                # it. A new asset is included even if the list came from a server
+                # that has not synced it yet.
+                if operation != "list" and response.get("status") == "OK":
                     try:
                         list_response = send_request({"action": "LIST"})
                         if list_response.get("status") != "OK":
@@ -166,6 +203,41 @@ class AssetManagementApp:
         """Ask the server for the current list of assets."""
         self._start_request("list", {"action": "LIST"})
 
+    def _selected_asset_id(self) -> object:
+        """Return the ID of the asset selected in the table, or None after asking
+        the user to select one."""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("No asset selected", "Please select an asset in the table.", parent=self.root)
+            return None
+        return selection[0]  # each row is identified by its asset's ID
+
+    def set_selected_status(self, status: str) -> None:
+        """Change the status of the asset selected in the table."""
+        asset_id = self._selected_asset_id()
+        if asset_id is not None:
+            self._start_request("set_status", {"action": "SET_STATUS", "asset_id": asset_id, "status": status})
+
+    def delete_selected(self) -> None:
+        """Delete the asset selected in the table, once the user has confirmed it."""
+        asset_id = self._selected_asset_id()
+        if asset_id is None:
+            return
+
+        if messagebox.askyesno(
+            "Delete asset",
+            f"Delete {asset_id} for good? This cannot be undone.",
+            icon=messagebox.WARNING,
+            parent=self.root,
+        ):
+            self._start_request("delete", {"action": "DELETE", "asset_id": asset_id})
+
+    def _finish_registration(self) -> None:
+        """Clear the form after a registration the server has confirmed."""
+        self.unconfirmed_registration = None
+        for entry in self.fields.values():
+            entry.delete(0, tk.END)
+
     def _process_results(self) -> None:
         """Display any finished requests. Runs on the main thread, every 100 ms."""
         try:
@@ -174,16 +246,15 @@ class AssetManagementApp:
                 self._set_busy(False)
 
                 if error:
-                    # The registration worked and only the list refresh failed, so
-                    # clear the form as usual but report the problem.
-                    if operation == "register" and response and response.get("status") == "OK":
-                        self.unconfirmed_registration = None
-                        for entry in self.fields.values():
-                            entry.delete(0, tk.END)
-                        self.status_label.configure(text="Asset registered; list refresh failed")
+                    # The change worked and only the list refresh failed, so finish
+                    # as usual but report the problem.
+                    if operation != "list" and response and response.get("status") == "OK":
+                        if operation == "register":
+                            self._finish_registration()
+                        self.status_label.configure(text=SUCCESS_MESSAGES[operation] + "; list refresh failed")
                         messagebox.showerror(
-                            "Asset registered",
-                            "The asset was registered, but the list could not be refreshed:\n" + error,
+                            "List not refreshed",
+                            SUCCESS_MESSAGES[operation] + ", but the list could not be refreshed:\n" + error,
                             parent=self.root,
                         )
                         continue
@@ -197,11 +268,10 @@ class AssetManagementApp:
                     messagebox.showerror("Asset server error", detail, parent=self.root)
                     continue
 
-                if operation == "register":
-                    self.unconfirmed_registration = None
-                    for entry in self.fields.values():
-                        entry.delete(0, tk.END)
-                    self.status_label.configure(text="Asset registered successfully")
+                if operation != "list":
+                    if operation == "register":
+                        self._finish_registration()
+                    self.status_label.configure(text=SUCCESS_MESSAGES[operation])
                     self._show_assets(assets)
                 else:
                     self._show_assets(response.get("assets", []))
@@ -222,6 +292,7 @@ class AssetManagementApp:
             self.tree.insert(
                 "",
                 tk.END,
+                iid=asset.get("asset_id"),  # lets a selected row give its asset's ID
                 values=(
                     asset.get("asset_id", ""),
                     asset.get("description", ""),
