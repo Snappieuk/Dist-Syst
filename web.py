@@ -24,7 +24,7 @@ import threading  # the lock protects the login data shared between request thre
 import time       # sessions and lockouts expire
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from common import BAD_REQUEST, CONFLICT, DUPLICATE_ASSET, NOT_FOUND, generate_asset_tags, send_request
 
@@ -70,6 +70,9 @@ LOCKOUT_SECONDS = 60
 
 # The largest request body accepted. Everything sent here is small.
 MAX_BODY_BYTES = 64 * 1024
+
+# One asset's address is this followed by its ID.
+ASSET_ADDRESS_PREFIX = "/api/assets/"
 
 # The server's errors that a user can act on, and the HTTP status of each.
 USER_ERROR_STATUSES = {
@@ -198,6 +201,9 @@ def public_asset(asset: dict) -> dict:
     """Return only the parts of a stored asset that a browser may see."""
     public = {field: asset.get(field, "") for field in PUBLIC_FIELDS}
 
+    # The browser sends this back when deleting, so a change it hasn't seen is noticed.
+    public["version"] = asset.get("version", 0)
+
     # Assets saved before tagging was added have no tags, so those are worked out here.
     public["tags"] = asset.get("tags") or generate_asset_tags(asset)
     return public
@@ -271,6 +277,21 @@ def add_asset_reply(body: dict) -> tuple:
     return status, result
 
 
+def delete_asset_reply(asset_id: str, query: str) -> tuple:
+    """Delete an asset, returning an HTTP status and a JSON body. The address's ?version=
+    says which version the user was looking at, and is required, so that an asset someone
+    else has just changed can't be deleted by accident."""
+    try:
+        version = int(parse_qs(query)["version"][0])
+    except (KeyError, ValueError):
+        return 400, {"error": "The version of the asset is needed"}
+
+    status, _, result = change_reply(
+        {"action": "DELETE", "asset_id": asset_id, "expected_version": version}, 200
+    )
+    return status, result
+
+
 class WebHandler(BaseHTTPRequestHandler):
     """Answers one browser request. Each request runs on its own thread."""
 
@@ -312,6 +333,20 @@ class WebHandler(BaseHTTPRequestHandler):
             body = self.read_json_body()
             if body is not None:
                 self.send_json(*add_asset_reply(body))
+
+    def do_DELETE(self) -> None:
+        if not self.is_from_this_site():
+            self.send_json(403, {"error": "This request came from another site"})
+            return
+
+        address = urlsplit(self.path)
+        if not address.path.startswith(ASSET_ADDRESS_PREFIX) or address.path == ASSET_ADDRESS_PREFIX:
+            self.send_json(404, {"error": "There is nothing at this address"})
+        elif not self.is_logged_in():
+            self.send_json(401, {"error": "Please log in"})
+        else:
+            asset_id = unquote(address.path[len(ASSET_ADDRESS_PREFIX):])
+            self.send_json(*delete_asset_reply(asset_id, address.query))
 
     def handle_login(self) -> None:
         body = self.read_json_body()

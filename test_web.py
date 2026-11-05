@@ -196,7 +196,7 @@ class AssetsApiTest(WebTestCase):
 
         self.assertEqual(
             set(body["assets"][0]),
-            {"asset_id", "description", "category", "location", "status", "date_registered", "tags"},
+            {"asset_id", "description", "category", "location", "status", "date_registered", "tags", "version"},
         )
 
     def test_assets_saved_without_tags_still_get_them(self):
@@ -233,14 +233,68 @@ class AssetsApiTest(WebTestCase):
         self.assertEqual(status, 502)
         self.assertNotIn("bytes", body["error"])
 
-    def test_changing_data_is_not_possible(self):
+    def test_unsupported_changes_are_refused(self):
         register(make_asset())
 
-        for method, expected in (("PUT", 501), ("DELETE", 501)):
-            with self.subTest(method):
-                status, _, _ = self.fetch("/api/assets", method)
-                self.assertEqual(status, expected)
+        for method, path, expected in (("PUT", "/api/assets", 501), ("DELETE", "/api/assets", 404), ("DELETE", "/api/assets/", 404)):
+            with self.subTest(method=method, path=path):
+                self.assertEqual(self.fetch(path, method)[0], expected)
         self.assertEqual(len(node.assets), 1)
+
+
+class DeleteAssetTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.asset_id = register(make_asset())["stored"]["asset_id"]
+
+    def delete(self, asset_id: str = None, version: object = 1, **options) -> tuple:
+        path = f"/api/assets/{asset_id or self.asset_id}?version={version}"
+        status, _, reply = self.fetch(path, "DELETE", **options)
+        return status, json.loads(reply)
+
+    def test_an_asset_can_be_deleted(self):
+        status, body = self.delete()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["served_by"], "primary")
+        self.assertEqual(node.assets, [])
+        self.assertEqual(self.fetch_json("/api/assets")[1]["assets"], [])
+
+    def test_deleting_needs_a_login(self):
+        self.assertEqual(self.delete(cookie=None)[0], 401)
+        self.assertEqual(len(node.assets), 1)
+
+    def test_deleting_from_another_site_is_refused(self):
+        status, _ = self.delete(extra_headers={"Origin": "http://evil.example"})
+
+        self.assertEqual(status, 403)
+        self.assertEqual(len(node.assets), 1)
+
+    def test_an_asset_someone_else_changed_is_not_deleted(self):
+        common.send_request({"action": "SET_STATUS", "asset_id": self.asset_id, "status": common.NOT_IN_USE})
+
+        status, body = self.delete(version=1)
+
+        self.assertEqual(status, 409)
+        self.assertIn("changed by someone else", body["error"])
+        self.assertEqual(len(node.assets), 1)
+
+    def test_the_version_is_required(self):
+        for path in (f"/api/assets/{self.asset_id}", f"/api/assets/{self.asset_id}?version=abc"):
+            with self.subTest(path):
+                self.assertEqual(self.fetch(path, "DELETE")[0], 400)
+        self.assertEqual(len(node.assets), 1)
+
+    def test_an_unknown_asset_is_not_found(self):
+        self.assertEqual(self.delete("AST-NOPE")[0], 404)
+
+    def test_an_id_with_unusual_characters_can_be_deleted(self):
+        node.assets.append({**make_asset("Old"), "asset_id": "OLD ID/1", "version": 1})
+
+        status, _ = self.delete("OLD%20ID%2F1")
+
+        self.assertEqual(status, 200)
+        self.assertEqual([asset["asset_id"] for asset in node.assets], [self.asset_id])
 
 
 class AddAssetTest(WebTestCase):
