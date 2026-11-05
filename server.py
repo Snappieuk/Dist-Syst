@@ -28,6 +28,13 @@ ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.j
 # How often the primary checks whether the backup needs bringing up to date.
 BACKUP_CHECK_SECONDS = 1
 
+# How long the primary keeps trying to sync with the backup when it starts, and how long
+# it waits between tries. When both are started together, the backup may not be listening
+# yet. Without retrying, changes made in the next second wouldn't be copied to it. The
+# limit stays well under a client's timeout, because clients wait while this runs.
+START_SYNC_SECONDS = 3
+START_SYNC_RETRY_SECONDS = 0.2
+
 logger = node.logger
 
 backup_address = None    # where the backup is, or None if there is not one
@@ -190,6 +197,19 @@ def replicate_change(change: dict) -> None:
         backup_in_sync = False
 
 
+def sync_at_start() -> bool:
+    """Try to sync with the backup for up to START_SYNC_SECONDS, returning whether it
+    worked. If the backup isn't there by then, the primary starts alone, and watch_backup()
+    syncs it when it appears."""
+    deadline = time.monotonic() + START_SYNC_SECONDS
+    while not catch_up_backup():
+        if time.monotonic() >= deadline:
+            logger.info("The backup isn't reachable yet, so starting alone for now.")
+            return False
+        time.sleep(START_SYNC_RETRY_SECONDS)
+    return True
+
+
 def watch_backup() -> None:
     """Check on the backup forever, bringing it up to date whenever it needs it.
     Runs on its own thread.
@@ -236,7 +256,7 @@ def main() -> None:
         if backup_address is not None:
             # The backup may have taken over while this server was down, so get its
             # changes before serving anyone. If it is not there, start alone.
-            catch_up_backup()
+            sync_at_start()
 
             # daemon=True means this thread does not stop the program from exiting.
             threading.Thread(target=watch_backup, name="watch-backup", daemon=True).start()

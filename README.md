@@ -96,7 +96,11 @@ and delete assets, and create accounts for other people. The page refreshes ever
 Its summary row shows the totals and which server answered. Only this machine can open it
 unless you change `WEB_ADDRESS` in `web.py`.
 
-The system runs without the backup, but it won't survive the primary failing.
+The system runs without the backup, but it won't survive the primary failing. When the
+primary starts, it keeps trying to reach the backup for up to 3 seconds before serving
+anyone, so the two can be started at the same moment and no change misses the backup. If
+the backup still isn't there, the primary starts alone and brings the backup up to date
+when it appears.
 
 ## Running it across several machines
 

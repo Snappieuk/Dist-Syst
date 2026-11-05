@@ -892,6 +892,31 @@ class ReplicaTest(NodeTestCase):
         self.assertEqual(seq, 9)
 
 
+class StartSyncTest(unittest.TestCase):
+    """The primary keeps trying to sync with the backup for a short time as it starts."""
+
+    def setUp(self):
+        self.addCleanup(setattr, server, "START_SYNC_RETRY_SECONDS", server.START_SYNC_RETRY_SECONDS)
+        server.START_SYNC_RETRY_SECONDS = 0
+
+    def test_it_retries_until_the_backup_answers(self):
+        with mock.patch.object(server, "catch_up_backup", side_effect=[False, False, True]) as catch_up:
+            self.assertTrue(server.sync_at_start())
+        self.assertEqual(catch_up.call_count, 3)
+
+    def test_it_gives_up_and_starts_alone_if_the_backup_never_answers(self):
+        self.addCleanup(setattr, server, "START_SYNC_SECONDS", server.START_SYNC_SECONDS)
+        server.START_SYNC_SECONDS = 0.2
+
+        with mock.patch.object(server, "catch_up_backup", return_value=False), \
+                self.assertLogs(node.logger, "INFO") as logs:
+            started = time.monotonic()
+            self.assertFalse(server.sync_at_start())
+
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIn("starting alone", logs.output[-1])
+
+
 class DistributedTest(unittest.TestCase):
     """Runs the primary and backup as real, separate programs, and stops them."""
 
@@ -905,15 +930,16 @@ class DistributedTest(unittest.TestCase):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = [self.primary, self.backup]
 
-    def start_program(self, module: str) -> subprocess.Popen:
+    def start_program(self, module: str, settings: str = "") -> subprocess.Popen:
         """Start server.py or backup.py as its own process, using the test's addresses
-        and its own data file."""
+        and its own data file. `settings` is extra code run just before it starts."""
         code = (
             "import common\n"
             f"common.SERVERS = {common.SERVERS!r}\n"
             f"common.LOG_FOLDER = {self.temp_path!r}\n"
             f"import {module} as program\n"
             f"program.ASSETS_FILE = {os.path.join(self.temp_path, module + '.json')!r}\n"
+            f"{settings}\n"
             "program.main()\n"
         )
         process = subprocess.Popen(
@@ -970,6 +996,19 @@ class DistributedTest(unittest.TestCase):
             lambda: common.request_from(self.backup, {"action": "PING"})["accepts_writes"],
             "saw the backup take over",
         )
+
+    def test_a_backup_that_starts_just_after_the_primary_gets_every_change(self):
+        # The primary's first attempt to sync finds nothing listening. It keeps trying,
+        # and doesn't serve clients until it has finished, so the first change is already
+        # copied. Its retry time is lengthened here, so the test doesn't depend on timing.
+        # A failed connection can take 2 seconds on Windows, so the backup starts later.
+        self.start_program("server", "program.START_SYNC_SECONDS = 10")
+        time.sleep(2.5)
+        self.start_backup()
+        self.wait_until(lambda: common.request_from(self.backup, {"action": "PING"}), "saw the backup start")
+
+        self.assertEqual(register(make_asset("First"))["status"], "OK")
+        self.assertIn("First", self.descriptions_on(self.backup))
 
     def test_a_change_is_on_the_backup_before_the_client_hears_it_worked(self):
         self.start_backup()
