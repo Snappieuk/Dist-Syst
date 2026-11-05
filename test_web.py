@@ -30,6 +30,9 @@ import web
 logging.getLogger("asset_web").setLevel(logging.ERROR)
 
 
+PASSWORD = "test password"
+
+
 def make_asset(description="Dell laptop", **changes) -> dict:
     """Build what a client sends to register an asset, optionally changing fields."""
     asset = {
@@ -72,10 +75,29 @@ class WebTestCase(unittest.TestCase):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = [self.asset_server]
 
-    def fetch(self, path: str, method: str = "GET") -> tuple:
-        """Make an HTTP request, returning the status, headers and body."""
+        # A cheap hash keeps the tests fast. The real one is slow on purpose.
+        self.addCleanup(setattr, web, "password_record", web.password_record)
+        web.password_record = web.hash_password(PASSWORD, iterations=1000)
+        web.sessions.clear()
+        web.failed_logins = 0
+        web.locked_until = 0
+
+        # Tests start logged in, unless they set this to None.
+        status, headers, _ = self.fetch("/api/login", "POST", {"password": PASSWORD}, cookie=None)
+        self.assertEqual(status, 200)
+        self.cookie = headers["Set-Cookie"].split(";")[0]
+
+    def fetch(self, path: str, method: str = "GET", body: dict = None, extra_headers: dict = None, **options) -> tuple:
+        """Make an HTTP request, returning the status, headers and body. It sends the test's
+        login, or another cookie if one is given with cookie=."""
+        headers = dict(extra_headers or {})
+        cookie = options.get("cookie", getattr(self, "cookie", None))
+        if cookie:
+            headers["Cookie"] = cookie
+        data = None if body is None else json.dumps(body).encode("utf-8")
+
         port = self.web_server.server_address[1]
-        request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method)
+        request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, response.headers, response.read()
@@ -214,11 +236,106 @@ class AssetsApiTest(WebTestCase):
     def test_changing_data_is_not_possible(self):
         register(make_asset())
 
-        for method in ("POST", "PUT", "DELETE"):
+        for method, expected in (("POST", 404), ("PUT", 501), ("DELETE", 501)):
             with self.subTest(method):
                 status, _, _ = self.fetch("/api/assets", method)
-                self.assertEqual(status, 501)  # not implemented
+                self.assertEqual(status, expected)
         self.assertEqual(len(node.assets), 1)
+
+
+class LoginTest(WebTestCase):
+    def login(self, password: object = PASSWORD, **options) -> tuple:
+        return self.fetch("/api/login", "POST", {"password": password}, cookie=None, **options)
+
+    def test_the_asset_list_needs_a_login(self):
+        register(make_asset())
+
+        status, _, body = self.fetch("/api/assets", cookie=None)
+
+        self.assertEqual(status, 401)
+        self.assertNotIn(b"Dell", body)
+
+    def test_a_made_up_or_damaged_cookie_is_refused(self):
+        for cookie in ("session=made-up", "session=", 'bad"cookie;;=', "other=value"):
+            with self.subTest(cookie):
+                self.assertEqual(self.fetch("/api/assets", cookie=cookie)[0], 401)
+
+    def test_the_right_password_logs_in(self):
+        status, headers, _ = self.login()
+
+        self.assertEqual(status, 200)
+        cookie = headers["Set-Cookie"]
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertEqual(self.fetch("/api/assets", cookie=cookie.split(";")[0])[0], 200)
+
+    def test_a_wrong_password_gives_no_login(self):
+        status, headers, _ = self.login("wrong")
+
+        self.assertEqual(status, 401)
+        self.assertIsNone(headers["Set-Cookie"])
+
+    def test_invalid_login_requests_are_refused(self):
+        self.assertEqual(self.login(7)[0], 400)
+
+        for data in (b"not json", b"[1, 2]"):
+            with self.subTest(data):
+                port = self.web_server.server_address[1]
+                request = urllib.request.Request(f"http://127.0.0.1:{port}/api/login", data=data, method="POST")
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(request, timeout=10)
+                self.assertEqual(caught.exception.code, 400)
+                caught.exception.close()
+
+    def test_a_huge_request_is_refused_without_reading_it(self):
+        status, _, _ = self.fetch(
+            "/api/login", "POST", {"password": "x" * (web.MAX_BODY_BYTES + 1)}, cookie=None
+        )
+        self.assertEqual(status, 400)
+
+    def test_logging_out_ends_the_session(self):
+        self.assertEqual(self.fetch("/api/assets")[0], 200)
+
+        status, headers, _ = self.fetch("/api/logout", "POST")
+
+        self.assertEqual(status, 200)
+        self.assertIn("Max-Age=0", headers["Set-Cookie"])
+        self.assertEqual(self.fetch("/api/assets")[0], 401)
+
+    def test_an_expired_session_is_refused(self):
+        self.addCleanup(setattr, web, "SESSION_SECONDS", web.SESSION_SECONDS)
+        web.SESSION_SECONDS = 0
+        _, headers, _ = self.login()
+
+        self.assertEqual(self.fetch("/api/assets", cookie=headers["Set-Cookie"].split(";")[0])[0], 401)
+
+    def test_too_many_wrong_passwords_lock_logins_for_a_while(self):
+        for _ in range(web.FAILED_LOGIN_LIMIT):
+            self.assertEqual(self.login("wrong")[0], 401)
+
+        # Even the right password is refused now, but existing logins carry on.
+        self.assertEqual(self.login()[0], 429)
+        self.assertEqual(self.fetch("/api/assets")[0], 200)
+
+        web.locked_until = 0
+        self.assertEqual(self.login()[0], 200)
+
+    def test_a_correct_login_resets_the_wrong_password_count(self):
+        for _ in range(web.FAILED_LOGIN_LIMIT - 1):
+            self.login("wrong")
+        self.assertEqual(self.login()[0], 200)
+
+        self.assertEqual(self.login("wrong")[0], 401)
+        self.assertEqual(self.login()[0], 200)
+
+    def test_requests_from_other_sites_are_refused(self):
+        status, _, _ = self.login(extra_headers={"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+
+    def test_requests_from_this_site_are_accepted(self):
+        port = self.web_server.server_address[1]
+        status, _, _ = self.login(extra_headers={"Origin": f"http://127.0.0.1:{port}"})
+        self.assertEqual(status, 200)
 
 
 class PageTest(WebTestCase):
