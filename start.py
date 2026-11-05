@@ -36,8 +36,10 @@ WEB_START_SECONDS = 10
 # the backup to take over and for a client to make a change on it, which demo.py shows.
 RESTART_SECONDS = 20
 
-# A program that stops sooner than this after starting failed as it started.
-START_FAILURE_SECONDS = 5
+# A program that stops sooner than this after starting failed as it started. A port
+# that is already in use stops a program well within this, while a demo can stop a
+# server only a few seconds after the system starts.
+START_FAILURE_SECONDS = 2
 
 
 def ensure_set_up() -> bool:
