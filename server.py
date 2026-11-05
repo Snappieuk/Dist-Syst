@@ -65,8 +65,9 @@ def merge_state(peer_assets: list, peer_deleted: dict) -> int:
     """Combine the backup's data into this server's, returning how many records
     changed. The caller must hold the lock.
 
-    The primary alone makes these decisions, then gives the backup the result, so the
-    two cannot disagree afterwards:
+    The two can only differ if the backup took over while the primary was down or cut
+    off. The primary alone makes these decisions, then gives the backup the result, so
+    the two cannot disagree afterwards:
       - A deleted asset stays deleted, even if the other server changed it meanwhile.
       - A missing asset is copied across.
       - Of two different copies, the one with the higher version wins.
@@ -105,6 +106,8 @@ def catch_up_backup() -> bool:
       2. Its data is merged into this server's, and saved.
       3. INSTALL_STATE: the backup replaces its data with the merged result.
 
+    If this server fails between the steps, the backup notices the missed heartbeats
+    and takes over again, with its data intact.
     """
     global backup_in_sync
 
@@ -177,7 +180,11 @@ def replicate_change(change: dict) -> None:
 
 def watch_backup() -> None:
     """Check on the backup forever, bringing it up to date whenever it needs it.
-    Runs on its own thread."""
+    Runs on its own thread.
+
+    This also ends a split: if the network failed but both servers stayed running,
+    the backup will have taken over, and this notices when it can be reached again.
+    """
     global backup_in_sync
 
     while True:
@@ -215,8 +222,8 @@ def main() -> None:
     server_sock = node.start_up(common.SERVERS[0])
     with server_sock:
         if backup_address is not None:
-            # Bring the backup up to date before serving anyone. If it is not there,
-            # start alone.
+            # The backup may have taken over while this server was down, so get its
+            # changes before serving anyone. If it is not there, start alone.
             catch_up_backup()
 
             # daemon=True means this thread does not stop the program from exiting.

@@ -12,6 +12,7 @@ about what counts as a valid message live here rather than being repeated
 
 import json         # used to turn a Python dict into a JSON string, and back
 import socket       # provides the networking building blocks (sockets)
+import time         # waits while the backup takes over
 import unicodedata  # recognises letters and digits in any language, for tags
 import uuid         # creates the random request ID sent with each registration
 
@@ -42,6 +43,10 @@ TIMEOUT_SECONDS = 5
 # How long the servers wait for each other's heartbeats. This is short, because a
 # heartbeat needs no work from the other server, so a slow one means trouble.
 HEARTBEAT_TIMEOUT_SECONDS = 1
+
+# How long a client keeps trying while no server is accepting changes. This is long
+# enough for the backup to notice that the primary has failed and take over.
+FAILOVER_WAIT_SECONDS = 15
 
 # Error codes, sent as the "code" field of an ERROR reply. "detail" is written
 # for people and may be reworded, so programs should act on the code instead.
@@ -302,30 +307,43 @@ def send_request(request: dict) -> dict:
     it could not save. NOT_FOUND may only mean this server has not got the asset yet.
     If no server does better, the last such reply is returned.
 
-    If only the backup replies, it is on standby, so its NOT_PRIMARY reply is returned.
+    If a server replies NOT_PRIMARY and no other has done the work, the backup has not
+    taken over yet, so this waits and tries again, for up to FAILOVER_WAIT_SECONDS.
 
     Raises ConnectionError with a clear message if no server can be reached, and
     ValueError if the request is too large or a reply is not a valid message.
     """
-    last_error = None
-    retryable_reply = None
+    deadline = time.monotonic() + FAILOVER_WAIT_SECONDS
 
-    for address in SERVERS:
-        try:
-            reply = request_from(address, request)
-        except OSError as exc:
-            # OSError covers a refused connection, a timeout and a dropped connection.
-            last_error = exc
-            continue
+    while True:
+        last_error = None
+        retryable_reply = None
+        not_primary_reply = None
 
-        if reply.get("code") in (INTERNAL, NOT_FOUND, NOT_PRIMARY):
-            retryable_reply = retryable_reply if reply.get("code") == NOT_PRIMARY and retryable_reply else reply
-            continue
+        for address in SERVERS:
+            try:
+                reply = request_from(address, request)
+            except OSError as exc:
+                # OSError covers a refused connection, a timeout and a dropped connection.
+                last_error = exc
+                continue
 
-        return reply
+            if reply.get("code") in (INTERNAL, NOT_FOUND):
+                retryable_reply = reply
+            elif reply.get("code") == NOT_PRIMARY:
+                not_primary_reply = reply
+            else:
+                return reply
 
-    if retryable_reply is not None:
-        return retryable_reply
+        if retryable_reply is not None:
+            return retryable_reply
+
+        if not_primary_reply is None:
+            break  # no server could be reached, so there is nothing to wait for
+
+        if time.monotonic() >= deadline:
+            return not_primary_reply
+        time.sleep(1)
 
     raise ConnectionError(
         f"Could not reach any asset server ({last_error}).\n"

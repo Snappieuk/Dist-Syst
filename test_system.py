@@ -571,6 +571,19 @@ class SystemTest(NodeTestCase):
         self.assertEqual(common.send_request({"action": "DELETE", "asset_id": asset_id})["status"], "OK")
         self.assertEqual(common.send_request({"action": "DELETE", "asset_id": "AST-X"})["code"], common.NOT_FOUND)
 
+    def test_client_waits_for_a_takeover_then_succeeds(self):
+        node.accepts_writes = False
+        threading.Timer(1.5, setattr, (node, "accepts_writes", True)).start()
+
+        self.assertEqual(register(make_asset())["status"], "OK")
+
+    def test_client_stops_waiting_if_no_server_ever_accepts_changes(self):
+        node.accepts_writes = False
+        self.addCleanup(setattr, common, "FAILOVER_WAIT_SECONDS", common.FAILOVER_WAIT_SECONDS)
+        common.FAILOVER_WAIT_SECONDS = 1
+
+        self.assertEqual(register(make_asset())["code"], common.NOT_PRIMARY)
+
     def test_a_server_on_standby_still_answers_list(self):
         node.accepts_writes = False
         self.assertEqual(common.send_request({"action": "LIST"})["status"], "OK")
@@ -826,6 +839,12 @@ class DistributedTest(unittest.TestCase):
 
         self.wait_until(in_sync, "got the servers in sync")
 
+    def wait_until_taken_over(self) -> None:
+        self.wait_until(
+            lambda: common.request_from(self.backup, {"action": "PING"})["accepts_writes"],
+            "saw the backup take over",
+        )
+
     def test_a_change_is_on_the_backup_before_the_client_hears_it_worked(self):
         self.start_backup()
         self.start_primary()
@@ -860,6 +879,35 @@ class DistributedTest(unittest.TestCase):
 
         self.assertEqual(reply["code"], common.NOT_PRIMARY)
         self.assertEqual(reply["served_by"], "backup")
+
+    def test_the_backup_takes_over_and_hands_back_when_the_primary_returns(self):
+        primary = self.start_primary()
+        self.start_backup()
+        self.wait_until_in_sync()
+        self.assertEqual(register(make_asset("BEFORE"))["stored"]["asset_id"], "AST-P000001")
+
+        # With the primary gone, the client waits for the takeover, then carries on.
+        self.stop(primary)
+        reply = register(make_asset("DURING"))
+        self.assertEqual(reply["status"], "OK")
+        self.assertEqual(reply["served_by"], "backup")
+        self.assertTrue(reply["stored"]["asset_id"].startswith("AST-B"))
+        self.assertEqual(sorted(list_descriptions()), ["BEFORE", "DURING"])
+
+        # Changes made during the outage survive the primary's return.
+        during_id = reply["stored"]["asset_id"]
+        common.send_request({"action": "SET_STATUS", "asset_id": during_id, "status": common.NOT_IN_USE})
+
+        self.start_primary()
+        self.wait_until_in_sync()
+        self.assertEqual(self.descriptions_on(self.primary), ["BEFORE", "DURING"])
+        statuses = {asset["description"]: asset["status"] for asset in self.assets_on(self.primary)}
+        self.assertEqual(statuses["DURING"], common.NOT_IN_USE)
+
+        # The primary is in charge again, and the IDs it issues do not clash.
+        reply = register(make_asset("AFTER"))
+        self.assertEqual(reply["served_by"], "primary")
+        self.assertIn("AFTER", self.descriptions_on(self.backup))
 
     def test_the_primary_carries_on_alone_and_the_backup_catches_up(self):
         backup_process = self.start_backup()
