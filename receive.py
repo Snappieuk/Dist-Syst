@@ -42,7 +42,7 @@ def main() -> None:
         return
 
     # Print a short summary, then one line per asset: its ID, status and tags only.
-    print(f"{len(assets)} asset(s) registered:\n")
+    print(f"{len(assets)} asset(s) registered, according to the {response.get('served_by', 'unknown')} server:\n")
     for asset in assets:
         # Assets saved before tagging was added have no tags, so those are worked
         # out here for display, as the GUI does.

@@ -46,9 +46,9 @@ def main() -> None:
     new_asset = prompt_for_asset()
 
     # Send a REGISTER request containing the new asset. If that fails, show a
-    # clear message rather than a traceback. Each server is tried once, with no
-    # further retries. Running this again sends a new registration, so after an
-    # error, check the list first in case the first attempt did work.
+    # clear message rather than a traceback. Running this again sends a new
+    # registration, so after an error, check the list first in case the first attempt
+    # did work.
     try:
         response = send_request(new_register_request(new_asset))
     except (OSError, ValueError) as exc:

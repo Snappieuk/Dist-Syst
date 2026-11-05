@@ -268,14 +268,17 @@ class AssetManagementApp:
                     messagebox.showerror("Asset server error", detail, parent=self.root)
                     continue
 
+                # Showing which server answered makes a failover visible.
+                served_by = f" (served by the {response.get('served_by', 'unknown')} server)"
+
                 if operation != "list":
                     if operation == "register":
                         self._finish_registration()
-                    self.status_label.configure(text=SUCCESS_MESSAGES[operation])
+                    self.status_label.configure(text=SUCCESS_MESSAGES[operation] + served_by)
                     self._show_assets(assets)
                 else:
                     self._show_assets(response.get("assets", []))
-                    self.status_label.configure(text="Asset list refreshed")
+                    self.status_label.configure(text="Asset list refreshed" + served_by)
         except queue.Empty:
             pass  # nothing left to display for now
 

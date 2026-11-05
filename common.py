@@ -19,7 +19,7 @@ HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
 # The largest message either side will send or accept (10 MiB). This is enough
 # for a LIST reply with tens of thousands of assets. A larger list gets a TOO_LARGE
-# reply instead.
+# reply instead, which also stops the servers syncing, because there is no paging.
 #
 # WHY: the 4-byte header can claim up to 4 GB. The header comes from another
 # machine, so it must be treated as untrusted input. Without a cap, a faulty
@@ -36,15 +36,24 @@ SERVERS = [
 ]
 
 # How long request_from() waits on each network step before giving up. Clients
-# use it for their requests, and each server uses it when syncing with the other.
+# use it for their requests, and the primary uses it when copying to the backup.
 TIMEOUT_SECONDS = 5
+
+# How long the servers wait for each other's heartbeats. This is short, because a
+# heartbeat needs no work from the other server, so a slow one means trouble.
+HEARTBEAT_TIMEOUT_SECONDS = 1
 
 # Error codes, sent as the "code" field of an ERROR reply. "detail" is written
 # for people and may be reworded, so programs should act on the code instead.
-BAD_REQUEST = "BAD_REQUEST"    # the request is malformed or fails validation
-TOO_LARGE = "TOO_LARGE"        # the message is bigger than MAX_MESSAGE_BYTES
-INTERNAL = "INTERNAL"          # the server failed; the request itself may be fine
-NOT_FOUND = "NOT_FOUND"        # no asset has that asset_id on this server
+BAD_REQUEST = "BAD_REQUEST"  # the request is malformed or fails validation
+NOT_FOUND = "NOT_FOUND"      # no asset has that asset_id on this server
+TOO_LARGE = "TOO_LARGE"      # the message is bigger than MAX_MESSAGE_BYTES
+INTERNAL = "INTERNAL"        # the server failed; the request itself may be fine
+NOT_PRIMARY = "NOT_PRIMARY"  # this server is on standby; try the other one
+
+# Error codes used only between the two servers.
+NOT_STANDBY = "NOT_STANDBY"  # the backup has taken over, so it cannot receive copies
+OUT_OF_SYNC = "OUT_OF_SYNC"  # the backup missed a change, so it needs all the data
 
 # The two standard asset statuses. Registration also accepts other text.
 IN_USE = "In Use"
@@ -88,6 +97,12 @@ def _split_words(value: str) -> list:
     normalised = unicodedata.normalize("NFC", value)
     kept = (char if unicodedata.category(char)[0] in "LNM" else " " for char in normalised)
     return "".join(kept).split()
+
+
+def normalise_text(value: str) -> str:
+    """Reduce text to a form that ignores differences in capitals, spacing and
+    punctuation, so "Dell-Laptop" and "dell  laptop" compare as equal."""
+    return " ".join(word.lower() for word in _split_words(value)) or value.strip().lower()
 
 
 def _phrase_to_tags(value: str) -> list:
@@ -265,11 +280,11 @@ def receive_message(sock: socket.socket) -> dict:
     return message
 
 
-def request_from(address: tuple, request: dict) -> dict:
+def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS) -> dict:
     """Send one request to the server at `address` and return its reply."""
     # create_connection() is used because it takes a timeout. Without one, a
     # stalled server would leave the program waiting forever.
-    with socket.create_connection(address, timeout=TIMEOUT_SECONDS) as sock:
+    with socket.create_connection(address, timeout=timeout) as sock:
         send_message(sock, request)
         return receive_message(sock)
 
@@ -278,14 +293,16 @@ def send_request(request: dict) -> dict:
     """Send a request to the first server that answers. Used by every client.
 
     This is failover: if the primary is down, the client moves on to the backup
-    without the user having to do anything. Trying a REGISTER again on the backup
-    is safe even if the primary did the work and only its reply was lost, because
-    the server recognises a repeated request.
+    without the user having to do anything. Trying a request again on the backup is
+    safe even if the primary did the work and only its reply was lost, because the
+    backup would recognise a repeated request or item.
 
     The next server is also tried after two kinds of ERROR reply. INTERNAL, such as
     one server's disk being full, is safe to retry because a server undoes a change
     it could not save. NOT_FOUND may only mean this server has not got the asset yet.
     If no server does better, the last such reply is returned.
+
+    If only the backup replies, it is on standby, so its NOT_PRIMARY reply is returned.
 
     Raises ConnectionError with a clear message if no server can be reached, and
     ValueError if the request is too large or a reply is not a valid message.
@@ -301,8 +318,8 @@ def send_request(request: dict) -> dict:
             last_error = exc
             continue
 
-        if reply.get("code") in (INTERNAL, NOT_FOUND):
-            retryable_reply = reply
+        if reply.get("code") in (INTERNAL, NOT_FOUND, NOT_PRIMARY):
+            retryable_reply = retryable_reply if reply.get("code") == NOT_PRIMARY and retryable_reply else reply
             continue
 
         return reply

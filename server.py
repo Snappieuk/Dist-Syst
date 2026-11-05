@@ -1,381 +1,41 @@
 """
-Asset Management System server.
+The primary server of the Asset Management System.
 
-Each connection carries one request and one reply:
+    python server.py
 
-    {"action": "REGISTER", "request_id": "...", "asset": {...}}
-                                             -> validates and stores the asset, creating its ID
-    {"action": "LIST"}                       -> replies with every stored asset
-    {"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use"}
-                                             -> changes an asset's status
-    {"action": "DELETE", "asset_id": "..."}  -> removes an asset for good
-    {"action": "SYNC"}                       -> used by the other server: every stored
-                                                asset and every deleted ID
+The primary is the one server that normally accepts changes. Because every change
+goes through this one process, there is one agreed order of events, which is what
+prevents race conditions and duplicates across the system.
 
-Replies always contain "status". Failures look like this:
+Before a client is told that a change worked, the primary copies it to the backup
+(synchronous replication), so the change is on both machines. If the backup is down,
+the primary carries on alone, then brings the backup up to date when it returns.
 
-    {"status": "ERROR", "code": "BAD_REQUEST", "detail": "..."}
-
-Each client is handled on its own thread, and assets are saved to a JSON file
-after every change, so they survive a crash or restart.
-
-For redundancy, a second copy can run as a backup:
-
-    python server.py            (the primary)
-    python server.py --backup   (the backup)
-
-Clients use the backup if the primary is down, and the two servers regularly copy
-new assets from each other.
+backup.py is the separate program for the other server. The code they share, including
+the rules for changing assets, is in node.py.
 """
 
-import datetime   # the server stamps each new asset with today's date
-import json       # the assets file uses JSON, the same format as the messages
-import logging    # records what happens, including errors, without stopping
-import os         # os.path finds the data files; os.replace() and os.fsync() make saving safe
-import socket     # provides the networking building blocks (sockets)
-import sys        # sys.argv holds the --backup option; sys.exit() reports startup failures
-import threading  # gives each client a thread, and provides the lock
-import time       # waits between syncs with the other server
+import os         # os.path finds the data file
+import threading  # runs the check on the backup alongside the clients
+import time       # waits between checks on the backup
 
-# Import the shared constants/helpers used by every part of the prototype.
-from common import (
-    BAD_REQUEST,
-    INTERNAL,
-    NOT_FOUND,
-    SERVERS,
-    TOO_LARGE,
-    MessageTooLargeError,
-    generate_asset_tags,
-    receive_message,
-    request_from,
-    send_message,
-)
+import common
+import node
+from common import HEARTBEAT_TIMEOUT_SECONDS, request_from
 
-# Stored next to this script, so the server finds the same data whichever
-# folder it is started from.
 ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.json")
 
-# The backup keeps its own copy, so the two servers can run from the same folder.
-BACKUP_ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets_backup.json")
+# How often the primary checks whether the backup needs bringing up to date.
+BACKUP_CHECK_SECONDS = 1
 
-# The fields a client must supply when registering an asset.
-CLIENT_FIELDS = ("description", "category", "location", "status")
+logger = node.logger
 
-# The fields every stored asset must have.
-STORED_FIELDS = ("asset_id",) + CLIENT_FIELDS
-
-# The range of asset IDs this server may issue. The backup has its own.
-ID_PREFIX = "AST-P"
-
-# The longest value allowed in each of those fields, in characters. There is no
-# delete, so without a cap a single huge asset would push every LIST reply over
-# the message limit for good. It also keeps every REGISTER reply well under that
-# limit, so a client always hears the result of a registration that was saved.
-MAX_FIELD_LENGTH = 1000
-
-# How long the server waits on each read from, or send to, a client before giving
-# up on it. Without this, an idle client would hold a thread and a connection forever.
-CLIENT_TIMEOUT_SECONDS = 10
-
-# How often each server copies new assets from the other one.
-SYNC_INTERVAL_SECONDS = 2
-
-logger = logging.getLogger("asset_server")
-
-assets = []  # every registered asset, as a plain list of dicts
-
-# The ID of every deleted asset, and the request that registered it, kept for good.
-# This stops an ID being issued again, stops a late retry restoring the asset, and
-# stops the next sync copying the asset straight back from the other server.
-deleted_ids = {}
-
-# One lock protects `assets`, `deleted_ids` and the file, because every client has its own
-# thread. Without it, two clients could both see that an ID is free and both
-# store it. Holding the lock makes "check, store, save" one indivisible step.
-assets_lock = threading.Lock()
-
-
-def load_assets() -> tuple:
-    """Read the assets file, returning the assets and the deleted IDs. It starts
-    empty if the file does not exist yet.
-
-    A corrupt file raises an error rather than starting empty, because the next
-    save would then overwrite whatever could still be recovered.
-    """
-    try:
-        with open(ASSETS_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    except FileNotFoundError:
-        return [], {}  # normal on the first run
-
-    # Files written before delete was added hold just the list of assets.
-    if isinstance(data, list):
-        return data, {}
-
-    if (
-        not isinstance(data, dict)
-        or not isinstance(data.get("assets"), list)
-        or not isinstance(data.get("deleted"), dict)
-    ):
-        raise ValueError(f"{ASSETS_FILE} does not contain assets and deleted IDs")
-    return data["assets"], data["deleted"]
-
-
-def save_assets() -> None:
-    """Write every asset to disk safely. The caller must hold the lock.
-
-    Opening the real file for writing would empty it immediately, so a crash
-    part-way through would lose everything. Instead, the data goes into a
-    temporary file, and os.replace() swaps it into place in one atomic step. The
-    file on disk is therefore always a complete old or complete new version.
-    """
-    temp_path = ASSETS_FILE + ".tmp"
-    with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump({"assets": assets, "deleted": deleted_ids}, file, indent=2)
-
-        # flush() and fsync() push the data out of memory buffers and onto the
-        # disk, so it survives a power cut as well as a program crash.
-        file.flush()
-        os.fsync(file.fileno())
-
-    os.replace(temp_path, ASSETS_FILE)
-    flush_data_folder()
-
-
-def flush_data_folder() -> None:
-    """Force the swap made by os.replace() onto the disk, on Linux and macOS.
-
-    There, the swap is recorded in the folder, so a power cut could undo it unless
-    the folder is flushed too. Windows does not allow a folder to be opened this way.
-
-    A failure is only logged, because some file systems do not support this. The
-    new file is already in place by now, so reporting a failed save would be wrong.
-    """
-    if os.name != "posix":
-        return
-
-    try:
-        folder = os.open(os.path.dirname(ASSETS_FILE), os.O_RDONLY)
-        try:
-            os.fsync(folder)
-        finally:
-            os.close(folder)
-    except OSError as exc:
-        logger.warning("Could not flush the data folder: %s", exc)
-
-
-def error_reply(code: str, detail: str) -> dict:
-    """Build an ERROR reply in the one format every client relies on."""
-    return {"status": "ERROR", "code": code, "detail": detail}
-
-
-def check_text(value: object, name: str) -> str:
-    """Return `value` without surrounding spaces, or raise ValueError if it is not
-    an acceptable field value."""
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"Field must be a non-empty string: {name}")
-    if len(value.strip()) > MAX_FIELD_LENGTH:
-        raise ValueError(f"Field must be at most {MAX_FIELD_LENGTH} characters: {name}")
-    return value.strip()
-
-
-def validate_asset(asset: object) -> dict:
-    """Return a clean copy of a client's asset with its date added, or raise
-    ValueError if it is invalid.
-
-    This happens on the server even if a client also checks, because anyone can
-    write a program that speaks this protocol. Only the server can guarantee it.
-    """
-    if not isinstance(asset, dict):
-        raise ValueError("'asset' must be an object")
-
-    # Copying only the expected fields means any extra fields are dropped, including
-    # any asset_id the client sent.
-    clean = {}
-    for field in CLIENT_FIELDS:
-        clean[field] = check_text(asset.get(field), field)
-
-    # The date comes from the server, and anything the client sent is ignored,
-    # because client clocks can be wrong or in other time zones.
-    clean["date_registered"] = datetime.date.today().isoformat()
-    return clean
-
-
-def find_asset(asset_id: str) -> object:
-    """Return the position of an asset in `assets`, or None. The caller must hold
-    the lock."""
-    for index, asset in enumerate(assets):
-        if asset["asset_id"] == asset_id:
-            return index
-    return None
-
-
-def generate_asset_id() -> str:
-    """Return an asset ID that has never been used. The caller must hold the lock.
-
-    Each candidate is checked against every stored and deleted ID, and is only issued if it is
-    unused. Holding the lock means nothing can take it before it is stored.
-
-    Each server issues IDs from its own range (AST-P... or AST-B...). The other server
-    may not be reachable to ask, but this means it can never issue the same ID.
-    """
-    used = {asset["asset_id"] for asset in assets} | set(deleted_ids)
-    number = len(used) + 1
-    while True:
-        candidate = f"{ID_PREFIX}{number:06d}"
-        if candidate not in used:
-            return candidate
-        number += 1
-
-
-def register_asset(clean: dict, request_id: object) -> dict:
-    """Store a validated asset under a new ID and return the reply.
-
-    Together with validate_asset() and save_assets(), this gives the ACID
-    properties for each registration:
-      Atomicity:   it is stored and saved, or not stored at all (the undo below).
-      Consistency: only valid assets with unique IDs are ever stored.
-      Isolation:   the lock stops concurrent registrations interfering.
-      Durability:  the reply is only sent after the save has reached the disk.
-
-    A repeat of the same request is a client retrying, so it gets the asset already
-    stored rather than a second copy.
-    """
-    with assets_lock:
-        if request_id is not None:
-            if request_id in deleted_ids.values():
-                return error_reply(BAD_REQUEST, "This registration's asset has since been deleted")
-            for existing in assets:
-                if existing.get("request_id") == request_id:
-                    if any(existing[field] != clean[field] for field in ("description", "category", "location")):
-                        return error_reply(BAD_REQUEST, "This request_id was already used for a different asset")
-                    return {"status": "OK", "stored": existing}
-
-        # version counts the changes made to this asset, so that sync can tell which
-        # copy of it is the newer one (see merge_assets).
-        asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id, version=1)
-
-        # Tags come from the server too, so every client's assets are tagged the same way.
-        asset["tags"] = generate_asset_tags(asset)
-
-        assets.append(asset)
-        try:
-            save_assets()
-        except OSError:
-            # Undo the change, so memory and disk still agree. The client will be
-            # told this failed, so the asset must not appear in later listings.
-            assets.pop()
-            raise
-
-    # Echo back what was stored, because the server changed it (trimmed spaces,
-    # dropped extra fields, added the ID, date and tags).
-    return {"status": "OK", "stored": asset}
-
-
-def set_asset_status(asset_id: str, status: str) -> dict:
-    """Change an asset's status and return the reply.
-
-    The tags include the status, so they are regenerated. A new record replaces the
-    old one rather than the old one being edited, because a LIST reply may be being
-    sent from the old one on another thread, outside the lock.
-    """
-    with assets_lock:
-        index = find_asset(asset_id)
-        if index is None:
-            return error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
-
-        previous = assets[index]
-        if previous["status"] == status:
-            return {"status": "OK", "stored": previous}  # nothing to change
-
-        updated = dict(previous, status=status, version=previous.get("version", 0) + 1)
-        updated["tags"] = generate_asset_tags(updated)
-
-        assets[index] = updated
-        try:
-            save_assets()
-        except OSError:
-            assets[index] = previous  # as in register_asset()
-            raise
-
-    return {"status": "OK", "stored": updated}
-
-
-def delete_asset(asset_id: str) -> dict:
-    """Remove an asset for good and return the reply.
-
-    Deleting something already deleted counts as success. A client whose reply was
-    lost may send this again, and what it asked for is true.
-    """
-    with assets_lock:
-        if asset_id in deleted_ids:
-            return {"status": "OK", "deleted": asset_id}
-
-        index = find_asset(asset_id)
-        if index is None:
-            return error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
-
-        previous = assets.pop(index)
-        deleted_ids[asset_id] = previous.get("request_id")
-        try:
-            save_assets()
-        except OSError:
-            # As in register_asset().
-            assets.insert(index, previous)
-            del deleted_ids[asset_id]
-            raise
-
-    return {"status": "OK", "deleted": asset_id}
-
-
-def process_request(request: dict) -> dict:
-    """Carry out one decoded request and return the reply.
-
-    This does no networking, so the rules can be tested without a socket.
-    """
-    action = request.get("action")
-
-    if action == "REGISTER":
-        try:
-            clean = validate_asset(request.get("asset"))
-            request_id = request.get("request_id")
-            if request_id is not None:
-                request_id = check_text(request_id, "request_id")
-        except ValueError as exc:
-            return error_reply(BAD_REQUEST, str(exc))
-        return register_asset(clean, request_id)
-
-    if action == "LIST":
-        # Copy the list while holding the lock. It is sent after the lock is
-        # released, so one slow client cannot hold up everyone else.
-        with assets_lock:
-            return {"status": "OK", "assets": list(assets)}
-
-    if action == "SET_STATUS":
-        try:
-            asset_id = check_text(request.get("asset_id"), "asset_id")
-            status = check_text(request.get("status"), "status")
-        except ValueError as exc:
-            return error_reply(BAD_REQUEST, str(exc))
-        return set_asset_status(asset_id, status)
-
-    if action == "DELETE":
-        try:
-            asset_id = check_text(request.get("asset_id"), "asset_id")
-        except ValueError as exc:
-            return error_reply(BAD_REQUEST, str(exc))
-        return delete_asset(asset_id)
-
-    if action == "SYNC":
-        # Separate from LIST, so that clients are not sent every deleted ID.
-        with assets_lock:
-            return {"status": "OK", "assets": list(assets), "deleted": dict(deleted_ids)}
-
-    return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
+backup_address = None    # where the backup is, or None if there is not one
+backup_in_sync = False   # whether the backup has every change. Protected by the lock.
 
 
 def is_valid_peer_asset(record: object) -> bool:
-    """Check a record from the other server before it is stored.
+    """Check a record from the backup before it is stored.
 
     Records saved before tagging was added have no tags, and those saved before
     status changes were added have no version, so these fields and the date are
@@ -385,8 +45,8 @@ def is_valid_peer_asset(record: object) -> bool:
         return False
 
     try:
-        for field in STORED_FIELDS:
-            check_text(record.get(field), field)
+        for field in node.STORED_FIELDS:
+            node.check_text(record.get(field), field)
     except ValueError:
         return False
 
@@ -401,260 +61,169 @@ def is_valid_peer_asset(record: object) -> bool:
     )
 
 
-def merge_assets(peer_assets: list, prefer_peer: bool, peer_deleted: dict = None) -> int:
-    """Add the other server's assets to this one's, returning how many changed.
+def merge_state(peer_assets: list, peer_deleted: dict) -> int:
+    """Combine the backup's data into this server's, returning how many records
+    changed. The caller must hold the lock.
 
-    Both servers end up with the same records, possibly in a different order, by
-    following the same rules whichever order things happen in:
+    The primary alone makes these decisions, then gives the backup the result, so the
+    two cannot disagree afterwards:
       - A deleted asset stays deleted, even if the other server changed it meanwhile.
       - A missing asset is copied across.
-      - Of two different copies, the one with the higher version is newer and wins.
-      - With equal versions, each server changed the asset while they could not reach
-        each other. Then the backup gives way to the primary (`prefer_peer` is True
-        on the backup).
-
-    The caller must pass only valid records (see is_valid_peer_asset).
+      - Of two different copies, the one with the higher version wins.
+      - With equal versions, each server made one change. The primary's copy wins.
     """
-    with assets_lock:
-        # A dict keeps its order and makes each asset quick to find by ID.
-        merged = {asset["asset_id"]: asset for asset in assets}
-        newly_deleted = {key: value for key, value in (peer_deleted or {}).items() if key not in deleted_ids}
+    newly_deleted = {key: value for key, value in peer_deleted.items() if key not in node.deleted_ids}
+    all_deleted = {**node.deleted_ids, **newly_deleted}
 
-        changed = len(newly_deleted)
-        for peer_asset in peer_assets:
-            if peer_asset["asset_id"] in deleted_ids or peer_asset["asset_id"] in newly_deleted:
-                continue
+    # A dict keeps its order and makes each asset quick to find by ID.
+    merged = {asset["asset_id"]: asset for asset in node.assets if asset["asset_id"] not in all_deleted}
+    changed = len(newly_deleted)
 
-            my_asset = merged.get(peer_asset["asset_id"])
-            if my_asset is None:
-                peer_is_better = True
-            else:
-                my_version = my_asset.get("version", 0)
-                peer_version = peer_asset.get("version", 0)
-                peer_is_better = peer_version > my_version or (
-                    peer_version == my_version and prefer_peer and my_asset != peer_asset
-                )
-
-            if peer_is_better:
-                merged[peer_asset["asset_id"]] = peer_asset
-                changed += 1
-
-        for asset_id in newly_deleted:
-            merged.pop(asset_id, None)
-
-        if changed:
-            previous = list(assets)
-            assets[:] = merged.values()
-            deleted_ids.update(newly_deleted)
-            try:
-                save_assets()
-            except OSError:
-                # Keep memory and disk in agreement, as in register_asset(). The
-                # next sync will simply try again.
-                assets[:] = previous
-                for asset_id in newly_deleted:
-                    del deleted_ids[asset_id]
-                raise
-
-        return changed
-
-
-def sync_once(peer: tuple, prefer_peer: bool) -> tuple:
-    """Copy changes from the other server once, returning how many records changed
-    and how many invalid ones were skipped.
-
-    An ERROR reply raises ValueError rather than counting as an empty list, so a
-    sync that is failing does not look like there is simply nothing to copy. One bad
-    record is skipped, so that it does not stop all the others being copied.
-    """
-    reply = request_from(peer, {"action": "SYNC"})
-    if reply.get("status") != "OK":
-        raise ValueError(f"It replied with an error: {reply.get('detail')}")
-
-    records = reply.get("assets")
-    deleted = reply.get("deleted")
-    if not isinstance(records, list) or not isinstance(deleted, dict):
-        raise ValueError("Its reply has no list of assets and deleted IDs")
-
-    valid_records = [record for record in records if is_valid_peer_asset(record)]
-    return merge_assets(valid_records, prefer_peer, deleted), len(records) - len(valid_records)
-
-
-def sync_with_peer(peer: tuple, prefer_peer: bool) -> None:
-    """Keep copying assets from the other server. Runs on its own thread forever.
-
-    WHY THE SERVER ASKS, RATHER THAN BEING TOLD: each server simply fetches the
-    other's list. A server that was down catches up by itself when it restarts, and
-    a server whose partner is down carries on without having to wait for it.
-
-    The trade-off is that the two can differ for a couple of seconds. This is called
-    eventual consistency. An asset is safe in the file of the server that accepted
-    it, and reaches the other server on the next sync after both are running.
-
-    This repeats every couple of seconds, so a problem is only logged when it first
-    appears or changes, not on every attempt.
-    """
-    last_problem = None
-    last_skipped = 0
-
-    while True:
-        problem = None
-        try:
-            changed, skipped = sync_once(peer, prefer_peer)
-            if changed:
-                logger.info("Copied %s asset(s) from the other server", changed)
-            if skipped and skipped != last_skipped:
-                logger.warning("Skipped %s invalid record(s) from the other server", skipped)
-            last_skipped = skipped
-            if last_problem:
-                logger.info("Syncing with the other server again")
-        except Exception as exc:
-            # Nothing may stop the syncing. An OSError means the other server is
-            # unreachable or a save failed, and a ValueError means its reply was
-            # unusable. Anything else is a bug, so its traceback is logged too.
-            problem = str(exc)
-            if problem != last_problem:
-                logger.warning(
-                    "Could not sync with the other server: %s",
-                    problem,
-                    exc_info=not isinstance(exc, (OSError, ValueError)),
-                )
-        last_problem = problem
-
-        time.sleep(SYNC_INTERVAL_SECONDS)
-
-
-def read_and_process(conn: socket.socket) -> dict:
-    """Read one request and work out the reply. Connection failures are left to
-    the caller, because no reply can be sent over a failed connection."""
-    try:
-        request = receive_message(conn)
-    except MessageTooLargeError as exc:
-        return error_reply(TOO_LARGE, str(exc))
-    except (ValueError, RecursionError) as exc:
-        # Invalid text, invalid JSON, JSON that is not an object, or JSON so
-        # deeply nested that it exhausts the parser. The connection still works,
-        # so the client can be told.
-        return error_reply(BAD_REQUEST, f"Invalid message: {exc}")
-
-    try:
-        return process_request(request)
-    except Exception:
-        # A bug, or a failure such as a full disk. Log the details for whoever
-        # runs the server, and tell the client only that it failed, because
-        # internal details can help an attacker.
-        logger.exception("Could not complete a request")
-        return error_reply(INTERNAL, "The server could not complete the request")
-
-
-def handle_client(conn: socket.socket, addr: tuple) -> None:
-    """Serve one client. Runs on that client's own thread.
-
-    Nothing a client does may affect the rest of the server, so every exception
-    stops here. Clients fail independently of the server, so one client's failure
-    must stay that client's problem.
-    """
-    try:
-        # `with conn:` closes the connection when this block ends, even on error.
-        with conn:
-            conn.settimeout(CLIENT_TIMEOUT_SECONDS)
-            reply = read_and_process(conn)
-            try:
-                send_message(conn, reply)
-            except MessageTooLargeError as exc:
-                # A LIST of too many assets. send_message() checks the size before
-                # sending anything, so the client can still be told what happened,
-                # rather than seeing a dropped connection that looks like an outage.
-                send_message(conn, error_reply(TOO_LARGE, f"The reply is too large to send. {exc}"))
-    except OSError as exc:
-        # The client disconnected or timed out. Nobody is left to read a reply,
-        # so all that remains is to record it. (Trying to reply on the dead
-        # connection is what used to crash the server.)
-        logger.warning("Lost connection to %s: %s", addr, exc)
-    except Exception:
-        logger.exception("Unexpected error serving %s", addr)
-
-
-def create_listening_socket(host: str, port: int) -> socket.socket:
-    """Create the TCP/IPv4 socket that waits for new connections."""
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    # SO_REUSEADDR allows a quick restart without the port being reported as
-    # "in use". On Windows it would also let two servers share a port without
-    # any error, so SO_EXCLUSIVEADDRUSE is used there instead.
-    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    else:
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-    server_sock.bind((host, port))
-    server_sock.listen()
-    return server_sock
-
-
-def run_server(server_sock: socket.socket) -> None:
-    """Accept clients forever, giving each one its own thread."""
-    # accept() normally waits forever, and on Windows it then does not notice
-    # Ctrl+C. Waking up every second lets the interrupt get through.
-    server_sock.settimeout(1)
-
-    while True:
-        try:
-            conn, addr = server_sock.accept()
-        except OSError:
-            # Usually the one-second timeout above. It can also be a connection
-            # that failed while arriving. Neither stops the server.
+    for peer_asset in peer_assets:
+        asset_id = peer_asset["asset_id"]
+        if asset_id in all_deleted:
             continue
 
-        # Debug level, because the other server connects every couple of seconds.
-        logger.debug("Connection from %s", addr)
+        my_asset = merged.get(asset_id)
+        if my_asset is None or peer_asset.get("version", 0) > my_asset.get("version", 0):
+            merged[asset_id] = peer_asset
+            changed += 1
 
-        # A separate thread means a slow client does not delay the others.
-        # daemon=True means these threads do not stop the program from exiting.
-        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+    node.assets[:] = merged.values()
+    node.deleted_ids.clear()
+    node.deleted_ids.update(all_deleted)
+    return changed
+
+
+def catch_up_backup() -> bool:
+    """Reconcile with the backup and bring it up to date, returning whether it worked.
+
+    The lock is held throughout, so no change can slip in part-way through. A client
+    that arrives meanwhile simply waits a moment.
+
+      1. HANDOVER: the backup stops accepting changes and sends all its data.
+      2. Its data is merged into this server's, and saved.
+      3. INSTALL_STATE: the backup replaces its data with the merged result.
+
+    """
+    global backup_in_sync
+
+    with node.assets_lock:
+        previous = (list(node.assets), dict(node.deleted_ids), node.last_seq)
+        try:
+            reply = request_from(backup_address, {"action": "HANDOVER"})
+            if reply.get("status") != "OK":
+                raise ValueError(f"It replied with an error: {reply.get('detail')}")
+
+            records, deleted, peer_seq = reply.get("assets"), reply.get("deleted"), reply.get("seq")
+            if not isinstance(records, list) or not isinstance(deleted, dict) or not isinstance(peer_seq, int):
+                raise ValueError("Its reply has no valid data")
+
+            valid_records = [record for record in records if is_valid_peer_asset(record)]
+            if len(valid_records) != len(records):
+                logger.warning("Skipped %s invalid record(s) from the backup", len(records) - len(valid_records))
+
+            changed = merge_state(valid_records, deleted)
+            node.last_seq = max(node.last_seq, peer_seq) + 1
+            try:
+                node.save_assets()
+            except OSError:
+                # Keep memory and disk in agreement. The next check will try again.
+                node.assets[:], restored_deleted, node.last_seq = previous
+                node.deleted_ids.clear()
+                node.deleted_ids.update(restored_deleted)
+                raise
+
+            reply = request_from(backup_address, {
+                "action": "INSTALL_STATE",
+                "assets": node.assets,
+                "deleted": node.deleted_ids,
+                "seq": node.last_seq,
+            })
+            if reply.get("status") != "OK":
+                raise ValueError(f"It replied with an error: {reply.get('detail')}")
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not bring the backup up to date: %s", exc)
+            backup_in_sync = False
+            return False
+
+        backup_in_sync = True
+
+    logger.info("The backup is in sync, at change %s (%s record(s) reconciled)", node.last_seq, changed)
+    return True
+
+
+def replicate_change(change: dict) -> None:
+    """Copy one change to the backup before the client is told it worked. Called by
+    node.commit_change() while holding the lock, so changes arrive in order.
+
+    A failure does not fail the client's request, because the change is safe on this
+    server, and the system must keep working while the backup is down.
+    """
+    global backup_in_sync
+
+    if not backup_in_sync:
+        return
+
+    try:
+        reply = request_from(backup_address, {"action": "REPLICATE", **change})
+        if reply.get("status") != "OK":
+            raise ValueError(f"It replied with an error: {reply.get('detail')}")
+        logger.info("Change %s copied to the backup", change["seq"])
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not copy change %s to the backup: %s", change["seq"], exc)
+        backup_in_sync = False
+
+
+def watch_backup() -> None:
+    """Check on the backup forever, bringing it up to date whenever it needs it.
+    Runs on its own thread."""
+    global backup_in_sync
+
+    while True:
+        time.sleep(BACKUP_CHECK_SECONDS)
+        try:
+            reply = request_from(backup_address, {"action": "PING"}, timeout=HEARTBEAT_TIMEOUT_SECONDS)
+        except (OSError, ValueError):
+            with node.assets_lock:
+                if backup_in_sync:
+                    logger.warning("The backup cannot be reached. Carrying on alone.")
+                backup_in_sync = False
+            continue
+
+        with node.assets_lock:
+            if reply.get("accepts_writes"):
+                backup_in_sync = False
+            needs_catch_up = not backup_in_sync
+
+        if needs_catch_up:
+            catch_up_backup()
 
 
 def main() -> None:
-    global ASSETS_FILE, ID_PREFIX
+    global backup_address
 
-    # The primary and backup are the same program. This option only decides which
-    # address and data file it uses, which server it syncs with, and that the
-    # backup is the one to give way in a conflict.
-    is_backup = "--backup" in sys.argv
-    address = SERVERS[1] if is_backup else SERVERS[0]
-    peer = SERVERS[0] if is_backup else SERVERS[1]
-    if is_backup:
-        ASSETS_FILE = BACKUP_ASSETS_FILE
-        ID_PREFIX = "AST-B"
+    node.ROLE = "primary"
+    node.ID_PREFIX = "AST-P"
+    node.ASSETS_FILE = ASSETS_FILE
+    node.accepts_writes = True
+    node.on_change = replicate_change
 
-    logging.basicConfig(
-        level=logging.INFO,
-        # threadName in the log makes the concurrent handling visible.
-        format="%(asctime)s %(levelname)s [%(threadName)s] %(message)s",
-    )
+    if len(common.SERVERS) > 1:
+        backup_address = common.SERVERS[1]
 
-    # The server cannot work without its data and its port, so problems with
-    # either end the program, with a clear message rather than a traceback.
-    try:
-        loaded_assets, loaded_deleted = load_assets()
-        assets.extend(loaded_assets)
-        deleted_ids.update(loaded_deleted)
-        server_sock = create_listening_socket(*address)
-    except (OSError, ValueError) as exc:
-        logger.error("Could not start the server: %s", exc)
-        logger.error("Check that %s is valid and that no other copy of the server is running.", ASSETS_FILE)
-        sys.exit(1)
-
+    server_sock = node.start_up(common.SERVERS[0])
     with server_sock:
-        role = "backup" if is_backup else "primary"
-        logger.info("Asset Management %s server listening on %s:%s", role, *address)
-        logger.info("Press Ctrl+C to stop.")
+        if backup_address is not None:
+            # Bring the backup up to date before serving anyone. If it is not there,
+            # start alone.
+            catch_up_backup()
 
-        # daemon=True means this thread does not stop the program from exiting.
-        threading.Thread(target=sync_with_peer, args=(peer, is_backup), daemon=True).start()
+            # daemon=True means this thread does not stop the program from exiting.
+            threading.Thread(target=watch_backup, name="watch-backup", daemon=True).start()
 
         try:
-            run_server(server_sock)
+            node.run_server(server_sock)
         except KeyboardInterrupt:
             logger.info("Server stopped.")
 
