@@ -7,15 +7,20 @@ These run real servers as separate programs on spare ports, with temporary data 
 so your data is never touched.
 """
 
+import contextlib
+import io
 import os
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 import common
+import demo
 
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 
@@ -85,6 +90,47 @@ class StopTest(ServerTestCase):
         self.assertEqual(reply["code"], common.UNAUTHORIZED)
         time.sleep(0.5)
         self.assertIsNone(primary.poll())
+
+
+class DemoTest(ServerTestCase):
+    def run_quietly(self) -> tuple:
+        output = io.StringIO()
+        with mock.patch("builtins.input", return_value=""), contextlib.redirect_stdout(output):
+            result = demo.run_demo()
+        return result, output.getvalue()
+
+    def test_the_whole_demo_runs_and_leaves_no_assets_behind(self):
+        primary = self.start("server")
+        self.start("backup")
+        self.wait_until_answering(self.servers[0])
+        deadline = time.monotonic() + 20
+        while demo.server_state(self.servers[1]) != "on standby" and time.monotonic() < deadline:
+            time.sleep(0.2)
+
+        def restart_when_stopped():
+            # What start.py does, but sooner: once the backup has taken over and stored
+            # the demo's second asset, rather than after a fixed 20 seconds.
+            primary.wait()
+            while not any(asset_id.startswith("AST-B") for asset_id in demo.held_by(self.servers[1])):
+                time.sleep(0.2)
+            self.start("server")
+
+        threading.Thread(target=restart_when_stopped, daemon=True).start()
+
+        result, output = self.run_quietly()
+
+        self.assertTrue(result, output)
+        self.assertIn("served by the primary", output)
+        self.assertIn("served by the backup", output)
+        self.assertNotIn("MISSING", output)
+        self.assertEqual(primary.returncode, 1)
+        self.assertEqual(demo.held_by(self.servers[0]), set())
+
+    def test_it_explains_what_to_do_if_the_servers_are_not_running(self):
+        result, output = self.run_quietly()
+
+        self.assertFalse(result)
+        self.assertIn("Start the primary and the backup first", output)
 
 
 if __name__ == "__main__":
