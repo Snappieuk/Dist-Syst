@@ -245,16 +245,32 @@ def send_request(request: dict) -> dict:
     is safe even if the primary did the work and only its reply was lost, because
     the servers later match assets up by their unique IDs.
 
+    The next server is also tried after an INTERNAL reply, such as when one server's
+    disk is full. That is safe because a server undoes a change it could not save.
+    If every server that answers replies INTERNAL, the last reply is returned.
+
     Raises ConnectionError with a clear message if no server can be reached, and
     ValueError if the request is too large or a reply is not a valid message.
     """
     last_error = None
+    retryable_reply = None
+
     for address in SERVERS:
         try:
-            return request_from(address, request)
+            reply = request_from(address, request)
         except OSError as exc:
             # OSError covers a refused connection, a timeout and a dropped connection.
             last_error = exc
+            continue
+
+        if reply.get("code") == INTERNAL:
+            retryable_reply = reply
+            continue
+
+        return reply
+
+    if retryable_reply is not None:
+        return retryable_reply
 
     raise ConnectionError(
         f"Could not reach any asset server ({last_error}).\n"

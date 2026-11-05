@@ -242,6 +242,20 @@ class SystemTest(unittest.TestCase):
 
         self.assertEqual(register(make_asset())["status"], "OK")
 
+    def test_client_tries_the_backup_if_the_primary_replies_internal(self):
+        failing = start_fake_server(self, {"status": "ERROR", "code": common.INTERNAL, "detail": "disk full"})
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [failing, common.SERVERS[0]]
+
+        self.assertEqual(register(make_asset())["status"], "OK")
+
+    def test_client_gets_the_error_if_every_server_replies_internal(self):
+        failing = start_fake_server(self, {"status": "ERROR", "code": common.INTERNAL, "detail": "disk full"})
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [failing, failing]
+
+        self.assertEqual(register(make_asset())["code"], common.INTERNAL)
+
     # ---- Persistence and ACID ----
 
     def test_assets_are_on_disk_before_the_reply(self):
