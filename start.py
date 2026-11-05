@@ -15,6 +15,7 @@ such as Kubernetes restarts a failed server. One that fails as it starts, usuall
 its port is in use, stops everything instead, so it can't be restarted over and over.
 """
 
+import logging     # records starts, stops and restarts
 import os          # os.path finds the programs
 import socket      # checks when the web interface is ready
 import subprocess  # runs each program as its own process
@@ -23,7 +24,10 @@ import time        # waits between checks
 import webbrowser  # opens the web page
 
 import setup
+from common import configure_logging
 from web import WEB_ADDRESS
+
+logger = logging.getLogger("start")
 
 PROGRAMS = ("server.py", "backup.py", "web.py")
 
@@ -100,15 +104,15 @@ def check_programs(processes: dict, started: dict, restart_at: dict) -> object:
     for name, process in list(processes.items()):
         if name in restart_at:
             if now >= restart_at[name]:
-                print(f"\nRestarting {name}.", flush=True)
+                logger.info("Restarting %s.", name)
                 processes[name] = start_program(name)
                 started[name] = now
                 del restart_at[name]
         elif process.poll() is not None:
             if now - started[name] < START_FAILURE_SECONDS:
                 return name
-            print(f"\n{name} has stopped. The others carry on, and it will be restarted "
-                  f"in {RESTART_SECONDS} seconds.", flush=True)
+            logger.warning("%s has stopped (exit code %s). The others carry on, and it will be "
+                           "restarted in %s seconds.", name, process.returncode, RESTART_SECONDS)
             restart_at[name] = now + RESTART_SECONDS
     return None
 
@@ -142,6 +146,10 @@ def main() -> None:
     if not ensure_set_up():
         return
 
+    # Each program keeps its own log. This one, logs/start.log, records when the system
+    # started and stopped, and every restart.
+    configure_logging("start")
+    logger.info("Starting %s.", ", ".join(PROGRAMS))
     processes = start_programs(PROGRAMS)
     try:
         wait_for_web(processes)
@@ -151,7 +159,7 @@ def main() -> None:
         # A program failing as it starts most likely means the system is already running
         # and its port is in use, so restarting it wouldn't help.
         stopped = keep_running(processes)
-        print(f"\n{stopped} could not start, so stopping the others. Check the messages above.")
+        logger.error("%s could not start, so stopping the others. Check the messages above.", stopped)
         stop_all(processes)
         try:
             # Keep the window open to read the error, if this was started by double-clicking.
@@ -159,9 +167,10 @@ def main() -> None:
         except EOFError:
             pass  # no keyboard attached
     except KeyboardInterrupt:
-        print("\nStopping everything...")
+        logger.info("Ctrl+C pressed, so stopping everything.")
     finally:
         stop_all(processes)
+        logger.info("Everything has stopped.")
 
 
 # Only run main() if this file is executed directly (not imported).

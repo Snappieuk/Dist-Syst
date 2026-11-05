@@ -45,7 +45,7 @@ class StartTest(unittest.TestCase):
         restart_at = {}
 
         with mock.patch.object(start, "start_program", side_effect=lambda name: run_for(30)), \
-                contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertLogs("start", "INFO") as logs:
             self.assertIsNone(start.check_programs(self.processes, long_ago, restart_at))
             self.assertIn("stopped", restart_at)
             self.assertIs(self.processes["stopped"], stopped)  # not restarted yet
@@ -55,7 +55,8 @@ class StartTest(unittest.TestCase):
 
         self.assertIsNone(self.processes["stopped"].poll())  # running again
         self.assertEqual(restart_at, {})
-        self.assertIn("restarted", output.getvalue())
+        self.assertIn("stopped has stopped (exit code 0)", logs.output[0])
+        self.assertIn("Restarting stopped", logs.output[1])
 
     def test_stopping_stops_everything_still_running(self):
         self.processes = {"one": run_for(30), "two": run_for(30), "finished": run_for(0)}
