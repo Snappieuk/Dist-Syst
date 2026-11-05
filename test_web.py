@@ -87,7 +87,17 @@ class WebTestCase(unittest.TestCase):
 
 class AssetsApiTest(WebTestCase):
     def test_no_assets_gives_an_empty_list(self):
-        self.assertEqual(self.fetch_json("/api/assets"), (200, {"assets": []}))
+        status, body = self.fetch_json("/api/assets")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["assets"], [])
+
+    def test_the_reply_names_the_server_that_answered(self):
+        self.addCleanup(setattr, node, "ROLE", node.ROLE)
+
+        for role in ("primary", "backup"):
+            with self.subTest(role):
+                node.ROLE = role
+                self.assertEqual(self.fetch_json("/api/assets")[1]["served_by"], role)
 
     def test_a_registered_asset_is_listed(self):
         asset_id = register(make_asset())["stored"]["asset_id"]

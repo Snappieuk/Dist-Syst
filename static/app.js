@@ -16,6 +16,7 @@ const statusFilter = document.getElementById("status-filter");
 const headings = document.querySelectorAll("thead th");
 
 let allAssets = [];
+let servedBy = "";
 let sortColumn = "asset_id";
 let sortDirection = 1; // 1 for ascending, -1 for descending
 
@@ -81,7 +82,7 @@ function showAssets() {
     return row;
   });
   tableBody.replaceChildren(...rows);
-  message.textContent = `Showing ${visible.length} of ${allAssets.length} asset(s)`;
+  message.textContent = `Showing ${visible.length} of ${allAssets.length} asset(s), from the ${servedBy} server`;
 }
 
 // Status is free text, so the choices come from the assets themselves. The current
@@ -111,6 +112,7 @@ async function loadAssets() {
       throw new Error(body.error);
     }
     allAssets = body.assets;
+    servedBy = body.served_by;
     updateStatusChoices();
     showAssets();
   } catch (error) {

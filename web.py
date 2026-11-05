@@ -71,7 +71,12 @@ def assets_reply() -> tuple:
         logger.warning("A server could not list the assets: %s", reply.get("detail"))
         return 502, {"error": "The asset server could not provide the list"}
 
-    return 200, {"assets": [public_asset(asset) for asset in reply["assets"]]}
+    return 200, {
+        "assets": [public_asset(asset) for asset in reply["assets"]],
+
+        # Showing which server answered makes a failover visible in the browser.
+        "served_by": reply.get("served_by", "unknown"),
+    }
 
 
 class WebHandler(BaseHTTPRequestHandler):
