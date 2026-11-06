@@ -81,11 +81,11 @@ class Session:
     """Who is logged in, and which servers to talk to. Nothing is saved to disk: it all
     lasts until the window is closed, so this file is all a computer needs."""
 
-    servers = []     # addresses to try in order, the primary first
-    trusted = None   # the certificate fingerprint the user accepted
-    token = None     # proves the login to the servers
-    username = None
-    role = None
+    servers: list = []                # addresses to try in order, the primary first
+    trusted: Optional[str] = None     # the certificate fingerprint the user accepted
+    token: Optional[str] = None       # proves the login to the servers
+    username: Optional[str] = None
+    role: Optional[str] = None
 
 
 session = Session()

@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import unittest
+from typing import Optional
 from unittest import mock
 
 import accounts
@@ -1425,7 +1426,7 @@ class LoginTest(NodeTestCase):
             common.send_message(sock, request)
             return common.receive_message(sock)
 
-    def login(self, name: str = "alex", password: str = None) -> dict:
+    def login(self, name: str = "alex", password: Optional[str] = None) -> dict:
         return self.ask({"action": "LOGIN", "username": name, "password": password or f"{name} password"})
 
     def test_ping_needs_no_login_and_says_where_the_servers_are(self):

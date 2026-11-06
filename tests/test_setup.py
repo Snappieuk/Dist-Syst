@@ -307,9 +307,11 @@ class ResetTest(SetupTestCase):
             "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); "
             "print(s.getsockname()[1], flush=True); time.sleep(60)"],
             stdout=subprocess.PIPE, text=True)
+        stdout = program.stdout
+        assert stdout is not None
         self.addCleanup(program.kill)
-        self.addCleanup(program.stdout.close)
-        port = int(program.stdout.readline())
+        self.addCleanup(stdout.close)
+        port = int(stdout.readline())
         self.set_address((common, "SERVERS", 0), ("127.0.0.1", port))
         self.assertEqual(setup.running_programs(), ["server.py"])
 

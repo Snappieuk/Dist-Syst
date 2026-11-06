@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
-
+from typing import Optional
 import common
 
 # The project folder, one above this tests folder.
@@ -36,7 +36,7 @@ class TlsTestCase(unittest.TestCase):
         self.folder = temp_dir.name
         common.ensure_tls_file()
 
-    def start_server(self, tls_file: str = None) -> tuple:
+    def start_server(self, tls_file: Optional[str] = None) -> tuple:
         """Run server.py as its own program, alone, optionally with another certificate."""
         address = spare_address()
         code = (

@@ -237,7 +237,7 @@ def role_of(record: dict) -> str:
 
 
 def add_account(username: str, password: str, replace: bool = False, role: Optional[str] = None,
-                keep_role: bool = False) -> object:
+                keep_role: bool = False) -> Optional[str]:
     """Store an account, returning a message saying why not if it can't be done, or None.
 
     The very first account is always an admin, so someone can manage the rest. Otherwise

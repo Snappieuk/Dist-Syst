@@ -19,6 +19,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from typing import Optional
 import urllib.error
 import urllib.request
 from unittest import mock
@@ -100,7 +101,8 @@ class WebTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.cookie = headers["Set-Cookie"].split(";")[0]
 
-    def fetch(self, path: str, method: str = "GET", body: dict = None, extra_headers: dict = None, **options) -> tuple:
+    def fetch(self, path: str, method: str = "GET", body: Optional[dict] = None,
+              extra_headers: Optional[dict] = None, **options) -> tuple:
         """Make an HTTP request, returning the status, headers and body. It sends the test's
         login, or another cookie if one is given with cookie=."""
         headers = dict(extra_headers or {})
@@ -239,7 +241,7 @@ class AccountStoreTest(unittest.TestCase):
         web.add_account("  Alex ", "correct horse")
 
         self.assertEqual(list(web.users), ["alex"])
-        self.assertIn("taken", web.add_account("ALEX", "another password"))
+        self.assertIn("taken", str(web.add_account("ALEX", "another password")))
 
     def test_an_existing_account_is_only_replaced_on_request(self):
         web.add_account("alex", "first password")
@@ -254,11 +256,11 @@ class AccountStoreTest(unittest.TestCase):
     def test_unacceptable_usernames_are_refused(self):
         for username in ("", "ab", "x" * 33, "has space", "<script>", "café", "a/b"):
             with self.subTest(username):
-                self.assertIn("username", web.add_account(username, "long enough"))
+                self.assertIn("username", str(web.add_account(username, "long enough")))
         self.assertEqual(web.users, {})
 
     def test_a_short_password_is_refused(self):
-        self.assertIn("password", web.add_account("alex", "short"))
+        self.assertIn("password", str(web.add_account("alex", "short")))
         self.assertEqual(web.users, {})
 
     def test_many_people_claiming_one_name_create_one_account(self):
@@ -359,7 +361,7 @@ class DeleteAssetTest(WebTestCase):
         super().setUp()
         self.asset_id = register(make_asset())["stored"]["asset_id"]
 
-    def delete(self, asset_id: str = None, version: object = 1, **options) -> tuple:
+    def delete(self, asset_id: Optional[str] = None, version: object = 1, **options) -> tuple:
         path = f"/api/assets/{asset_id or self.asset_id}?version={version}"
         status, _, reply = self.fetch(path, "DELETE", **options)
         return status, json.loads(reply)
@@ -414,7 +416,7 @@ class EditAssetTest(WebTestCase):
         super().setUp()
         self.asset_id = register(make_asset())["stored"]["asset_id"]
 
-    def edit(self, changes: object, version: object = 1, asset_id: str = None, **options) -> tuple:
+    def edit(self, changes: object, version: object = 1, asset_id: Optional[str] = None, **options) -> tuple:
         body = {"changes": changes}
         if version is not None:
             body["version"] = version
@@ -833,7 +835,7 @@ class RoleTest(WebTestCase):
         self.user_cookie = headers["Set-Cookie"].split(";")[0]
         self.asset_id = register(make_asset())["stored"]["asset_id"]
 
-    def as_user(self, path: str, method: str = "GET", body: dict = None) -> tuple:
+    def as_user(self, path: str, method: str = "GET", body: Optional[dict] = None) -> tuple:
         status, _, reply = self.fetch(path, method, body, cookie=self.user_cookie)
         return status, json.loads(reply)
 
@@ -981,7 +983,7 @@ class ManageAccountsTest(WebTestCase):
         super().setUp()
         web.add_account("worker", "worker password", role=web.USER)
 
-    def call(self, path: str, method: str = "GET", body: dict = None, **options) -> tuple:
+    def call(self, path: str, method: str = "GET", body: Optional[dict] = None, **options) -> tuple:
         status, _, reply = self.fetch(path, method, body, **options)
         return status, json.loads(reply)
 

@@ -19,6 +19,7 @@ import threading
 import gc
 import time
 import unittest
+from typing import Optional, Sequence
 from unittest import mock
 
 import cli
@@ -45,7 +46,7 @@ def make_gui():
 class CommandTest(unittest.TestCase):
     """cli.py runs the command it is given, or asks for one."""
 
-    def run_cli(self, argv: list, answers: list = ()) -> list:
+    def run_cli(self, argv: list, answers: Sequence[str] = ()) -> list:
         """Run cli.main() with these arguments and typed answers, returning which
         command functions it called."""
         called = []
@@ -171,7 +172,7 @@ class GuiSearchTest(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, "the request never finished")
             time.sleep(0.05)
 
-    def search_for(self, text: str = "", status: str = None) -> None:
+    def search_for(self, text: str = "", status: Optional[str] = None) -> None:
         self.app.search_box.delete(0, "end")
         self.app.search_box.insert(0, text)
         if status is not None:
@@ -226,10 +227,12 @@ class WebPageStatusTest(unittest.TestCase):
     def test_the_add_form_offers_only_the_two_statuses(self):
         with open(os.path.join(FOLDER, "static", "index.html"), encoding="utf-8") as file:
             page = file.read()
-        add_form = re.search(r'<form id="add-form".*?</form>', page, re.S).group(0)
-        select = re.search(r'<select name="status">(.*?)</select>', add_form, re.S).group(1)
+        add_form = re.search(r'<form id="add-form".*?</form>', page, re.S)
+        assert add_form is not None
+        select = re.search(r'<select name="status">(.*?)</select>', add_form.group(0), re.S)
+        assert select is not None
 
-        self.assertEqual(tuple(re.findall(r"<option>(.*?)</option>", select)), common.STATUSES)
+        self.assertEqual(tuple(re.findall(r"<option>(.*?)</option>", select.group(1))), common.STATUSES)
 
 
 if __name__ == "__main__":
@@ -358,7 +361,8 @@ class GuiStandaloneTest(unittest.TestCase):
             tree = ast.parse(file.read())
         modules = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
                    for alias in node.names}
-        modules |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        modules |= {node.module.split(".")[0] for node in ast.walk(tree)
+                    if isinstance(node, ast.ImportFrom) and node.module}
         project = {name[:-3] for name in os.listdir(FOLDER) if name.endswith(".py")}
         self.assertEqual(modules & project, set())
 
