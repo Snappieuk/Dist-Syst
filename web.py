@@ -23,6 +23,7 @@ import os         # os.path finds the page's files
 import re         # checks that a username is acceptable
 import secrets    # generates login tokens, password salts and a first password
 import ssl        # converts the certificate so it can be fingerprinted for the GUI download
+import subprocess # runs the C# compiler that builds the desktop app
 import sys        # sys.argv holds the --set-password option
 import threading  # the locks protect the data shared between request threads
 import time       # sessions and lockouts expire
@@ -615,18 +616,69 @@ def certificate_fingerprint() -> str:
     return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
 
 
+def site_servers(web_host: str) -> list:
+    """The servers' (host, port) pairs, with loopback names replaced by the host the browser
+    used to reach this page, because "127.0.0.1" means nothing on another computer."""
+    if not SAFE_HOST.fullmatch(web_host or ""):
+        raise ValueError("The web page was reached by an address that can't be used")
+    return [(web_host if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0") else host, port)
+            for host, port in common.SERVERS]
+
+
+APP_DOWNLOAD_ADDRESS = "/download/gui.exe"
+APP_SOURCE_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clients", "app")
+APP_FILE = os.path.join(common.DATA_FOLDER, "AssetApp.exe")  # the built program, reused until the source changes
+APP_MARKER = b"--ASSET-" + b"SITE--"  # what the app looks for at the end of its own file
+build_lock = threading.Lock()
+
+
+def find_csc() -> str:
+    """The C# compiler that comes with Windows, or None on other systems."""
+    for folder in ("Framework64", "Framework"):
+        path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Microsoft.NET", folder, "v4.0.30319", "csc.exe")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def build_app() -> str:
+    """Compile clients/app into data/AssetApp.exe, unless that is already up to date, and
+    return its path. Raises OSError if it can't be built."""
+    sources = sorted(os.path.join(APP_SOURCE_FOLDER, name) for name in os.listdir(APP_SOURCE_FOLDER)
+                     if name.endswith(".cs"))
+    newest = max(os.path.getmtime(path) for path in sources)
+    with build_lock:  # two downloads at once must not build at once
+        if os.path.exists(APP_FILE) and os.path.getmtime(APP_FILE) >= newest:
+            return APP_FILE
+        compiler = find_csc()
+        if compiler is None:
+            raise OSError("The C# compiler is only available on Windows")
+        os.makedirs(common.DATA_FOLDER, exist_ok=True)
+        done = subprocess.run(
+            [compiler, "/nologo", "/target:winexe", f"/out:{APP_FILE}", "/r:System.Windows.Forms.dll",
+             "/r:System.Drawing.dll", "/r:System.Web.Extensions.dll"] + sources,
+            capture_output=True, text=True, timeout=120)
+        if done.returncode != 0:
+            raise OSError("The app did not compile: " + done.stdout.strip())
+        return APP_FILE
+
+
+def app_with_site_settings(web_host: str) -> bytes:
+    """The built app with the servers and certificate fingerprint added to the end of the
+    file. A .exe ignores extra bytes at its end, and the app reads them when it starts.
+    As with gui.py, neither value is secret."""
+    servers = [f"{host}:{port}" for host, port in site_servers(web_host)]
+    settings = json.dumps({"servers": servers, "fingerprint": certificate_fingerprint()}).encode("utf-8")
+    with open(build_app(), "rb") as file:
+        return file.read() + b"\n" + APP_MARKER + settings
+
+
 def gui_with_site_settings(web_host: str) -> str:
     """The text of gui.py with SITE_SERVERS and SITE_FINGERPRINT filled in.
 
-    The servers in config.json are often written as 127.0.0.1, which is only right on the
-    server's own computer, so those are replaced by the host the browser used to reach this
-    page. Neither value is secret; the secret key and passwords are never put in the file.
+    Neither value is secret; the secret key and passwords are never put in the file.
     """
-    if not SAFE_HOST.fullmatch(web_host or ""):
-        raise ValueError("The web page was reached by an address that can't be used")
-    servers = []
-    for host, port in common.SERVERS:
-        servers.append((web_host if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0") else host, port))
+    servers = site_servers(web_host)
 
     with open(GUI_FILE, "r", encoding="utf-8") as file:
         source = file.read()
@@ -663,6 +715,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"accounts": list_accounts()})
         elif path == GUI_DOWNLOAD_ADDRESS:
             self.send_gui_download()
+        elif path == APP_DOWNLOAD_ADDRESS:
+            self.send_app_download()
         elif path in STATIC_FILES:
             self.send_static_file(*STATIC_FILES[path])
         elif path == "/favicon.ico":
@@ -877,6 +931,27 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         self.send_body(200, "text/x-python; charset=utf-8", source.encode("utf-8"),
                        extra_headers={"Content-Disposition": 'attachment; filename="gui.py"'})
+
+    def send_app_download(self) -> None:
+        """Send the C# desktop app (AssetApp.exe) with this system's server addresses and
+        certificate fingerprint added, built on first use. Only logged-in users get it."""
+        if not self.is_logged_in():
+            self.send_json(401, {"error": "Please log in"})
+            return
+        host = urlsplit("//" + self.headers.get("Host", "")).hostname or ""
+        try:
+            program = app_with_site_settings(host)
+        except ValueError as exc:
+            logger.error("Could not make the app download: %s", exc)
+            self.send_json(500, {"error": "The app could not be prepared"})
+            return
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.error("Could not make the app download: %s", exc)
+            self.send_json(404, {"error": "The Windows app can't be built on this server. "
+                                          "Download the Python app (gui.py) instead."})
+            return
+        self.send_body(200, "application/vnd.microsoft.portable-executable", program,
+                       extra_headers={"Content-Disposition": 'attachment; filename="AssetApp.exe"'})
 
     def send_static_file(self, file_name: str, content_type: str) -> None:
         with open(os.path.join(STATIC_FOLDER, file_name), "rb") as file:

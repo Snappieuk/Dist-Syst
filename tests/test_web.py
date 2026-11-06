@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import socket
 import tempfile
 import threading
@@ -1158,6 +1159,54 @@ class GuiDownloadTest(WebTestCase):
     def test_the_page_links_to_it(self):
         _, _, body = self.fetch("/")
         self.assertIn(web.GUI_DOWNLOAD_ADDRESS.encode(), body)
+
+
+class AppDownloadTest(WebTestCase):
+    """The "Download Windows app" link: the C# app with this system's settings appended."""
+
+    def setUp(self):
+        super().setUp()
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        patcher = mock.patch.object(web, "APP_FILE", os.path.join(folder, "AssetApp.exe"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def download(self, **options) -> tuple:
+        return self.fetch(web.APP_DOWNLOAD_ADDRESS, **options)
+
+    def test_it_needs_a_login(self):
+        self.assertEqual(self.download(cookie=None)[0], 401)
+
+    def test_it_says_so_when_the_app_cannot_be_built(self):
+        with mock.patch.object(web, "find_csc", return_value=None):
+            self.assertEqual(self.download()[0], 404)
+
+    def test_it_is_an_exe_ending_in_the_site_settings(self):
+        if web.find_csc() is None:
+            self.skipTest("the C# compiler is only on Windows")
+        status, headers, body = self.download()
+
+        self.assertEqual(status, 200)
+        self.assertIn("AssetApp.exe", headers["Content-Disposition"])
+        self.assertEqual(body[:2], b"MZ")  # the start of every Windows program
+        settings = json.loads(body[body.rindex(web.APP_MARKER) + len(web.APP_MARKER):])
+        self.assertEqual(settings["servers"], [f"{host}:{port}" for host, port in [self.asset_server]])
+        self.assertEqual(settings["fingerprint"], web.certificate_fingerprint())
+
+    def test_the_marker_is_not_written_whole_in_the_source(self):
+        # The app must not find its own code when it looks for the settings.
+        for name in os.listdir(web.APP_SOURCE_FOLDER):
+            with open(os.path.join(web.APP_SOURCE_FOLDER, name), "rb") as file:
+                self.assertNotIn(web.APP_MARKER, file.read())
+
+    def test_loopback_servers_become_the_address_the_browser_used(self):
+        with mock.patch.object(common, "SERVERS", [("127.0.0.1", 65432), ("10.0.0.5", 65433)]):
+            self.assertEqual(web.site_servers("files.example"), [("files.example", 65432), ("10.0.0.5", 65433)])
+
+    def test_the_page_links_to_it(self):
+        _, _, body = self.fetch("/")
+        self.assertIn(web.APP_DOWNLOAD_ADDRESS.encode(), body)
 
 
 class PageTest(WebTestCase):
