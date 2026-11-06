@@ -108,9 +108,15 @@ To use the web page, run this as well and open http://127.0.0.1:8080:
 python web.py
 ```
 
-After logging in, you can search, filter by status, sort by clicking a column heading, add,
-edit and delete assets, and create accounts for other people. The page refreshes every 5 seconds.
-Its summary row shows the totals and which server answered. Only this machine can open it
+After logging in, you can search, filter by status, sort by clicking a column heading, and
+add, edit and delete assets. Adding and editing open in a window over the page, and the
+result of each change appears briefly in the bottom corner. The page refreshes every 5
+seconds. Its summary cards show the totals and which server answered, in green for the
+primary and amber for the backup.
+
+The button at the top right shows who is logged in and their role. It opens a small menu
+with Log out and, for admins, Manage accounts. That opens a window listing every account,
+where an admin can change roles, delete accounts and create new ones. Only this machine can open it
 unless you change its address in the settings below.
 
 ## Settings
@@ -289,8 +295,10 @@ delete or account creation with `403`. Hiding those buttons on the page is only 
 not what stops a user.
 
 There is no public sign-up, because that would let anyone who can reach the page give
-themselves an account. Instead, an admin creates accounts on the page, as users unless they
-choose admin. Creating an account can't change an existing one, so only `python web.py
+themselves an account. Instead, an admin creates accounts in the Manage accounts window, as
+users unless they choose admin. An admin can also change an account's role or delete it
+there, which logs it out everywhere at once. Nobody can delete their own account, and the
+last admin can't be removed or made a user, so the system can't be left with no admin. Creating an account can't change an existing one, so only `python web.py
 --set-password`, run on the machine itself, can replace a password. An existing account
 keeps its role when its password is replaced.
 
@@ -475,7 +483,10 @@ Requests from the browser to `web.py`, over HTTP:
 | `POST /api/assets` with `{"request_id": "...", "asset": {...}}` | Adds an asset | Yes |
 | `PATCH /api/assets/<id>` with `{"version": n, "changes": {...}}` | Edits an asset, if it is still at that version | Yes |
 | `DELETE /api/assets/<id>?version=<n>` | Deletes an asset, if it is still at that version | Yes, as an admin |
+| `GET /api/users` | Lists every account and its role, never a password hash | Yes, as an admin |
 | `POST /api/users` with `{"username": "...", "password": "...", "role": "user"}` | Creates an account. `role` is `user` or `admin`, and `user` if left out | Yes, as an admin |
+| `PATCH /api/users/<username>` with `{"role": "admin"}` | Changes an account's role, unless that would leave no admin | Yes, as an admin |
+| `DELETE /api/users/<username>` | Deletes an account and logs it out, unless it is your own or the last admin | Yes, as an admin |
 
 Errors from the servers look like `{"status": "ERROR", "code": "NOT_FOUND", "detail": "..."}`.
 
@@ -630,8 +641,7 @@ Other limitations:
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
   different items. Category and location are free text.
 - The web page uses plain HTTP, so it is only safe while `web.py` listens on 127.0.0.1.
-- There are only two roles. Accounts can't be deleted, and a role can't be changed, from the
-  page. Changing a role means editing `web_users.json` and restarting `web.py`.
+- There are only two roles.
 - The roles only apply to the web page. Anything with `secret.key` has full access.
 - Only `web.py` knows who made a change, so only changes made on the web page are audited
   with a name. Changes from the GUI or the command-line clients are audited with `user` set
@@ -666,5 +676,5 @@ Other limitations:
 
 The scaling steps above come first, especially a third server and a majority vote. Other
 ideas are a serial number to identify items, HTTPS for the web page, the shared secret supplied through an
-environment variable, deleting accounts and changing roles from the page, and sending
-every machine's logs to one place.
+environment variable, changing passwords from the page, and sending every machine's logs
+to one place.
