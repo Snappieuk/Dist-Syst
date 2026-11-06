@@ -25,6 +25,9 @@ found by name rather than by fixed addresses in the code.
        e.g. assets-1                   e.g. assets-2
 ```
 
+This shows the default of two servers. More can be added to the end of the list, and each
+one is a further backup. See [More than two servers](#more-than-two-servers).
+
 Each asset has an ID, description, category, location, status, registration date and
 tags. The server creates the ID, sets the date and generates the tags. It also records
 `created_at` and `updated_at`, and `deleted_at` for each deleted ID, in UTC in ISO 8601 form,
@@ -41,7 +44,7 @@ rule still load, and can be changed to one of the two.
 
 | File | Purpose |
 |---|---|
-| `server.py` | An asset server. `python server.py` runs the primary, which accepts changes, puts them in order and copies each one to the backup, and stores its data in `data/assets.json`. `python server.py --backup 1` runs the backup, which keeps its own copy in `data/assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
+| `server.py` | An asset server. `python server.py` runs the primary, which accepts changes, puts them in order and copies each one to the backup, and stores its data in `data/assets.json`. `python server.py --backup 1` runs the backup, which keeps its own copy in `data/assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. `--backup 2` and so on run any further servers in the list. |
 | `node.py` | Code used by every server: the data, the rules for changing it and the network loop. |
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `cli.py` | The command-line client. `python cli.py add` registers a new asset, `list` lists the assets with their IDs, statuses and tags, and `change` marks one as "Not In Use" or "In Use", edits its details, or deletes it. |
@@ -73,8 +76,8 @@ The quickest way to start everything is:
 python start.py
 ```
 
-The first time, this asks you to create your account for the web page. It then starts the
-primary, the backup and the web interface, opens the web page, and stops them all when you
+The first time, this asks you to create your account for the web page. It then starts every
+server in the list (the primary and the backup, by default) and the web interface, opens the web page, and stops them all when you
 press Ctrl+C. To create an account from the command line, or replace a lost password, run
 `python web.py --set-password`.
 
@@ -123,7 +126,7 @@ Everything works without any settings. To change them, copy `config.example.json
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | Where the primary and then the backup are |
+| `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | Where the servers are: the primary first, then each backup in the order they take over |
 | `web_address` | `"127.0.0.1:8080"` | Where `web.py` listens |
 | `timeout_seconds` | `5` | How long a program waits on each network step before giving up |
 | `heartbeat_timeout_seconds` | `1` | How long the servers wait for each other's heartbeats |
@@ -149,7 +152,7 @@ or `web.py`, needs the same server list, either as `servers` in its `config.json
 
 | Variable | Set on | Meaning |
 |---|---|---|
-| `ASSET_SERVERS` | Every machine, unless `config.json` has `servers` | Where the servers are: the primary first, then the backup, as `host:port,host:port`. Without it or the setting, both are on this machine, on ports 65432 and 65433. |
+| `ASSET_SERVERS` | Every machine, unless `config.json` has `servers` | Where the servers are: the primary first, then each backup, as `host:port,host:port`. Without it or the setting, both are on this machine, on ports 65432 and 65433. |
 | `ASSET_LISTEN_HOST` | Each server machine | The address the server listens on. Use `0.0.0.0` to accept connections on every network connection the machine has. Without it, the server listens on the name in its own `ASSET_SERVERS` entry. |
 
 For example:
@@ -173,17 +176,57 @@ Then:
 1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` and
    `tls.pem` it creates to the `data/` folder beside the code on every other machine. Every machine must have the
    same two files, or its connections are refused.
-2. Run `python server.py` on the first machine and `python server.py --backup 1` on the second.
-3. Run clients or `web.py` anywhere that can reach both servers.
+2. Run `python server.py` on the first machine and `python server.py --backup 1` on the
+   second. With more servers, run `--backup 2` on the third, and so on.
+3. Run clients or `web.py` anywhere that can reach every server.
 
 Each server's firewall must allow its port. Don't use `start.py` here, because it starts
-both servers on the same machine. Every connection to a server is encrypted, including the
+every server in the list on the same machine. Every connection to a server is encrypted, including the
 servers' own, so the network can't read them. The web page isn't, so keep `web.py` on the
 machine its users sit at, as it is by default.
 
 So far this has been tested as separate processes on one machine, with the servers found
 by name (`localhost`) instead of by `127.0.0.1`. It hasn't been run on two physical machines
 yet, and listening on `0.0.0.0` hasn't been tried.
+
+## More than two servers
+
+To add a server, add its address to the end of the `servers` list on every machine, then
+start it with the next number:
+
+```json
+{"servers": ["assets-1:65432", "assets-2:65433", "assets-3:65434"]}
+```
+
+```
+python server.py               # the primary, assets-1
+python server.py --backup 1    # assets-2
+python server.py --backup 2    # assets-3
+```
+
+On one machine, `start.py` starts one server for each address in the list by itself.
+
+The order of the list is the order of succession, and one rule decides everything:
+
+- **A server accepts changes only when no server before it in the list answers.** Normally
+  that is the primary. If it fails, backup 1 takes over. If backup 1 has failed as well,
+  backup 2 takes over, and so on. A server only takes over once every server before it has
+  missed 3 heartbeats in a row.
+- **Whichever server is accepting changes copies each one to every server after it** before
+  the client is told it worked. A server that is down is skipped, and brought up to date
+  when it returns.
+- **When a server earlier in the list comes back, it takes control again.** It collects the
+  data of each server after it, merges it with its own using the usual rules, and sends the
+  result back, which puts them on standby.
+
+Each server has its own name, data file, log and range of asset IDs: the primary uses
+`assets.json` and `AST-P...` IDs, backup 1 uses `assets_backup.json` and `AST-B...`, backup 2
+uses `assets_backup2.json` and `AST-C...`, and so on. Clients need no changes, because they
+already try each server in the list in order.
+
+This is deliberately simple. Extra servers hold extra copies and can take over in turn, but
+they don't vote, so they don't protect against a network split. See
+[Known limitations](#known-limitations).
 
 ## Resetting
 
@@ -338,7 +381,7 @@ Every program logs to the console and to its own file in `data/logs/`:
 | File | Written by | Records |
 |---|---|---|
 | `primary.log` | `server.py` | Requests it couldn't complete, each change copied to the backup, the backup falling behind or catching up, and taking back control |
-| `backup.log` | `server.py --backup 1` | Each change applied, missed heartbeats, taking over and returning to standby |
+| `backup.log` | `server.py --backup 1` | Each change applied, missed heartbeats, taking over and returning to standby. Any further servers write `backup2.log` and so on. |
 | `web.log` | `web.py` | Logins and failed logins with where they came from, logouts, and which account added, deleted or created what |
 | `start.log` | `start.py` | When the system started and stopped, and each program that stopped and was restarted |
 
@@ -401,7 +444,8 @@ that a client that doesn't encrypt gets nothing, and that nothing readable cross
 network.
 `test_web.py` makes real HTTP requests but doesn't run the page's script in a browser, so that
 part was checked separately in Microsoft Edge. `DistributedTest` runs the primary and
-the backup as separate programs and kills them partway through. `test_config.py` starts
+the backup as separate programs and kills them partway through. `ThreeServerTest` does the
+same with three servers, failing the first two in turn and bringing both back. `test_config.py` starts
 programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
 it can't listen on. `test_demo.py` runs the whole demo against real servers.
 `test_logging.py` checks that the servers write separate files, that full files are replaced
@@ -419,10 +463,10 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 | Synchronous replication | A client only hears that a change worked after the backup has saved it | `server.py`: `replicate_change` |
 | Single leader | Only the primary accepts changes, so there is one order of events | `node.py`: `accepts_writes` |
 | Total ordering | Every change has a sequence number, so a gap can be detected | `server.py`: `apply_change` |
-| Failure detection | The backup pings the primary every second and treats 3 missed heartbeats as a failure | `server.py`: `monitor_primary` |
-| Failover | The backup promotes itself and clients move to it automatically | `server.py`: `monitor_primary`, `common.py`: `send_request` |
+| Failure detection | Each backup pings the servers before it every second and treats 3 missed heartbeats as a failure | `server.py`: `monitor_earlier_servers` |
+| Failover | The first backup whose earlier servers are all silent promotes itself, and clients move to it automatically | `server.py`: `monitor_earlier_servers`, `common.py`: `send_request` |
 | Automatic restart | A server that stops is restarted while the others carry on, as a cluster manager would | `start.py`: `check_programs` |
-| Recovery and reconciliation | A returning primary merges the backup's changes and takes back control | `server.py`: `catch_up_backup`, `merge_state` |
+| Recovery and reconciliation | A returning server merges the changes of the servers after it and takes back control | `server.py`: `catch_up`, `merge_state` |
 | Conflict resolution | A delete wins, then the higher version, then the primary's copy | `server.py`: `merge_state` |
 | Idempotent requests | A retry has the same `request_id`, so it can't create a second asset | `node.py`: `register_asset` |
 | Unique IDs without coordination | Each server issues IDs from its own range and checks each one first | `node.py`: `generate_asset_id` |
@@ -584,25 +628,26 @@ goes through the one primary.
 
 | | Now |
 |---|---|
-| Server failures it survives | 1 |
-| Servers that accept changes | 1, the primary |
-| Servers that answer reads | 2, though the backup may be slightly behind |
-| Servers in total | Exactly 2 |
+| Server failures it survives | All but one, as long as they don't fail at the same moment as a network split |
+| Servers that accept changes | 1, the first one in the list that is running |
+| Servers that answer reads | Every server, though a backup may be slightly behind |
+| Servers in total | Any number up to 25, 2 by default |
 | Copies of `web.py` | 1, because logins are held in its memory |
 
 It could run on Kubernetes with two small changes. Each server would be a StatefulSet with
 one pod and a persistent volume, with the service names in `ASSET_SERVERS`,
 `ASSET_LISTEN_HOST=0.0.0.0`, and `secret.key` and `tls.pem` mounted from a Kubernetes Secret. Kubernetes
 would restart a failed pod, and the backup would cover the gap until it returned. First,
-though, the data files would need a configurable folder, because they are saved beside the
+though, the `data/` folder would need to be configurable, because it is always beside the
 code, and `web.py` would need to listen on more than `127.0.0.1`. This hasn't been tried.
 
 Growing beyond this would take, roughly in order:
 
 1. **Reading from the backup** for `LIST`, trading slightly old data for more read capacity.
-2. **Three or more servers with a majority vote**, as in Raft. A change would count once
-   most servers had saved it, and a leader would be elected by majority. This also ends
-   the network split problem below, because the smaller side can't form a majority.
+2. **A majority vote**, as in Raft. A change would count once most servers had saved it,
+   and a leader would be elected by majority. This would end the network split problem
+   below, because the smaller side can't form a majority. It was left out on purpose to
+   keep the system simple.
 3. **A database instead of the JSON file**, so a change only writes what changed, plus
    paging for `LIST`.
 4. **Sessions and accounts in a shared store**, so `web.py` can run as many copies as needed
@@ -612,10 +657,11 @@ Growing beyond this would take, roughly in order:
 
 ## Known limitations
 
-The biggest one is a network split. Two servers can't tell a failed partner from an
-unreachable one, and settling that properly needs a majority, so at least three servers.
-If the two lose contact while both are running, the backup takes over while the primary
-carries on, which keeps the system available. When they reconnect, the primary merges the
+The biggest one is a network split. A server can't tell a failed server from an
+unreachable one, and settling that properly needs the servers to vote, which this system
+deliberately doesn't do, however many servers there are. If a backup loses contact with
+every server before it while they are still running, it takes over while they carry on,
+which keeps the system available. When they reconnect, the primary merges the
 data, and some changes are lost even though their clients were told they worked:
 
 - If both servers registered the same item, the primary's record is kept and the backup's
@@ -633,15 +679,23 @@ Other limitations:
   machine, mostly waiting for the 3 missed heartbeats. Clients also try the primary first
   on every request, which took about 2 more seconds each time. If both servers are down,
   clients show an error.
-- Exactly one primary and one backup are supported. `start.py` restarts a failed server, but
-  only on one machine. Across machines, failed servers have to be restarted by hand or by
-  something like Kubernetes.
+- Extra servers are only extra copies, taking over in turn. They don't add capacity, they
+  don't vote, and they don't make a network split any safer.
+- Every change is copied to every other server one after another, so each server added
+  makes every change a little slower.
+- Every machine must have the same server list in the same order. Adding a server means
+  changing the list on every machine and restarting everything.
+- A backup only takes over when every server before it is silent, and it pings them one at
+  a time, so the more earlier servers are down, the longer a takeover takes.
+- There can be at most 25 servers, because each needs its own letter for asset IDs.
+- `start.py` restarts a failed server, but only on one machine. Across machines, failed
+  servers have to be restarted by hand or by something like Kubernetes.
 - Any program with `secret.key` can stop a server with `STOP`. That is no more access than it
   already has, since it could also delete every asset.
 - If the backup was down when the primary took changes and the primary then fails, those
   changes are unavailable until the primary returns. If the primary's disk were also
   destroyed, they would be lost.
-- The lock is held while copying to the backup, so a stalled backup can delay changes by
+- The lock is held while copying to the other servers, so a stalled one can delay changes by
   up to the 5-second timeout before it is marked as behind. Across a slow network, every
   change also waits for the round trip to the backup.
 - The backup answers `LIST` while on standby, and may be out of date if it was recently down.
@@ -690,7 +744,7 @@ Other limitations:
 
 ## Further development
 
-The scaling steps above come first, especially a third server and a majority vote. Other
+The scaling steps above come first, especially reading from the backups and a majority vote. Other
 ideas are a serial number to identify items, HTTPS for the web page, the shared secret supplied through an
 environment variable, changing passwords from the page, and sending every machine's logs
 to one place.
