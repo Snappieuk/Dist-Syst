@@ -53,11 +53,12 @@ rule still load, and can be changed to one of the two.
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
 | `demo.py` | Shows a failover step by step on a running system. |
+| `fill.py` | Fills a running system with made-up assets, 500 unless `--count` says otherwise, so there is a full table to try things on. |
 | `config.example.json` | An example of the optional settings file, `config.json`. |
 | `setup.py` | First-time setup, which creates the shared secret, the TLS certificate and the first web account, and a full reset with `--reset`. |
 | `requirements.txt` | The one package needed, `cryptography`, to create the certificate. |
 | `logs/` | Created as the programs run. Each program's own log file: `primary.log`, `backup.log`, `web.log` and `start.log`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py`, `test_tls.py` | The automated tests. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py`, `test_tls.py`, `test_fill.py` | The automated tests. |
 
 ## Running it on one machine
 
@@ -201,6 +202,23 @@ certificate and the logs on this machine.** It shows what will be lost and asks 
 the code or the git history. If you use several machines, reset each of them, because a
 server that still has the data would copy it straight back. The next `python start.py` runs
 setup again.
+
+## Filling the table with test data
+
+To see how the web page and GUI cope with a full table, start the system, then run this in
+a second terminal:
+
+```
+python fill.py               # adds 500 made-up assets
+python fill.py --count 100   # or any other number (-n 100 for short)
+```
+
+The assets are registered through the servers like any other, so the backup gets a copy
+and the web page shows them on its next refresh. Each description ends with a random
+serial number, such as `Dell Latitude 5440 laptop, SN 7KQ2M9XP`, because the server refuses
+a second asset with the same description, category and location. Adding 500 takes about
+10 seconds. To clear them away again, stop the system and run `python setup.py --reset`,
+which deletes every asset, not just these.
 
 ## Demo
 
@@ -373,7 +391,7 @@ log line. The `logs/` folder is ignored by git, and a full reset deletes it.
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging test_clients test_tls
+python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging test_clients test_tls test_fill
 ```
 
 Or run every test file at once with `python -m unittest discover -p "test_*.py"`.
