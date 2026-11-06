@@ -29,6 +29,19 @@ class MadeUpAssetTest(unittest.TestCase):
             self.assertRegex(serial, r"^[A-Z0-9]{8}$")
             self.assertRegex(asset["location"], r"^.+ - .+$")
 
+    def test_every_asset_is_marked_as_sample_data(self):
+        self.assertTrue(all(fill.made_up_asset()["sample"] for _ in range(50)))
+
+    def test_loans_are_sensible(self):
+        today = fill.datetime.date(2026, 11, 6)
+        for _ in range(500):
+            loan = fill.made_up_loan(today)
+            self.assertLessEqual(loan["start"], loan["due"])
+            if "returned" in loan:
+                self.assertLessEqual(loan["start"], loan["returned"])
+                self.assertLessEqual(loan["returned"], today.isoformat())
+                self.assertLess(loan["due"], today.isoformat())  # only ended loans are returned
+
     def test_the_assets_are_all_different_items(self):
         # The server refuses a second asset with the same description, category and
         # location, so a run of hundreds must never repeat one.
@@ -61,7 +74,10 @@ class FillTest(ServerTestCase):
             added = fill.fill(200)
 
         self.assertEqual(added, 200)
-        self.assertEqual(len(self.held_by(self.servers[0])), 200)
+        held = self.held_by(self.servers[0])
+        self.assertEqual(len(held), 200)
+        self.assertTrue(all(common.SAMPLE_TAG in asset["tags"] for asset in held))
+        self.assertGreater(sum(1 for asset in held if asset.get("loans")), 20)  # about 80 expected
         # The primary copies each change to the backup, so give it a moment to catch up.
         deadline = time.monotonic() + 10
         while len(self.held_by(self.servers[1])) < 200 and time.monotonic() < deadline:

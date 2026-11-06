@@ -4,6 +4,10 @@ Fills the system with made-up assets, so the table has plenty of rows to look at
     python tools/fill.py               adds 500 assets
     python tools/fill.py --count 100   adds 100 assets (or -n 100)
 
+Every asset is marked as sample data, so it gets a "sample data" tag, and about two in
+five are given a loan, some returned, some out, some overdue and some still to come, so
+the web page's calendar has something to show.
+
 Start the system first, with python start.py. Each asset is registered through the
 servers exactly as python cli.py add does it, so the backup gets a copy and the web page and GUI
 show the new rows on their next refresh. To remove them all again, use
@@ -11,6 +15,7 @@ python setup.py --reset, which deletes every asset.
 """
 
 import argparse  # reads the --count option
+import datetime  # works out loan dates around today
 import random    # picks the made-up details
 import string    # the letters and digits a serial number is made from
 import os        # finds the project folder
@@ -78,6 +83,34 @@ def serial_number() -> str:
     return "".join(random.choices(SERIAL_CHARACTERS, k=SERIAL_LENGTH))
 
 
+# The share of assets given a loan, and the people they are lent to.
+LOAN_SHARE = 0.4
+BORROWERS = ["Sam Lee", "Priya Shah", "Alex Kim", "Jo Brown", "Chris Evans", "Maria Garcia",
+             "Tom Walsh", "Aisha Khan", "Ben Carter", "Lucy Moore"]
+
+
+def made_up_loan(today: datetime.date) -> dict:
+    """Return a loan around today: a start from 30 days ago to 20 days ahead, lasting 1 to
+    21 days. Most that have ended were returned (some late), but one in five is overdue."""
+    start = today + datetime.timedelta(days=random.randint(-30, 20))
+    due = start + datetime.timedelta(days=random.randint(1, 21))
+    loan = {"borrower": random.choice(BORROWERS), "start": start.isoformat(), "due": due.isoformat()}
+    if due < today and random.random() < 0.8:
+        returned = min(today, due + datetime.timedelta(days=random.randint(-2, 3)))
+        loan["returned"] = max(returned, start).isoformat()
+    return loan
+
+
+def lend(asset_id: str, loan: dict) -> bool:
+    """Check an asset out, and back in if the loan has been returned, returning whether
+    the servers accepted it."""
+    reply = send_request({"action": "CHECK_OUT", "asset_id": asset_id, **{key: loan[key] for key in
+                                                                           ("borrower", "start", "due")}})
+    if reply.get("status") == "OK" and "returned" in loan:
+        reply = send_request({"action": "CHECK_IN", "asset_id": asset_id, "returned": loan["returned"]})
+    return reply.get("status") == "OK"
+
+
 def made_up_asset() -> dict:
     """Return the details of one made-up asset, ready to register."""
     category = random.choice(list(ITEMS_BY_CATEGORY))
@@ -86,6 +119,7 @@ def made_up_asset() -> dict:
         "category": category,
         "location": f"{random.choice(SITES)} - {random.choice(ROOMS)}",
         "status": IN_USE if random.random() < IN_USE_SHARE else NOT_IN_USE,
+        "sample": True,  # tagged "sample data", so it is easy to tell from real assets
     }
 
 
@@ -101,18 +135,22 @@ def positive_number(text: str) -> int:
 
 
 def fill(count: int) -> int:
-    """Register `count` made-up assets, returning how many were added.
+    """Register `count` made-up assets, lending some of them, and return how many were
+    added.
 
     It stops at the first one the servers refuse, rather than repeating the same
     error hundreds of times.
     """
     added = 0
+    today = datetime.date.today()
     for _ in range(count):
         reply = send_request(new_register_request(made_up_asset()))
         if reply.get("status") != "OK":
             print(f"The servers refused an asset, so stopping: {reply.get('detail')}")
             break
         added += 1
+        if random.random() < LOAN_SHARE and not lend(reply["stored"]["asset_id"], made_up_loan(today)):
+            print(f"The servers refused a loan for {reply['stored']['asset_id']}, so it has none.")
         if added % PROGRESS_EVERY == 0:
             print(f"  Added {added} of {count}...")
     return added
