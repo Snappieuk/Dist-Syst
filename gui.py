@@ -9,6 +9,7 @@ threads, so that thread puts its result on a queue, and the main thread checks
 the queue regularly and updates the window itself.
 """
 
+import datetime   # today's date, and checking the dates typed into the check-out form
 import queue      # carries results from background threads to the main thread
 import threading  # runs network requests without freezing the window
 import tkinter as tk
@@ -129,6 +130,8 @@ class AssetManagementApp:
         self.edit_button.pack(side=tk.LEFT, padx=(8, 0))
         self.history_button = ttk.Button(actions, text="History", command=self.show_selected_history)
         self.history_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.check_button = ttk.Button(actions, text="Check Out / In", command=self.check_out_or_in_selected)
+        self.check_button.pack(side=tk.LEFT, padx=(8, 0))
         self.delete_button = ttk.Button(actions, text="Delete Asset", command=self.delete_selected)
         self.delete_button.pack(side=tk.RIGHT)
 
@@ -277,6 +280,100 @@ class AssetManagementApp:
         text.configure(state=tk.DISABLED)  # read-only
         ttk.Button(window, text="Close", command=window.destroy).pack(pady=(0, 10))
 
+    @staticmethod
+    def current_loan(asset: dict) -> object:
+        """The asset's current loan, or None. The last loan is current only if it has
+        not been returned."""
+        loans = asset.get("loans") or []
+        if loans and loans[-1].get("returned") is None:
+            return loans[-1]
+        return None
+
+    @staticmethod
+    def parse_date(text: str) -> object:
+        """Turn 'YYYY-MM-DD' into a date, or return None if it is not exactly that format."""
+        try:
+            date = datetime.datetime.strptime(text, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        # strptime also accepts things like "2026-1-5", so insist on the exact format.
+        return date if date.isoformat() == text else None
+
+    def check_out_or_in_selected(self) -> None:
+        """Check the selected asset in if it is on loan, otherwise open the check-out form."""
+        asset_id = self._selected_asset_id()
+        if asset_id is None:
+            return
+        asset = self.assets_by_id.get(asset_id, {})
+        loan = self.current_loan(asset)
+        if loan is None:
+            self.open_check_out_window(asset_id)
+        elif messagebox.askyesno(
+            "Check in",
+            f"Check {asset_id} in? It is on loan to {loan.get('borrower')}.",
+            parent=self.root,
+        ):
+            self._start_request("check_in", {
+                "action": "CHECK_IN",
+                "asset_id": asset_id,
+                "expected_version": self.versions.get(asset_id),
+            })
+
+    def open_check_out_window(self, asset_id: str) -> tuple:
+        """Show the check-out form, returning the window, its boxes and the function that
+        sends it. The dates start as today and a week from today."""
+        window = tk.Toplevel(self.root)
+        window.title(f"Check out {asset_id}")
+        window.transient(self.root)
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        today = datetime.date.today()
+        defaults = {
+            "borrower": "",
+            "start": today.isoformat(),
+            "due": (today + datetime.timedelta(days=7)).isoformat(),
+        }
+        boxes = {}
+        for row, (key, label) in enumerate((("borrower", "Borrower"), ("start", "Start (YYYY-MM-DD)"),
+                                            ("due", "Due (YYYY-MM-DD)"))):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
+            box = ttk.Entry(frame, width=30)
+            box.insert(0, defaults[key])
+            box.grid(row=row, column=1, sticky=tk.EW, pady=3)
+            boxes[key] = box
+
+        def save() -> None:
+            values = {key: box.get().strip() for key, box in boxes.items()}
+            # Check everything before sending, so the user sees the problem straight away.
+            if not values["borrower"]:
+                problem = "Please enter who is borrowing the asset."
+            elif self.parse_date(values["start"]) is None or self.parse_date(values["due"]) is None:
+                problem = "Dates must be written as YYYY-MM-DD, for example 2026-11-06."
+            elif values["due"] < values["start"]:  # same format, so text order is date order
+                problem = "The due date cannot be before the start date."
+            else:
+                problem = None
+            if problem:
+                messagebox.showwarning("Check out", problem, parent=window)
+                return
+            window.destroy()
+            self._start_request("check_out", {
+                "action": "CHECK_OUT",
+                "asset_id": asset_id,
+                "borrower": values["borrower"],
+                "start": values["start"],
+                "due": values["due"],
+                "expected_version": self.versions.get(asset_id),
+            })
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=3, column=0, columnspan=2, sticky=tk.E, pady=(10, 0))
+        ttk.Button(buttons, text="Check Out", command=save).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side=tk.LEFT, padx=(8, 0))
+        frame.columnconfigure(1, weight=1)
+        return window, boxes, save
+
     def _set_busy(self, busy: bool) -> None:
         """Disable the buttons during a request, so it cannot be sent twice."""
         state = tk.DISABLED if busy else tk.NORMAL
@@ -288,6 +385,7 @@ class AssetManagementApp:
             self.not_in_use_button,
             self.in_use_button,
             self.edit_button,
+            self.check_button,
             self.delete_button,
         ):
             button.configure(state=state)
