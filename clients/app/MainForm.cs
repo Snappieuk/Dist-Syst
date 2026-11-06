@@ -159,13 +159,33 @@ namespace AssetApp
         // usual reason and the list is then stale.
         void Perform(Dictionary<string, object> request, string success, Action onSuccess)
         {
+            List<Dictionary<string, object>> requests = new List<Dictionary<string, object>>();
+            if (request != null) requests.Add(request);
+            PerformAll(requests, success, onSuccess);
+        }
+
+        // Like Perform, for several requests (approving or denying a few assets at once).
+        // Each is sent even if an earlier one failed, and the failures are reported together.
+        void PerformAll(List<Dictionary<string, object>> requests, string success, Action onSuccess)
+        {
             if (busy) return;
             SetBusy(true, "Connecting to the asset server...");
             Dictionary<string, object> listRequest = ListRequest();   // read on this thread: it reads widgets
 
             Background.Run<object[]>(this, delegate
             {
-                Dictionary<string, object> reply = request == null ? null : Net.Send(request);
+                List<string> failures = new List<string>();
+                foreach (Dictionary<string, object> one in requests)
+                {
+                    Dictionary<string, object> answer = Net.Send(one);
+                    if (J.Text(answer, "status") != "OK")
+                        failures.Add(J.Text(one, "asset_id") + ": " + J.Text(answer, "detail"));
+                }
+                Dictionary<string, object> reply = null;
+                if (requests.Count > 0)
+                    reply = new Dictionary<string, object> {
+                        { "status", failures.Count == 0 ? "OK" : "ERROR" },
+                        { "detail", string.Join("\n", failures.ToArray()) } };
                 Dictionary<string, object> list = Net.Send(listRequest);
                 return new object[] { reply, list };
             }, delegate(object[] results, Exception error)
