@@ -48,8 +48,8 @@ rule still load, and can be changed to one of the two.
 | `node.py` | Code used by every server: the data, the rules for changing it and the network loop. |
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `cli.py` | The command-line client. `python cli.py add` registers a new asset, `list` lists the assets with their IDs, statuses and tags, and `change` marks one as "Not In Use" or "In Use", edits its details, or deletes it. |
-| `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. |
-| `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
+| `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. A "Flagged for review" area lists assets added while the primary was offline, and History (or a double-click) shows what has happened to an asset. |
+| `web.py` | A web interface for browsing, adding and deleting assets, reviewing flagged ones, checking assets out and in, seeing their history and a loans calendar, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
 | `tools/` | Two helpers for trying the system out. `demo.py` shows a failover step by step on a running system. `fill.py` fills a running system with made-up assets, 500 unless `--count` says otherwise, so there is a full table to try things on. |
@@ -255,8 +255,11 @@ python tools/fill.py --count 100   # or any other number (-n 100 for short)
 The assets are registered through the servers like any other, so the backup gets a copy
 and the web page shows them on its next refresh. Each description ends with a random
 serial number, such as `Dell Latitude 5440 laptop, SN 7KQ2M9XP`, because the server refuses
-a second asset with the same description, category and location. Adding 500 takes about
-10 seconds. To clear them away again, stop the system and run `python setup.py --reset`,
+a second asset with the same description, category and location. Every asset is marked
+as sample data, so it has a `sample data` tag (search for it to see only these). About two
+in five are lent to a made-up person, with loans from 30 days ago to 20 days ahead: most
+that have ended were returned, some late, and some are overdue, so the loans calendar has
+something to show. Adding 500 takes about 10 seconds. To clear them away again, stop the system and run `python setup.py --reset`,
 which deletes every asset, not just these.
 
 ## Demo
@@ -272,14 +275,18 @@ Keep the `start.py` window visible beside it, because the server logs show the s
 from the servers' side. The demo pauses before each step, so you can explain it:
 
 1. It shows both servers' states, then adds an asset through the primary and checks the
-   backup already has a copy.
+   backup already has a copy. It lends that asset to a demo borrower for a week, so it
+   shows on the loans calendar. The demo's assets are sample data, like `fill.py`'s.
 2. It sends the primary a `STOP` request, which ends it abruptly, as if it had crashed.
 3. It adds another asset. The client waits while the backup misses 3 heartbeats and takes
    over, which took about 8 seconds when tried, and the backup stores it with an `AST-B` ID.
+   It is flagged for review, because the primary was offline.
 4. It waits for the primary to come back. `start.py` restarts it after 20 seconds. If you
    started the servers in separate terminals, the demo asks you to run `server.py` again.
    The primary merges the backup's changes, and the demo checks both assets are there.
-5. It deletes the two assets it added.
+5. It shows the asset is still flagged for review once the primary is back, and approves
+   it, as an admin would on the web page or in the GUI.
+6. It deletes the two assets it added.
 
 It also works across machines, as long as `ASSET_SERVERS` is set where it runs.
 
@@ -302,6 +309,38 @@ the server logs visible.
 6. To show the servers being found by name, set
    `ASSET_SERVERS=localhost:65432,localhost:65433` in every terminal and repeat steps 1–3.
    Nothing changes for the user, because no program needs to know the servers' addresses.
+
+## Reviewing, loans, history and the calendar
+
+**Flagged for review.** Only the primary normally accepts changes, so an asset registered
+while it was offline (by a backup that had taken over) is flagged for someone to check. The
+web page shows these in a "Flagged for review" panel above the totals, and the GUI in an
+area above the table, each saying the assets were added while the primary server was
+offline. Each has a tick box, with one to tick them all, and buttons approve or deny the
+ticked ones or all of them. Approving clears the flag. Denying deletes the asset, so it
+asks first. On the web page only admins can approve or deny, as only they can delete.
+Flagged assets are also marked "Needs review" in the main table.
+
+**Check-out form.** On the web page, each asset has a Check out button, which asks for the
+borrower's name, a start date (today) and a due date (a week later). An asset on loan has a
+Check in button instead, and its status says who has it and until when, in red once it is
+overdue. Checking out marks it In Use and checking in marks it Not In Use. An asset can't
+be lent twice at once, and the due date can't be before the start. Searching also finds
+assets by who has them.
+
+**History.** Every registration, status change, edit, approval, check-out and check-in is
+recorded with the asset: when, what, which web user asked and which server did it. The
+history travels with the asset, so every server has it. Click an asset on the web page,
+or double-click it (or use History) in the GUI, to see it.
+
+**Loans calendar.** Below the web page's table, a month at a time, each loan is a bar from
+its start to its end: green while out, red when overdue (running up to today) and grey once
+returned. It follows the search like the table, and clicking a bar shows that asset's
+history. Every loan an asset has had is kept, so past months show too.
+
+**Totals.** The totals at the top of the web page count what the search and status filter
+match, so searching "switch" shows how many switches there are, how many are in use and
+how many are on loan.
 
 ## Encryption
 
@@ -501,6 +540,9 @@ Requests from clients:
 | `{"action": "SET_STATUS", "asset_id": "...", "status": "Not In Use", "expected_version": 1}` | `{"status": "OK", "stored": {...}}` |
 | `{"action": "EDIT", "asset_id": "...", "changes": {"location": "Site B"}, "expected_version": 1}` | `{"status": "OK", "stored": {...}}`, the updated record |
 | `{"action": "DELETE", "asset_id": "...", "expected_version": 1}` | `{"status": "OK", "deleted": "..."}` |
+| `{"action": "APPROVE", "asset_id": "...", "expected_version": 1}` | `{"status": "OK", "stored": {...}}`, with `flagged` cleared |
+| `{"action": "CHECK_OUT", "asset_id": "...", "borrower": "Sam Lee", "start": "2026-11-06", "due": "2026-11-13"}` | `{"status": "OK", "stored": {...}}`, with the loan added to `loans` |
+| `{"action": "CHECK_IN", "asset_id": "...", "returned": "2026-11-10"}` | `{"status": "OK", "stored": {...}}`. `returned` is optional and defaults to today |
 | `{"action": "STOP"}` | `{"status": "OK"}`, then the server ends abruptly, as if it had crashed. Used by `demo.py` |
 
 Each of `LIST`'s options is optional, and without any it returns every asset, as it always
@@ -733,7 +775,15 @@ Other limitations:
 - A search looks through every asset in memory, which is fine for thousands of assets but
   not millions. A page is only stable while nothing changes, so an asset added meanwhile can
   shift the next page by one.
-- The list of deleted IDs only ever grows.
+- The list of deleted IDs only ever grows, and so does each asset's history and list of
+  loans.
+- Assets are only flagged for review when a backup registers them. A status change or
+  edit made while the primary was offline isn't flagged, although its history shows which
+  server made it.
+- The GUI's review area only lists flagged assets that the table is showing, so a search
+  can hide some. The GUI has no check-out form or calendar; those are on the web page.
+- Loans are whole days, in each machine's local date, with no times or time zones. The
+  calendar shows the browser's month.
 - Every change rewrites the whole file, changes happen one at a time and every asset is held
   in memory. `LIST` can page, but the handover between the servers can't. Once the data is
   over the 10 MiB message limit, a `LIST` without a `limit` replies `TOO_LARGE`, and the
