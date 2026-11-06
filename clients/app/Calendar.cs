@@ -44,10 +44,18 @@ namespace AssetApp
         public Func<CalendarLoan, bool> IsOverdue;
         public event Action<string> DayClicked;
 
+        // One bold font reused for today's date, instead of a new one per redraw.
+        Font todayFont;
+        protected override void OnFontChanged(EventArgs e)
+        {
+            base.OnFontChanged(e);
+            todayFont = new Font(Font, FontStyle.Bold);
+        }
         public MonthGrid()
         {
             Month = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
             DoubleBuffered = true;   // no flicker when it redraws
+            todayFont = new Font(Font, FontStyle.Bold);
             ResizeRedraw = true;
         }
 
@@ -94,7 +102,7 @@ namespace AssetApp
                     g.SetClip(cell);
 
                     bool inMonth = day.Month == Month.Month;
-                    g.DrawString(day.Day.ToString(), date == today ? new Font(Font, FontStyle.Bold) : Font,
+                    g.DrawString(day.Day.ToString(), date == today ? todayFont : Font,
                                  inMonth ? SystemBrushes.WindowText : SystemBrushes.GrayText, cell.X + 4, cell.Y + 2);
 
                     // As many loans as fit, then "+N more" (click the day to see them all).
@@ -103,7 +111,7 @@ namespace AssetApp
                     for (int n = 0; n < loans.Count && n < room; n++)
                     {
                         bool last = n == room - 1 && loans.Count > room;
-                        string text = last ? "+" + (loans.Count - room + 1) + " more" : J.Text(loans[n].Asset, "asset_id") + " " + J.Text(loans[n].Loan, "borrower");
+                        string text = last ? "+" + (loans.Count - room + 1) + " more" : J.Text(loans[n].Loan, "borrower") + ": " + MainForm.ItemName(loans[n].Asset);
                         using (Brush brush = new SolidBrush(last ? Color.DimGray : ColorOf(loans[n])))
                             g.DrawString(text, Font, brush, cell.X + 4, cell.Y + 20 + n * LineHeight);
                     }
@@ -179,15 +187,15 @@ namespace AssetApp
             {
                 Label note = new Label { Text = covering.Count + " loan(s) on this day. Double-click one to see its history.", Dock = DockStyle.Top, Height = 28, Padding = new Padding(6, 6, 0, 0) };
                 ListView list = NewList();
+                list.Columns.Add("Item", 220);
                 list.Columns.Add("Asset ID", 100);
-                list.Columns.Add("Description", 220);
                 list.Columns.Add("Borrower", 130);
                 list.Columns.Add("Start", 90);
                 list.Columns.Add("Due", 90);
                 list.Columns.Add("State", 140);
                 foreach (CalendarLoan loan in covering)
                 {
-                    ListViewItem row = new ListViewItem(new string[] { J.Text(loan.Asset, "asset_id"), J.Text(loan.Asset, "description"),
+                    ListViewItem row = new ListViewItem(new string[] { ItemName(loan.Asset), J.Text(loan.Asset, "asset_id"),
                         J.Text(loan.Loan, "borrower"), loan.Start, J.Text(loan.Loan, "due"), loan.State(IsOverdue(loan.Loan)) });
                     row.Tag = loan.Asset;
                     if (!loan.Returned && IsOverdue(loan.Loan)) row.ForeColor = Color.Firebrick;

@@ -37,8 +37,8 @@ namespace AssetApp
             peopleList.Columns.Add("Has on loan", 640);
             peopleList.SelectedIndexChanged += delegate { ShowPerson(); };
 
+            personItems.Columns.Add("Item", 220);
             personItems.Columns.Add("Asset ID", 100);
-            personItems.Columns.Add("Description", 220);
             personItems.Columns.Add("Category", 110);
             personItems.Columns.Add("Location", 120);
             personItems.Columns.Add("Out since", 90);
@@ -76,7 +76,7 @@ namespace AssetApp
                 int days = (int)(DateTime.Parse(J.Text(loan, "due")) - DateTime.Today).TotalDays;
                 string state = days < 0 ? "Overdue by " + (-days) + (days == -1 ? " day" : " days")
                              : days == 0 ? "Due today" : "Due in " + days + (days == 1 ? " day" : " days");
-                ListViewItem row = new ListViewItem(new string[] { J.Text(asset, "asset_id"), J.Text(asset, "description"), J.Text(asset, "category"),
+                ListViewItem row = new ListViewItem(new string[] { ItemName(asset), J.Text(asset, "asset_id"), J.Text(asset, "category"),
                     J.Text(asset, "location"), J.Text(loan, "start"), J.Text(loan, "due"), state });
                 row.Tag = asset;
                 if (days < 0) row.ForeColor = System.Drawing.Color.Firebrick;
@@ -93,7 +93,7 @@ namespace AssetApp
                 return;
             }
             Dictionary<string, object> asset = (Dictionary<string, object>)personItems.SelectedItems[0].Tag;
-            if (MessageBox.Show(this, "Check " + J.Text(asset, "asset_id") + " back in?", "Check in", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (MessageBox.Show(this, "Check " + ItemName(asset) + " back in?", "Check in", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             Dictionary<string, object> back = Net.Request("CHECK_IN");
             back["asset_id"] = J.Text(asset, "asset_id");
             back["expected_version"] = J.Number(asset, "version");
@@ -144,7 +144,7 @@ namespace AssetApp
                 {
                     Dictionary<string, object> loan = CurrentLoan(asset);
                     late = late || IsOverdue(loan);
-                    items.Add(J.Text(asset, "asset_id") + " " + J.Text(asset, "description") + " (" + DueText(loan) + ")");
+                    items.Add(ItemName(asset) + " (" + DueText(loan) + ")");
                 }
                 ListViewItem row = new ListViewItem(new string[] { person.Name, person.Assets.Count.ToString(), string.Join("; ", items.ToArray()) });
                 row.Tag = person;
@@ -169,7 +169,7 @@ namespace AssetApp
 
             string list = "";
             foreach (Dictionary<string, object> asset in person.Assets)
-                list += "\n  " + J.Text(asset, "asset_id") + "  " + J.Text(asset, "description") + ", " + DueText(CurrentLoan(asset));
+                list += "\n  " + ItemName(asset) + ", " + DueText(CurrentLoan(asset));
             if (MessageBox.Show(this, person.Name + " still has " + person.Assets.Count + " item(s) on loan. Removing them means checking every one of these back in:\n" + list,
                                 "Remove " + person.Name, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             if (MessageBox.Show(this, "Really check in " + person.Assets.Count + " item(s) from " + person.Name + "?",

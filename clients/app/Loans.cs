@@ -100,6 +100,13 @@ namespace AssetApp
 
         // ---- Loans tab ----
 
+        // What to call an asset on screen: its description, or the ID if it has none.
+        internal static string ItemName(Dictionary<string, object> asset)
+        {
+            string description = J.Text(asset, "description");
+            return description == "" ? J.Text(asset, "asset_id") : description;
+        }
+
         readonly ListView loanList = NewList();
         readonly FlowLayoutPanel loanButtons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 6) };
 
@@ -107,8 +114,9 @@ namespace AssetApp
         {
             TabPage page = new TabPage("Loans");
             AddButton(loanButtons, "Check in", delegate { CheckInSelectedLoan(); });
+            // The description comes first because it is what people recognise; the ID is the machine tag.
+            loanList.Columns.Add("Item", 240);
             loanList.Columns.Add("Asset ID", 100);
-            loanList.Columns.Add("Description", 240);
             loanList.Columns.Add("Borrower", 140);
             loanList.Columns.Add("Start", 90);
             loanList.Columns.Add("Due", 90);
@@ -129,7 +137,7 @@ namespace AssetApp
             Dictionary<string, object> asset = (Dictionary<string, object>)loanList.SelectedItems[0].Tag;
             Dictionary<string, object> loan = CurrentLoan(asset);
             if (loan == null) return;
-            if (MessageBox.Show(this, J.Text(asset, "asset_id") + " is out on loan to " + J.Text(loan, "borrower") + ".\nCheck it back in?",
+            if (MessageBox.Show(this, ItemName(asset) + " is out on loan to " + J.Text(loan, "borrower") + ".\nCheck it back in?",
                                 "Check in", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             Dictionary<string, object> back = Net.Request("CHECK_IN");
             back["asset_id"] = J.Text(asset, "asset_id");
@@ -149,7 +157,7 @@ namespace AssetApp
                 {
                     bool out_ = J.Text(loan, "returned") == "";
                     string returned = !out_ ? J.Text(loan, "returned") : (IsOverdue(loan) ? "Overdue" : "");
-                    rows.Add(new string[] { J.Text(asset, "asset_id"), J.Text(asset, "description"), J.Text(loan, "borrower"),
+                    rows.Add(new string[] { ItemName(asset), J.Text(asset, "asset_id"), J.Text(loan, "borrower"),
                                             J.Text(loan, "start"), J.Text(loan, "due"), returned });
                     owners.Add(out_ ? asset : null);
                 }
