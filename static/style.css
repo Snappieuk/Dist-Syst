@@ -76,13 +76,16 @@ h3 {
 
 /* ---- The bar across the top, with the account menu at its right ---- */
 
+/* A solid dark band, the same in light and dark mode, with a thin accent line under it.
+   Its colours are written out here rather than taken from the theme for that reason. */
 .topbar {
   position: sticky;
   top: 0;
   z-index: 10;
   margin-bottom: 28px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: #17181a;
+  color: #f4f3ef;
+  border-bottom: 3px solid var(--accent);
 }
 
 .topbar-inner {
@@ -100,9 +103,10 @@ h3 {
   align-items: center;
   gap: 10px;
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1rem;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 /* A small mark beside the title, drawn here so the page needs no image files. */
@@ -116,6 +120,12 @@ h3 {
   background: var(--accent);
 }
 
+/* In the bar the mark is smaller, the height of the capital letters beside it. */
+.brand::before {
+  width: 14px;
+  height: 14px;
+}
+
 .account-menu {
   position: relative;
 }
@@ -125,18 +135,24 @@ button.account-toggle {
   align-items: center;
   gap: 10px;
   padding: 4px 10px 4px 4px;
-  border: 1px solid var(--border);
+  border: 1px solid #45474a;
   border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
+  background: transparent;
+  color: #f4f3ef;
   font-weight: 400;
 }
 
 button.account-toggle:hover,
 button.account-toggle[aria-expanded="true"] {
-  border-color: var(--accent);
-  background: var(--surface-raised);
-  color: var(--text);
+  border-color: #f4f3ef;
+  background: transparent;
+  color: #f4f3ef;
+}
+
+/* The initial on the dark bar is light, so it still stands out. */
+.account-toggle .avatar {
+  background: #f4f3ef;
+  color: #17181a;
 }
 
 .account-name {
@@ -149,8 +165,8 @@ button.account-toggle[aria-expanded="true"] {
   width: 7px;
   height: 7px;
   margin: 0 2px 3px 0;
-  border-right: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted);
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
   transform: rotate(45deg);
   transition: transform 0.15s;
 }
@@ -160,7 +176,7 @@ button.account-toggle[aria-expanded="true"] {
   transform: rotate(-135deg);
 }
 
-/* A round badge with the person's initial. */
+/* A square badge with the person's initial. */
 .avatar {
   display: inline-grid;
   flex: none;
@@ -196,6 +212,18 @@ button.account-toggle[aria-expanded="true"] {
   color: var(--accent);
 }
 
+/* On the dark bar the role is outlined rather than filled. */
+.account-toggle .role-chip {
+  border: 1px solid #5a5c5f;
+  background: transparent;
+  color: #c9c7c1;
+}
+
+.account-toggle .role-chip.admin {
+  border-color: #f08a5d;
+  color: #f08a5d;
+}
+
 /* The small window that drops down from the account button. */
 .popover {
   position: absolute;
@@ -204,6 +232,7 @@ button.account-toggle[aria-expanded="true"] {
   width: 290px;
   padding: 8px;
   background: var(--surface);
+  color: var(--text);  /* not the light text of the dark bar it hangs from */
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-large);
