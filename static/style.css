@@ -624,6 +624,20 @@ button.primary-action {
   overflow-x: auto;
 }
 
+/* A long list scrolls inside its own area, so the page around it (title, filters, tabs)
+   stays put. The column headings stay at the top of the area while the rows scroll. */
+.scroll-list {
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+.scroll-list th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background);
+}
+
 table {
   width: 100%;
   min-width: 1100px;
