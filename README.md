@@ -54,13 +54,21 @@ rule still load, and can be changed to one of the two.
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
 | `demo.py` | Shows a failover step by step on a running system. |
 | `config.example.json` | An example of the optional settings file, `config.json`. |
-| `setup.py` | First-time setup, which creates the shared secret and the first web account, and a full reset with `--reset`. |
+| `setup.py` | First-time setup, which creates the shared secret, the TLS certificate and the first web account, and a full reset with `--reset`. |
+| `requirements.txt` | The one package needed, `cryptography`, to create the certificate. |
 | `logs/` | Created as the programs run. Each program's own log file: `primary.log`, `backup.log`, `web.log` and `start.log`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py` | The automated tests. |
+| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py`, `test_tls.py` | The automated tests. |
 
 ## Running it on one machine
 
-You need Python 3.8 or later. There are no third-party packages to install.
+You need Python 3.8 or later, and one package, `cryptography`, which setup uses to create
+the certificate that encrypts every connection:
+
+```
+python -m pip install -r requirements.txt
+```
+
+A machine that is given a copy of `tls.pem`, rather than creating its own, doesn't need it.
 
 The quickest way to start everything is:
 
@@ -159,14 +167,16 @@ couldn't listen on that name and wouldn't start.
 
 Then:
 
-1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` it
-   creates to every other machine, beside the code.
+1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` and
+   `tls.pem` it creates to every other machine, beside the code. Every machine must have the
+   same two files, or its connections are refused.
 2. Run `python server.py` on the first machine and `python backup.py` on the second.
 3. Run clients or `web.py` anywhere that can reach both servers.
 
 Each server's firewall must allow its port. Don't use `start.py` here, because it starts
-both servers on the same machine. Nothing is encrypted, so only do this on a network you
-trust.
+both servers on the same machine. Every connection to a server is encrypted, including the
+servers' own, so the network can't read them. The web page isn't, so keep `web.py` on the
+machine its users sit at, as it is by default.
 
 So far this has been tested as separate processes on one machine, with the servers found
 by name (`localhost`) instead of by `127.0.0.1`. It hasn't been run on two physical machines
@@ -180,8 +190,8 @@ To put everything back to a fresh install, stop the system and run:
 python setup.py --reset
 ```
 
-**This permanently deletes every asset, every web account, the shared secret and the logs
-on this machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
+**This permanently deletes every asset, every web account, the shared secret, the
+certificate and the logs on this machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
 the code or the git history. If you use several machines, reset each of them, because a
 server that still has the data would copy it straight back. The next `python start.py` runs
 setup again.
@@ -230,6 +240,27 @@ the server logs visible.
    `ASSET_SERVERS=localhost:65432,localhost:65433` in every terminal and repeat steps 1–3.
    Nothing changes for the user, because no program needs to know the servers' addresses.
 
+## Encryption
+
+Every connection to a server is encrypted with TLS: from the GUI, the command-line
+clients, `web.py` and `demo.py`, and between the two servers. Someone watching the network
+sees neither the shared secret nor any asset data. A test relays a real registration
+through a copy of everything sent, and finds none of it readable.
+
+Setup creates a self-signed certificate and its private key in `tls.pem`, using the
+`cryptography` package, if `start.py`, `setup.py` or the first program to run hasn't already.
+It lasts about 10 years. Each server presents it, and `common.request_from()` trusts that
+one certificate and nothing else, so a server with any other certificate is refused, even
+one a public authority signed, and to a client it is the same as a server that is down.
+Clients don't check the server's name, because trusting one exact certificate is a stronger
+check, and the servers may be reached by any name. A program that doesn't use TLS gets
+nothing from a server.
+
+The web page itself is plain HTTP, not HTTPS. That is safe while `web.py` listens only on
+127.0.0.1, its default, because then the browser and `web.py` are on the same machine and
+nothing crosses a network. Changing its address to reach it from other machines would send
+passwords unencrypted.
+
 ## Authentication
 
 There are two layers, because a login on the web page alone could be bypassed by connecting
@@ -275,7 +306,8 @@ in a cookie that scripts can't read and other websites can't send. A wrong usern
 same reply as a wrong password, so neither reveals which accounts exist. After 5 failed
 logins in a row, on any usernames, logins are refused for a minute.
 
-`secret.key` and `web_users.json` are ignored by git and should never be shared publicly.
+`secret.key`, `tls.pem` and `web_users.json` are ignored by git and should never be shared
+publicly.
 
 ## Logs
 
@@ -333,13 +365,16 @@ log line. The `logs/` folder is ignored by git, and a full reset deletes it.
 ## Tests
 
 ```
-python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging test_clients
+python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging test_clients test_tls
 ```
 
 Or run every test file at once with `python -m unittest discover -p "test_*.py"`.
 
 The tests start real servers on spare ports and use temporary files for data and accounts,
-so yours aren't touched. They do use `secret.key`, and create it if it doesn't exist yet.
+so yours aren't touched. They do use `secret.key` and `tls.pem`, and create them if they
+don't exist yet. `test_tls.py` checks that a server with a different certificate is refused,
+that a client that doesn't encrypt gets nothing, and that nothing readable crosses the
+network.
 `test_web.py` makes real HTTP requests but doesn't run the page's script in a browser, so that
 part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and
 `backup.py` as separate programs and kills them partway through. `test_config.py` starts
@@ -373,6 +408,7 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 | Independent failure | One client or server failing doesn't bring down the others | `node.py`: `handle_client` |
 | Authentication | Programs prove themselves with a shared secret, and people log in to the web page with a username and password | `node.py`: `is_authorized`, `web.py`: `try_login` |
 | Authorisation | Each web account's role decides what it may do, checked on every request | `web.py`: `is_admin` |
+| Secure channels | Every connection to a server is encrypted with TLS, and clients trust only the system's own certificate | `common.py`: `connect`, `tls_context` |
 | Multi-tier architecture | The browser talks to `web.py`, which talks to the servers, so the servers don't need to know about HTTP | `web.py` |
 | Failure transparency | A browser keeps working through a failover without knowing which server is in charge | `web.py`: `assets_reply` |
 | CAP trade-off | In a network split both servers stay available, and the data is made consistent afterwards | See known limitations |
@@ -529,7 +565,7 @@ goes through the one primary.
 
 It could run on Kubernetes with two small changes. Each server would be a StatefulSet with
 one pod and a persistent volume, with the service names in `ASSET_SERVERS`,
-`ASSET_LISTEN_HOST=0.0.0.0`, and `secret.key` mounted from a Kubernetes Secret. Kubernetes
+`ASSET_LISTEN_HOST=0.0.0.0`, and `secret.key` and `tls.pem` mounted from a Kubernetes Secret. Kubernetes
 would restart a failed pod, and the backup would cover the gap until it returned. First,
 though, the data files would need a configurable folder, because they are saved beside the
 code, and `web.py` would need to listen on more than `127.0.0.1`. This hasn't been tried.
@@ -584,13 +620,16 @@ Other limitations:
 - The backup answers `LIST` while on standby, and may be out of date if it was recently down.
 - The servers only use IPv4. A name is looked up as an IPv4 address, and only its first
   address is tried.
-- `secret.key` has to be copied to each machine by hand, and every program shares it.
+- `secret.key` and `tls.pem` have to be copied to each machine by hand, and every program
+  shares them. `tls.pem` holds the private key as well as the certificate, so a client
+  machine has the key too. That is no more than `secret.key` already gives, but it means
+  anyone with the file could pretend to be a server.
+- A new certificate means copying the new `tls.pem` to every machine and restarting
+  everything, because programs load it once.
 - Duplicates are judged only by description, category and location, because nothing
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
   different items. Category and location are free text.
-- Nothing is encrypted. The shared secret, web passwords and all data cross the network
-  as plain text, so someone watching a network could read them. Only run this across a
-  trusted network, or add TLS first.
+- The web page uses plain HTTP, so it is only safe while `web.py` listens on 127.0.0.1.
 - There are only two roles. Accounts can't be deleted, and a role can't be changed, from the
   page. Changing a role means editing `web_users.json` and restarting `web.py`.
 - The roles only apply to the web page. Anything with `secret.key` has full access.
@@ -626,6 +665,6 @@ Other limitations:
 ## Further development
 
 The scaling steps above come first, especially a third server and a majority vote. Other
-ideas are a serial number to identify items, encryption with TLS, the shared secret supplied through an
+ideas are a serial number to identify items, HTTPS for the web page, the shared secret supplied through an
 environment variable, deleting accounts and changing roles from the page, and sending
 every machine's logs to one place.

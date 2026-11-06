@@ -150,11 +150,14 @@ class HostnameTest(unittest.TestCase):
 
     def test_a_server_found_by_name_answers_quickly(self):
         # localhost often has an IPv6 address too, which the servers don't listen on.
+        server_side = common.tls_context(server_side=True)
+        common.tls_context(server_side=False)  # loaded now, so only the connection is timed
+
         def answer():
             conn, _ = self.listener.accept()
-            with conn:
-                common.receive_message(conn)
-                common.send_message(conn, {"status": "OK"})
+            with server_side.wrap_socket(conn, server_side=True) as tls:
+                common.receive_message(tls)
+                common.send_message(tls, {"status": "OK"})
 
         threading.Thread(target=answer, daemon=True).start()
 

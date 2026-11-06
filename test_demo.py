@@ -84,7 +84,7 @@ class StopTest(ServerTestCase):
         primary = self.start("server")
         self.wait_until_answering(self.servers[0])
 
-        with socket.create_connection(self.servers[0], timeout=5) as sock:
+        with common.connect(self.servers[0], timeout=5) as sock:
             common.send_message(sock, {"action": "STOP"})
             reply = common.receive_message(sock)
 

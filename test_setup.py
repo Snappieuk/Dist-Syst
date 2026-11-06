@@ -42,6 +42,8 @@ class SetupTestCase(unittest.TestCase):
         self.folder = temp_dir.name
 
         self.patch_value(common, "SECRET_FILE", self.path("secret.key"))
+        self.patch_value(common, "TLS_FILE", self.path("tls.pem"))
+        self.addCleanup(common.forget_tls_settings)
         self.patch_value(common, "LOG_FOLDER", self.path("logs"))
         self.patch_value(common, "_secret", None)
         self.patch_value(web, "PASSWORD_FILE", self.path("web_password.json"))
@@ -85,6 +87,10 @@ class FirstTimeSetupTest(SetupTestCase):
 
         self.assertTrue(result)
         self.assertTrue(setup.is_set_up())
+        with open(self.path("tls.pem"), encoding="ascii") as file:
+            certificate = file.read()
+        self.assertIn("BEGIN PRIVATE KEY", certificate)
+        self.assertIn("BEGIN CERTIFICATE", certificate)
         web.users.clear()
         self.run_quietly(web.load_accounts)
         self.assertTrue(web.password_matches(web.users["alex"], "my password"))
@@ -169,6 +175,7 @@ class ResetTest(SetupTestCase):
         "assets.json",
         "assets_backup.json",
         "secret.key",
+        "tls.pem",
         "web_password.json",
         "web_users.json",
         "assets.json.tmp",

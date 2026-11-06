@@ -49,6 +49,7 @@ from common import (
     receive_message,
     send_message,
     shared_secret,
+    tls_context,
 )
 
 # The fields a client must supply when registering an asset.
@@ -677,9 +678,18 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
     must stay that client's problem.
     """
     try:
+        conn.settimeout(CLIENT_TIMEOUT_SECONDS)
+        try:
+            # Everything is encrypted. A program that doesn't speak TLS, or a scanner,
+            # fails here, before a single byte of a request has been read.
+            conn = tls_context(server_side=True).wrap_socket(conn, server_side=True)
+        except (OSError, ValueError) as exc:
+            conn.close()
+            logger.warning("Refused a connection from %s that failed the TLS handshake: %s", addr, exc)
+            return
+
         # `with conn:` closes the connection when this block ends, even on error.
         with conn:
-            conn.settimeout(CLIENT_TIMEOUT_SECONDS)
             reply = read_and_process(conn)
             reply["served_by"] = ROLE
             try:

@@ -69,8 +69,9 @@ def list_descriptions() -> list:
 
 
 def send_raw(data: bytes) -> dict:
-    """Send exact bytes to the server, as a faulty client might, and read the reply."""
-    with socket.create_connection(common.SERVERS[0], timeout=5) as sock:
+    """Send exact bytes to the server, as a faulty client might, and read the reply. The
+    bytes go inside an encrypted connection, as every connection must."""
+    with common.connect(common.SERVERS[0], timeout=5) as sock:
         sock.sendall(data)
         return common.receive_message(sock)
 
@@ -102,10 +103,10 @@ def start_fake_server(test: unittest.TestCase, reply) -> tuple:
                 conn, _ = listener.accept()
             except OSError:
                 return  # the test has finished and closed the listener
-            with conn:
-                common.receive_message(conn)
+            with common.tls_context(server_side=True).wrap_socket(conn, server_side=True) as tls:
+                common.receive_message(tls)
                 if reply is not None:
-                    common.send_message(conn, reply)
+                    common.send_message(tls, reply)
 
     threading.Thread(target=serve, daemon=True).start()
     return listener.getsockname()
@@ -879,7 +880,7 @@ class SystemTest(NodeTestCase):
     def test_server_survives_a_client_vanishing(self):
         def vanish(data: bytes) -> None:
             """Send some bytes, then drop the connection like a crashed client."""
-            sock = socket.create_connection(common.SERVERS[0])
+            sock = common.connect(common.SERVERS[0])
             sock.sendall(data)
             time.sleep(0.1)  # let the server start working on the request
 
@@ -899,6 +900,7 @@ class SystemTest(NodeTestCase):
         node.CLIENT_TIMEOUT_SECONDS = 0.5
         self.addCleanup(setattr, node, "CLIENT_TIMEOUT_SECONDS", original_timeout)
 
+        # A plain connection that never even starts the encrypted handshake.
         with socket.create_connection(common.SERVERS[0], timeout=5) as idle:
             # Another client is served while this one sits idle.
             self.assertEqual(register(make_asset())["status"], "OK")

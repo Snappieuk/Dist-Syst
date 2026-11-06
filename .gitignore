@@ -15,5 +15,6 @@ config.json
 
 # Secrets created when the programs run, which must never be shared
 secret.key
+tls.pem
 web_password.json
 web_users.json

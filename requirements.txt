@@ -1,0 +1,3 @@
+# Only needed to create the TLS certificate during setup. A machine given a copy of
+# tls.pem can run every program without it.
+cryptography>=42

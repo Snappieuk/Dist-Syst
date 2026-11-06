@@ -135,6 +135,15 @@ SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret.k
 
 _secret = None  # the key, once read, so the file is only read once
 
+# The certificate that encrypts every connection to a server, with its private key, in one
+# file. Setup creates it, or the first program to run if setup hasn't. Like secret.key, it
+# must be copied to every machine. Clients trust this one certificate and nothing else, so
+# a server with any other certificate is refused, even one a public authority signed.
+TLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tls.pem")
+TLS_CERTIFICATE_DAYS = 3650  # about 10 years, after which setup --reset makes a new one
+
+_tls_contexts = {}  # the client and server settings, once loaded, by side
+
 # Where each program keeps its log file, named after it: primary.log, backup.log, web.log
 # and start.log. A file that reaches LOG_FILE_BYTES is renamed to name.log.1, the older
 # ones move up to name.log.2 and so on, and only LOG_FILE_COPIES old files are kept.
@@ -527,11 +536,96 @@ def _read_secret_file() -> str:
     raise ValueError(f"{SECRET_FILE} is empty")
 
 
-def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS) -> dict:
-    """Send one request to the server at `address` and return its reply.
+def new_tls_pem() -> bytes:
+    """Create a new private key and a self-signed certificate for it, as PEM text.
 
-    Every request carries the shared secret, because the server refuses any without it,
-    and the version of the message format it uses.
+    The cryptography package is only needed here, so a machine that was given a copy of
+    tls.pem doesn't need it installed. The certificate names "localhost" and 127.0.0.1,
+    but clients don't check names, because they trust only this exact certificate, and
+    the servers may be reached by any name.
+    """
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Asset Management System")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)  # self-signed: it vouches for itself
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))  # allows for clocks that differ slightly
+        .not_valid_after(now + datetime.timedelta(days=TLS_CERTIFICATE_DAYS))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName([
+            x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+        ]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption())
+    return private + certificate.public_bytes(serialization.Encoding.PEM)
+
+
+def ensure_tls_file() -> str:
+    """Return the path of the certificate file, creating it if this is the first program
+    to run. Exclusive creation means that if the servers start at the same moment, only
+    one creates it, and the others wait for it to be complete, so both use the same one."""
+    try:
+        file = os.open(TLS_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        for _ in range(50):
+            with open(TLS_FILE, "rb") as existing:
+                if b"END CERTIFICATE" in existing.read():
+                    return TLS_FILE
+            time.sleep(0.1)
+        raise ValueError(f"{TLS_FILE} has no certificate in it")
+    with os.fdopen(file, "wb") as tls_file:
+        tls_file.write(new_tls_pem())
+    return TLS_FILE
+
+
+def tls_context(server_side: bool) -> "ssl.SSLContext":
+    """The TLS settings for one side of a connection, loaded once and then reused.
+
+    A server presents the certificate. A client accepts only that same certificate, and
+    skips the usual check of the server's name, because trusting one exact certificate
+    is a stronger check, and the servers may be reached by any name.
+    """
+    import ssl
+
+    context = _tls_contexts.get(server_side)
+    if context is None:
+        path = ensure_tls_file()
+        if server_side:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(path)
+        else:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.load_verify_locations(path)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        _tls_contexts[server_side] = context
+    return context
+
+
+def forget_tls_settings() -> None:
+    """Load the certificate again next time, for example after TLS_FILE changes."""
+    _tls_contexts.clear()
+
+
+def connect(address: tuple, timeout: float = TIMEOUT_SECONDS) -> socket.socket:
+    """Open an encrypted connection to the server at `address`.
+
+    Raises OSError if it can't be reached, or ssl.SSLError, which is also an OSError, if it
+    doesn't have this system's certificate, so either counts as unreachable to callers.
     """
     # The servers only listen on IPv4, so a name is looked up as IPv4 only. Otherwise a
     # name with an IPv6 address too, such as "localhost", is tried over IPv6 first, and
@@ -542,7 +636,22 @@ def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS
 
     # create_connection() is used because it takes a timeout. Without one, a
     # stalled server would leave the program waiting forever.
-    with socket.create_connection(ipv4_address, timeout=timeout) as sock:
+    plain = socket.create_connection(ipv4_address, timeout=timeout)
+    try:
+        return tls_context(server_side=False).wrap_socket(plain, server_hostname=host)
+    except BaseException:
+        plain.close()
+        raise
+
+
+def request_from(address: tuple, request: dict, timeout: float = TIMEOUT_SECONDS) -> dict:
+    """Send one request to the server at `address` and return its reply.
+
+    Every request carries the shared secret, because the server refuses any without it,
+    and the version of the message format it uses. The connection is encrypted, so
+    neither the secret nor the data can be read by anyone watching the network.
+    """
+    with connect(address, timeout) as sock:
         send_message(sock, {**request, "auth": shared_secret(), "protocol_version": PROTOCOL_VERSION})
         return receive_message(sock)
 

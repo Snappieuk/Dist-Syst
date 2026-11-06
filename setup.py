@@ -58,12 +58,13 @@ def has_account() -> bool:
 
 
 def is_set_up() -> bool:
-    return os.path.exists(common.SECRET_FILE) and has_account()
+    return os.path.exists(common.SECRET_FILE) and os.path.exists(common.TLS_FILE) and has_account()
 
 
 def run_setup() -> bool:
     """Create whatever is missing, returning whether the system is now set up."""
     common.shared_secret()
+    common.ensure_tls_file()  # the certificate that encrypts every connection
 
     if has_account():
         return True
@@ -84,8 +85,8 @@ def generated_files() -> list:
     for name in common.LOG_NAMES:
         for current in (common.log_path(name), common.audit_log_path(name)):
             logs += [current] + [f"{current}.{number}" for number in range(1, common.LOG_FILE_COPIES + 1)]
-    return (data_and_accounts + [common.SECRET_FILE] + [path + ".tmp" for path in data_and_accounts]
-            + logs)
+    return (data_and_accounts + [common.SECRET_FILE, common.TLS_FILE]
+            + [path + ".tmp" for path in data_and_accounts] + logs)
 
 
 def is_running(address: tuple) -> bool:
@@ -138,7 +139,7 @@ def reset() -> bool:
     for path in existing:
         print(f"  {os.path.basename(path)}")
     assets = max(count_assets(server.ASSETS_FILE), count_assets(backup.ASSETS_FILE))
-    print(f"\nThat includes {assets} asset(s), every web account, the shared secret and the logs.")
+    print(f"\nThat includes {assets} asset(s), every web account, the shared secret, the certificate and the logs.")
     print("It can't be undone.")
 
     if input(f"Type {RESET_WORD} to continue: ").strip() != RESET_WORD:
