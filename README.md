@@ -527,6 +527,44 @@ be used for the client actions (`LIST`, `REGISTER`, `SET_STATUS`, `EDIT`,
 `STOP` one. The audit log names the account, whatever `user` the GUI claims. Failed
 logins share the web page's limit: 5 in a row refuses logins for a minute.
 
+## Remote access through Nginx Proxy Manager (port 443 only)
+
+To use the web page and the desktop apps from outside your network, only **port 443** has
+to be opened on the router, and it goes to Nginx Proxy Manager (NPM). The servers' own
+ports (65432/65433) stay inside the network. NPM is only used for the web page's HTTPS
+traffic: **no Streams and no extra router ports** are needed, because outside the network
+the desktop apps talk to `web.py`'s JSON API (the one the web page uses) instead of the
+servers' own protocol, and `web.py` forwards to the primary or backup and handles failover.
+
+1. **Proxy Host.** In NPM, add a Proxy Host for your domain (for example
+   `assets.example.com`) that forwards to this machine's address, port **8080** (scheme
+   `http`). On the SSL tab, request a Let's Encrypt certificate and turn on **Force SSL**.
+   Leave WebSockets off; the site doesn't use them.
+2. **Tell `web.py` it is behind the proxy.** In `config.json` set
+   `"behind_https_proxy": true` (or the environment variable `ASSET_BEHIND_HTTPS_PROXY=true`)
+   and `"trusted_proxy"` to the address NPM connects from (default `127.0.0.1`; use NPM's
+   address if it runs on another machine; `ASSET_TRUSTED_PROXY`). With this on, the session
+   cookie is marked `Secure`, the login log uses the client address NPM passes in
+   `X-Forwarded-For`, but only for requests that really come from `trusted_proxy`, so nobody
+   else can claim an address, and the downloads hold the site's https address (see "The GUI
+   on other computers"). Restart `web.py` afterwards. To stop other machines bypassing the
+   proxy, set `web_address` to `127.0.0.1:8080` if NPM runs on the same machine.
+3. **Use it.** Open `https://assets.example.com` in a browser. In `gui.py` or the Windows
+   app, type `https://assets.example.com` as the server (no port, no path), or use the
+   download from the web page, which already holds it. Only `https://` is accepted, the
+   site's certificate is checked the normal way, and permissions are checked by the
+   servers, never only by the app. Find servers and certificate pinning are not used in this
+   mode.
+4. **Inside the network nothing changes.** An address that doesn't start with `https://`
+   (a host or IP, with or without a port) still uses the raw TLS protocol with pinning and
+   Find servers, exactly as before, and the downloads made with the setting off are the same
+   as before.
+
+The login lockout on the web page is per username (5 wrong passwords lock that account for a
+minute), so someone on the internet can't lock everyone out. The servers' own lockout is
+still shared, but it is only reachable from inside the network, because those ports are not
+forwarded.
+
 ## Logs
 
 Every program logs to the console and to its own file in `data/logs/`:
