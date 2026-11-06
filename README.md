@@ -49,6 +49,7 @@ rule still load, and can be changed to one of the two.
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `cli.py` | The command-line client. `python cli.py add` registers a new asset, `list` lists the assets with their IDs, statuses and tags, and `change` marks one as "Not In Use" or "In Use", edits its details, or deletes it. |
 | `clients/AssetClient.cs` | A small client written in C#, to show the servers can be used from another language. It logs in, then lists, adds, checks out and checks in assets by sending the same length-prefixed JSON over TLS as the other clients. On Windows, `clients\asset.cmd` builds it with the compiler that comes with Windows (no SDK needed) and then runs it, so there is no separate build step. Run, for example, `clients\asset.cmd list --user admin`. Pass `--server host:port` for another machine and `--fingerprint` to check the server's certificate (it prints the fingerprint it sees). The top of the file describes the message format, which is all another language needs to match. |
+| `clients/app/` | The desktop app in C# (Windows Forms), built with `clients\build_app.cmd` into `clients\AssetApp.exe`. See "The GUI on other computers". |
 | `gui.py` | A Tkinter window that does all of the above. It is one standalone file with a login screen, and finds the servers from one address. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. A "Flagged for review" area lists assets added while the primary was offline, and History (or a double-click) shows what has happened to an asset. |
 | `web.py` | A web interface for browsing, adding and deleting assets, reviewing flagged ones, checking assets out and in, seeing their history and a loans calendar, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
@@ -127,7 +128,10 @@ with Log out and, for admins, Manage accounts. That opens a window listing every
 where an admin can change roles, delete accounts and create new ones. The page listens on
 every network by default (`0.0.0.0`), so other devices can open it. It is plain HTTP, so on
 a network you don't trust, set `web_address` to `127.0.0.1:8080` to allow only this machine.
-The computer's firewall may also need to allow port 8080.
+The computer's firewall may also need to allow port 8080, and, for the desktop apps on
+other devices, the servers' ports 65432 and 65433 (the servers listen on every network by
+default). A blocked port normally makes a connection time out; "actively refused" usually
+means nothing is listening there.
 
 ## Settings
 
@@ -445,7 +449,7 @@ any computer with Python 3.8 or later. It has no `secret.key`, `tls.pem` or sett
 file, and saves nothing.
 
 **Easiest: download it from the web page.** Log in to the web page, open the account
-menu and choose **Download desktop app**. The file you get is `gui.py` with two lines
+menu and choose **Download Python app (gui.py)**. The file you get is `gui.py` with two lines
 filled in: the servers' addresses (the address you used for the web page replaces
 `127.0.0.1`) and the fingerprint of the real certificate. Run it, type your username and
 password, and that's all: the address is already there and nothing is asked about
@@ -454,6 +458,18 @@ closes the gap described below. Neither value is secret, and the secret key and 
 are never put in the file. If the servers' certificate is ever replaced (`data/tls.pem`),
 old downloads stop working and need downloading again. Anyone who can change the web page
 could hand out a different file, so serve the page only over a network you trust.
+
+**Windows app (.exe), no Python needed.** `clients\app\` holds the same desktop app written
+in C# (Windows Forms): login, Assets, Loans and Review tabs, add, edit, status, delete,
+history and check out / in, with the same search, failover and certificate pinning as
+`gui.py`. The web page's account menu has **Download Windows app (.exe)**. The server
+builds `AssetApp.exe` the first time with the C# compiler that comes with Windows (no
+SDK needed; only a Windows server can do this, otherwise the link says so), caches it in
+`data\`, and appends the server addresses and certificate fingerprint to the end of the
+file, which the program reads when it starts. To build it yourself, run
+`clients\build_app.cmd`; a copy built this way has no settings, so it asks for the server
+address and trusts the first certificate it sees, like a plain `gui.py`. Windows may show
+a "SmartScreen" warning for an unsigned program: choose More info, then Run anyway.
 
 **Without the download**, a plain copy of `gui.py` works on its own:
 
