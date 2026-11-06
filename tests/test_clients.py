@@ -437,7 +437,7 @@ class GuiLoginTest(unittest.TestCase):
         gui.session.servers = [dead, self.address]
         self.assertEqual(gui.send_request({"action": "PING"})["status"], "OK")
 
-    def test_declining_to_trust_a_server_sends_nothing(self):
+    def test_the_first_certificate_is_trusted_without_asking(self):
         import tkinter as tk
         gui = self.gui
         try:
@@ -448,10 +448,12 @@ class GuiLoginTest(unittest.TestCase):
         self.addCleanup(root.destroy)
         screen = gui.LoginWindow(root, lambda: None)
         then = mock.Mock()
-        with mock.patch("gui.messagebox.askyesno", return_value=False) as ask, \
-                mock.patch.object(screen, "_run") as run:
+        with mock.patch("gui.messagebox.askyesno") as ask:
             screen._trust(self.address, ("AA:BB", {"status": "OK"}), None, then)
-        ask.assert_called_once()
-        run.assert_not_called()  # no login
-        self.assertIsNone(gui.session.trusted)
+        ask.assert_not_called()
+        self.assertEqual(gui.session.trusted, "AA:BB")
+        then.assert_called_once()
+        # A different certificate later in the session is refused.
+        then.reset_mock()
+        screen._trust(self.address, ("CC:DD", {"status": "OK"}), None, then)
         then.assert_not_called()

@@ -11,10 +11,11 @@ fails, the GUI moves to the backup by itself. Log in with the account the server
 administrator gave you (the same accounts as the web page). The server checks every
 request against your account, and only admins can delete assets or approve flagged ones.
 
-Certificates: the first time you connect to a server, the GUI shows its certificate's
-fingerprint and asks whether to trust it. Compare it with the one the server's
-administrator gives you. After that, only that exact certificate is accepted until the
-window is closed. Nothing is remembered, so you are asked each time the GUI starts.
+Certificates: you never have to deal with them. The first certificate the GUI sees is
+trusted automatically, and after that only that exact certificate is accepted until the
+window is closed (so the connection is encrypted, and a different server appearing
+mid-session is refused). The weak spot: someone already intercepting the very first
+connection would not be noticed.
 
 WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
@@ -960,9 +961,9 @@ class LoginWindow(ttk.Frame):
     """The first screen: which server, and who is logging in.
 
     "Find servers" looks for servers on the local network, "Check" tests an address, and
-    "Log in" does both and then logs in. The first time a server is used, its certificate's
-    fingerprint is shown and the user chooses whether to trust it. After that only that
-    exact certificate is accepted, so a different server at the same address is refused.
+    "Log in" does both and then logs in. The first certificate a server shows is trusted
+    automatically, and after that only that exact certificate is accepted, so a different
+    server at the same address is refused.
     Network work runs on a background thread, with results handed back through a queue,
     for the reason given at the top of this file.
     """
@@ -1080,15 +1081,8 @@ class LoginWindow(ttk.Frame):
             if session.trusted is not None:
                 self._say("This server's certificate is different from the one you trusted, so it was not used.")
                 return
-            if not messagebox.askyesno(
-                "Trust this server?",
-                f"This is the first time this program has connected to {address[0]}:{address[1]}.\n\n"
-                f"Certificate fingerprint (SHA-256):\n{found}\n\n"
-                "Ask whoever runs the server to confirm this matches theirs. Trust it?",
-                icon=messagebox.WARNING, parent=self.root,
-            ):
-                self._say("Not trusted, so nothing more was sent.")
-                return
+            # First connection: trust the certificate silently (no question for the user).
+            # From now on only this exact certificate is accepted.
             session.trusted = found
         if reply.get("status") != "OK":
             self._say(f"The server did not answer properly: {reply.get('detail')}")

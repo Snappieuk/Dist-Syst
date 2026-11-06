@@ -432,11 +432,11 @@ file, and saves nothing.
    the local network to the usual ports, 65432 and 65433, and lists the servers that
    answer, so a server on another port has to be typed in. **Check** tests an address
    without logging in.
-2. The first time, it shows the server's certificate fingerprint and asks whether to trust
-   it. Compare it with the one the server's administrator gives you. After you
-   accept, only that exact certificate is used, so a different server at the same address
-   is refused, and no password is sent before you accept. It is remembered only until the
-   window closes, so you are asked each time.
+2. There is no certificate question: the first certificate the GUI sees is trusted
+   automatically, and from then on only that exact certificate is used, so a different
+   server at the same address is refused. This is remembered only until the window
+   closes. The weak spot is that an attacker already intercepting the very first
+   connection would not be noticed.
 3. Log in with a web account. The server checks every request against it, so a user can
    view, add and edit assets, and only an admin can delete assets or approve flagged ones
    (other requests get `FORBIDDEN`).
