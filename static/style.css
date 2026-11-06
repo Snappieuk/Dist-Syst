@@ -110,20 +110,13 @@ h3 {
 }
 
 /* A small mark beside the title, drawn here so the page needs no image files. */
-.brand::before,
-.login-mark {
+.brand::before {
   content: "";
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 14px;   /* the height of the capital letters beside it */
+  height: 14px;
   border-radius: var(--radius);
   background: var(--accent);
-}
-
-/* In the bar the mark is smaller, the height of the capital letters beside it. */
-.brand::before {
-  width: 14px;
-  height: 14px;
 }
 
 .account-menu {
@@ -429,18 +422,11 @@ button.primary-action {
   max-width: 380px;
   box-sizing: border-box;
   padding: 32px;
+  border-top: 3px solid var(--text);  /* the same heavy rule as the totals strip */
 }
 
 .login-head {
   margin-bottom: 4px;
-}
-
-.login-mark {
-  display: block;
-  width: 40px;
-  height: 40px;
-  margin-bottom: 14px;
-  border-radius: var(--radius);
 }
 
 .login-head h2 {
