@@ -63,8 +63,9 @@ namespace AssetApp
             Ok.Click += delegate
             {
                 string problem = Problem();
-                if (problem != null) MessageBox.Show(this, problem, "Check the form", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                else DialogResult = DialogResult.OK;
+                if (problem == null) DialogResult = DialogResult.OK;
+                else if (problem.Length > 0)   // "" means: stay open quietly
+                    MessageBox.Show(this, problem, "Check the form", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             };
             FlowLayoutPanel buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(0, 12, 0, 0) };
             buttons.Controls.Add(Ok);

@@ -111,7 +111,7 @@ namespace AssetApp
     // servers are, and which certificate is the real one. Neither is secret. A copy of the
     // program that was not downloaded from the web page has none, and works anywhere by
     // trusting the first certificate it sees.
-    static class Site
+    static class SiteSettings
     {
         public static List<Addr> Servers = new List<Addr>();
         public static string Fingerprint;
