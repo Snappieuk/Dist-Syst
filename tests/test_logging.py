@@ -126,10 +126,11 @@ class LogFileTest(LoggingTestCase):
 class ProgramLogTest(LoggingTestCase):
     def test_the_two_servers_write_separate_files(self):
         servers = [spare_address(), spare_address()]
-        for module in ("server", "backup"):
+        for index in (0, 1):
             self.run_program(
-                f"common.SERVERS = {servers!r}\nimport {module} as program\n"
-                f"program.ASSETS_FILE = {os.path.join(self.folder, module + '.json')!r}\nprogram.main()\n"
+                f"common.SERVERS = {servers!r}\nimport server\n"
+                f"server.ASSETS_FILE = {os.path.join(self.folder, f'server{index}.json')!r}\n"
+                f"server.main(['--backup', '{index}'])\n"
             )
 
         deadline = time.monotonic() + 20

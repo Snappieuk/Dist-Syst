@@ -26,7 +26,6 @@ import time
 import unittest
 from unittest import mock
 
-import backup
 import cli
 import common
 import node
@@ -1091,10 +1090,10 @@ class ReplicaTest(NodeTestCase):
         node.ROLE = "backup"
 
     def test_changes_are_applied_in_order_and_saved(self):
-        self.assertEqual(backup.apply_change({"seq": 1, "asset": make_record("AST-P000001", status="One")})["status"], "OK")
-        self.assertEqual(backup.apply_change({"seq": 2, "asset": make_record("AST-P000001", status="Two")})["status"], "OK")
-        self.assertEqual(backup.apply_change({"seq": 3, "asset": make_record("AST-P000002")})["status"], "OK")
-        self.assertEqual(backup.apply_change({"seq": 4, "deleted": "AST-P000002", "request_id": None})["status"], "OK")
+        self.assertEqual(server.apply_change({"seq": 1, "asset": make_record("AST-P000001", status="One")})["status"], "OK")
+        self.assertEqual(server.apply_change({"seq": 2, "asset": make_record("AST-P000001", status="Two")})["status"], "OK")
+        self.assertEqual(server.apply_change({"seq": 3, "asset": make_record("AST-P000002")})["status"], "OK")
+        self.assertEqual(server.apply_change({"seq": 4, "deleted": "AST-P000002", "request_id": None})["status"], "OK")
 
         assets, deleted, seq = node.load_assets()
         self.assertEqual([asset["status"] for asset in assets], ["Two"])
@@ -1102,7 +1101,7 @@ class ReplicaTest(NodeTestCase):
         self.assertEqual(seq, 4)
 
     def test_a_missed_change_is_detected(self):
-        reply = backup.apply_change({"seq": 5, "asset": make_record()})
+        reply = server.apply_change({"seq": 5, "asset": make_record()})
 
         self.assertEqual(reply["code"], common.OUT_OF_SYNC)
         self.assertEqual(node.assets, [])
@@ -1110,7 +1109,7 @@ class ReplicaTest(NodeTestCase):
     def test_a_backup_that_took_over_refuses_copies(self):
         node.accepts_writes = True
 
-        reply = backup.apply_change({"seq": 1, "asset": make_record()})
+        reply = server.apply_change({"seq": 1, "asset": make_record()})
 
         self.assertEqual(reply["code"], common.NOT_STANDBY)
 
@@ -1120,7 +1119,7 @@ class ReplicaTest(NodeTestCase):
         self.addCleanup(os.rmdir, blocker)
 
         with self.assertRaises(OSError):
-            backup.apply_change({"seq": 1, "asset": make_record()})
+            server.apply_change({"seq": 1, "asset": make_record()})
 
         self.assertEqual(node.assets, [])
         self.assertEqual(node.last_seq, 0)
@@ -1138,7 +1137,7 @@ class ReplicaTest(NodeTestCase):
         node.accepts_writes = True
         node.register_asset(node.validate_asset(make_asset()), None)
 
-        reply = backup.hand_over({})
+        reply = server.hand_over({})
 
         self.assertFalse(node.accepts_writes)
         self.assertEqual([asset["asset_id"] for asset in reply["assets"]], ["AST-B000001"])
@@ -1147,7 +1146,7 @@ class ReplicaTest(NodeTestCase):
     def test_installing_state_replaces_the_data(self):
         node.assets.append(make_record("AST-B000001"))
 
-        backup.install_state({"assets": [make_record("AST-P000001")], "deleted": {"AST-B000001": None}, "seq": 9})
+        server.install_state({"assets": [make_record("AST-P000001")], "deleted": {"AST-B000001": None}, "seq": 9})
 
         assets, deleted, seq = node.load_assets()
         self.assertEqual([asset["asset_id"] for asset in assets], ["AST-P000001"])
@@ -1222,7 +1221,7 @@ class AuditTest(NodeTestCase):
         node.accepts_writes = False
 
         with mock.patch.object(node, "audit") as audit:
-            self.assertEqual(backup.apply_change({"seq": 1, "asset": make_record()})["status"], "OK")
+            self.assertEqual(server.apply_change({"seq": 1, "asset": make_record()})["status"], "OK")
 
         audit.assert_not_called()
 
@@ -1280,10 +1279,10 @@ class TimestampTest(NodeTestCase):
 
     def test_the_backup_keeps_the_primarys_deletion_time(self):
         node.accepts_writes = False
-        backup.apply_change({"seq": 1, "asset": make_record("AST-P000001")})
+        server.apply_change({"seq": 1, "asset": make_record("AST-P000001")})
 
         with self.at("2030-12-31T23:59:59Z"):
-            backup.apply_change({"seq": 2, "deleted": "AST-P000001", "request_id": None,
+            server.apply_change({"seq": 2, "deleted": "AST-P000001", "request_id": None,
                                  "deleted_at": "2026-03-04T05:06:07Z"})
 
         self.assertEqual(node.deleted_at, {"AST-P000001": "2026-03-04T05:06:07Z"})
@@ -1291,7 +1290,7 @@ class TimestampTest(NodeTestCase):
     def test_deletion_times_survive_a_handover_and_merge(self):
         node.deleted_at["AST-B000001"] = "2026-03-04T05:06:07Z"
         node.deleted_ids["AST-B000001"] = None
-        handed = backup.hand_over({})
+        handed = server.hand_over({})
         node.deleted_ids.clear()
         node.deleted_at.clear()
 
@@ -1300,7 +1299,7 @@ class TimestampTest(NodeTestCase):
         self.assertEqual(node.deleted_at, {"AST-B000001": "2026-03-04T05:06:07Z"})
 
     def test_installed_state_includes_deletion_times(self):
-        backup.install_state({"assets": [], "deleted": {"AST-P000009": None},
+        server.install_state({"assets": [], "deleted": {"AST-P000009": None},
                               "deleted_at": {"AST-P000009": "2026-03-04T05:06:07Z"}, "seq": 3})
 
         self.assertEqual(node.load_data()["deleted_at"], {"AST-P000009": "2026-03-04T05:06:07Z"})
@@ -1340,6 +1339,23 @@ class StartSyncTest(unittest.TestCase):
         self.assertIn("starting alone", logs.output[-1])
 
 
+class ServerOptionTest(unittest.TestCase):
+    """server.py --backup N must name an entry in the server list."""
+
+    def test_a_position_the_list_does_not_have_is_refused(self):
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [unused_address(), unused_address()]
+        for options in (["--backup", "2"], ["--backup", "-1"], ["--backup", "one"]):
+            with self.subTest(options), self.assertRaises(SystemExit),                     contextlib.redirect_stderr(io.StringIO()):
+                server.main(options)
+
+    def test_there_is_no_backup_without_a_second_entry(self):
+        self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
+        common.SERVERS = [unused_address()]
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            server.main(["--backup", "1"])
+
+
 class DistributedTest(unittest.TestCase):
     """Runs the primary and backup as real, separate programs, and stops them."""
 
@@ -1353,17 +1369,18 @@ class DistributedTest(unittest.TestCase):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = [self.primary, self.backup]
 
-    def start_program(self, module: str, settings: str = "") -> subprocess.Popen:
-        """Start server.py or backup.py as its own process, using the test's addresses
-        and its own data file. `settings` is extra code run just before it starts."""
+    def start_program(self, index: int, settings: str = "") -> subprocess.Popen:
+        """Start the server at this position in the list (0 for the primary, 1 for the
+        backup) as its own process, using the test's addresses and its own data file.
+        `settings` is extra code run just before it starts."""
         code = (
             "import common\n"
             f"common.SERVERS = {common.SERVERS!r}\n"
             f"common.LOG_FOLDER = {self.temp_path!r}\n"
-            f"import {module} as program\n"
-            f"program.ASSETS_FILE = {os.path.join(self.temp_path, module + '.json')!r}\n"
+            "import server as program\n"
+            f"program.ASSETS_FILE = {os.path.join(self.temp_path, f'server{index}.json')!r}\n"
             f"{settings}\n"
-            "program.main()\n"
+            f"program.main(['--backup', '{index}'])\n"
         )
         process = subprocess.Popen(
             [sys.executable, "-c", code],
@@ -1376,10 +1393,10 @@ class DistributedTest(unittest.TestCase):
         return process
 
     def start_primary(self) -> subprocess.Popen:
-        return self.start_program("server")
+        return self.start_program(0)
 
     def start_backup(self) -> subprocess.Popen:
-        return self.start_program("backup")
+        return self.start_program(1)
 
     def stop(self, process: subprocess.Popen) -> None:
         process.kill()
@@ -1425,7 +1442,7 @@ class DistributedTest(unittest.TestCase):
         # and doesn't serve clients until it has finished, so the first change is already
         # copied. Its retry time is lengthened here, so the test doesn't depend on timing.
         # A failed connection can take 2 seconds on Windows, so the backup starts later.
-        self.start_program("server", "program.START_SYNC_SECONDS = 10")
+        self.start_program(0, "program.START_SYNC_SECONDS = 10")
         time.sleep(2.5)
         self.start_backup()
         self.wait_until(lambda: common.request_from(self.backup, {"action": "PING"}), "saw the backup start")

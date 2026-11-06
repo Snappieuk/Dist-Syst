@@ -16,7 +16,6 @@ import os      # checks which files exist, and deletes them
 import socket  # checks whether any part of the system is running
 import sys     # sys.argv holds the --reset option; checks whether there is someone to ask
 
-import backup
 import common
 import server
 import web
@@ -77,10 +76,15 @@ def run_setup() -> bool:
     return False
 
 
+def servers_data_files() -> list:
+    """Each server's data file, one for every entry in the server list."""
+    return [server.data_file(index) for index in range(len(common.SERVERS))]
+
+
 def generated_files() -> list:
     """Every file the system creates as it runs. A reset deletes only these, by exact name,
     so that it can never remove anything else."""
-    data_and_accounts = [server.ASSETS_FILE, backup.ASSETS_FILE, web.USERS_FILE, web.PASSWORD_FILE]
+    data_and_accounts = servers_data_files() + [web.USERS_FILE, web.PASSWORD_FILE]
     logs = []
     for name in common.LOG_NAMES:
         for current in (common.log_path(name), common.audit_log_path(name)):
@@ -101,7 +105,7 @@ def running_programs() -> list:
     """Return the name of each part of the system that is currently running."""
     addresses = {"server.py": common.SERVERS[0], "web.py": web.WEB_ADDRESS}
     if len(common.SERVERS) > 1:
-        addresses["backup.py"] = common.SERVERS[1]
+        addresses["server.py --backup 1"] = common.SERVERS[1]
     return [name for name, address in addresses.items() if is_running(address)]
 
 
@@ -138,7 +142,7 @@ def reset() -> bool:
     print("This will permanently delete:")
     for path in existing:
         print(f"  {os.path.basename(path)}")
-    assets = max(count_assets(server.ASSETS_FILE), count_assets(backup.ASSETS_FILE))
+    assets = max(count_assets(path) for path in servers_data_files())
     print(f"\nThat includes {assets} asset(s), every web account, the shared secret, the certificate and the logs.")
     print("It can't be undone.")
 

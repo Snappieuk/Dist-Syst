@@ -5,7 +5,7 @@ Starts the whole system with one command, and opens the web page.
 
 The first time, this runs setup, which asks you to create your web account.
 
-The primary, backup and web interface still run as separate processes, exactly as if
+The primary, the backup and the web interface still run as separate processes, exactly as if
 each had been started in its own terminal. They share this window, so each log line
 says which one wrote it. Press Ctrl+C to stop them all.
 
@@ -29,7 +29,9 @@ from web import WEB_ADDRESS
 
 logger = logging.getLogger("start")
 
-PROGRAMS = ("server.py", "backup.py", "web.py")
+# Each program, with any options it is started with. The backup is server.py too, told
+# by --backup 1 that it is the second server in the list.
+PROGRAMS = ("server.py", "server.py --backup 1", "web.py")
 
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 
@@ -66,8 +68,10 @@ def ensure_set_up() -> bool:
 
 
 def start_program(name: str) -> subprocess.Popen:
-    """Start one program as its own process."""
-    return subprocess.Popen([sys.executable, os.path.join(FOLDER, name)], cwd=FOLDER)
+    """Start one program as its own process. `name` is the file and any options, such as
+    "server.py --backup 1"."""
+    file, *options = name.split()
+    return subprocess.Popen([sys.executable, os.path.join(FOLDER, file), *options], cwd=FOLDER)
 
 
 def start_programs(programs: tuple) -> dict:

@@ -1,29 +1,44 @@
 """
-The primary server of the Asset Management System.
+An asset server: the primary, or the backup.
 
-    python server.py
+    python server.py              runs the primary, the first address in the server list
+    python server.py --backup 1   runs the backup, the second address in the list
 
-The primary is the one server that normally accepts changes. Because every change
-goes through this one process, there is one agreed order of events, which is what
-prevents race conditions and duplicates across the system.
+Both are this one program, run as separate processes with their own data files, possibly
+on different machines. The flag only says which entry in the server list this one is.
 
-Before a client is told that a change worked, the primary copies it to the backup
-(synchronous replication), so the change is on both machines. If the backup is down,
-the primary carries on alone, then brings the backup up to date when it returns.
+The primary is the one server that normally accepts changes. Because every change goes
+through this one process, there is one agreed order of events, which is what prevents
+race conditions and duplicates across the system. Before a client is told that a change
+worked, the primary copies it to the backup (synchronous replication), so the change is
+on both machines. If the backup is down, the primary carries on alone, then brings the
+backup up to date when it returns.
 
-backup.py is the separate program for the other server. The code they share, including
-the rules for changing assets, is in node.py.
+The backup has two states:
+
+  Standby:   it receives each change from the primary and applies it in order. It
+             answers LIST, but refuses changes from clients with NOT_PRIMARY.
+  Taken over: it has decided the primary has failed, and accepts changes itself.
+
+It detects failure with heartbeats: it pings the primary every second, and takes over
+after several pings in a row get no answer. When the primary returns, the primary
+reconciles the two servers' data, and the backup goes back to standby.
+
+The code every server shares, including the rules for changing assets, is in node.py.
 """
 
+import argparse   # reads the --backup option
 import os         # os.path finds the data file
-import threading  # runs the check on the backup alongside the clients
-import time       # waits between checks on the backup
+import threading  # runs the heartbeats alongside the clients
+import time       # waits between heartbeats
 
 import common
 import node
-from common import HEARTBEAT_TIMEOUT_SECONDS, request_from
+from common import HEARTBEAT_TIMEOUT_SECONDS, NOT_STANDBY, OUT_OF_SYNC, request_from
 
-ASSETS_FILE = os.path.join(common.DATA_FOLDER, "assets.json")
+# Tests set this to keep the data somewhere else. Otherwise each server's file is chosen
+# by data_file() below.
+ASSETS_FILE = None
 
 # How often the primary checks whether the backup needs bringing up to date.
 BACKUP_CHECK_SECONDS = 1
@@ -35,11 +50,155 @@ BACKUP_CHECK_SECONDS = 1
 START_SYNC_SECONDS = 3
 START_SYNC_RETRY_SECONDS = 0.2
 
+# How often the backup pings the primary, and how many pings in a row must go unanswered
+# before it takes over. Needing several means that one lost message does not cause a
+# takeover.
+HEARTBEAT_INTERVAL_SECONDS = 1
+MISSED_HEARTBEATS_LIMIT = 3
+
 logger = node.logger
 
 backup_address = None    # where the backup is, or None if there is not one
 backup_in_sync = False   # whether the backup has every change. Protected by the lock.
+missed_heartbeats = 0    # how many pings in a row the primary has not answered
 
+
+# ---- Which server this is ----
+
+def name_of(index: int) -> str:
+    """The name of the server at this position in the list, used in replies and logs."""
+    return "primary" if index == 0 else "backup"
+
+
+def data_file(index: int) -> str:
+    """Where the server at this position in the list keeps its data."""
+    return os.path.join(common.DATA_FOLDER, "assets.json" if index == 0 else f"assets_{name_of(index)}.json")
+
+
+# ---- Following: how the backup applies what the primary sends ----
+
+def apply_change(request: dict) -> dict:
+    """Apply one change sent by the primary.
+
+    The sequence number shows whether any change was missed. If so, applying this one
+    could leave the two servers different without anyone knowing, so it is refused,
+    and the primary sends all its data instead.
+    """
+    with node.assets_lock:
+        if node.accepts_writes:
+            return node.error_reply(NOT_STANDBY, "The backup has taken over")
+
+        seq = request.get("seq")
+        if seq != node.last_seq + 1:
+            return node.error_reply(OUT_OF_SYNC, f"Expected change {node.last_seq + 1}, but received {seq}")
+
+        previous = (list(node.assets), dict(node.deleted_ids), dict(node.deleted_at))
+
+        if "asset" in request:
+            asset = request["asset"]
+            index = node.find_asset(asset["asset_id"])
+            if index is None:
+                node.assets.append(asset)
+            else:
+                node.assets[index] = asset
+        else:
+            asset_id = request["deleted"]
+            index = node.find_asset(asset_id)
+            if index is not None:
+                node.assets.pop(index)
+            node.deleted_ids[asset_id] = request.get("request_id")
+            if isinstance(request.get("deleted_at"), str):
+                node.deleted_at[asset_id] = request["deleted_at"]  # the primary's time, not this server's
+
+        node.last_seq = seq
+        try:
+            node.save_assets()
+        except OSError:
+            # Keep memory and disk in agreement. The primary will send everything later.
+            node.assets[:], restored_deleted, restored_times = previous
+            restore_deleted(restored_deleted, restored_times)
+            node.last_seq = seq - 1
+            raise
+
+        logger.info("Applied change %s from the primary", seq)
+
+    return {"status": "OK", "seq": seq}
+
+
+def hand_over(request: dict) -> dict:
+    """Stop accepting changes, and send the primary all this server's data.
+
+    Both happen while holding the lock, so no change can be accepted after the data
+    is copied, and so none can be missed.
+    """
+    global missed_heartbeats
+
+    with node.assets_lock:
+        if node.accepts_writes:
+            logger.warning("The primary is back. Returning to standby.")
+        node.accepts_writes = False
+        missed_heartbeats = 0
+        return {
+            "status": "OK",
+            "assets": list(node.assets),
+            "deleted": dict(node.deleted_ids),
+            "deleted_at": dict(node.deleted_at),
+            "seq": node.last_seq,
+        }
+
+
+def restore_deleted(deleted: dict, times: dict) -> None:
+    """Put back the deleted IDs and their deletion times. The caller must hold the lock."""
+    node.deleted_ids.clear()
+    node.deleted_ids.update(deleted)
+    node.deleted_at.clear()
+    node.deleted_at.update(times)
+
+
+def install_state(request: dict) -> dict:
+    """Replace this server's data with the primary's reconciled copy."""
+    with node.assets_lock:
+        previous = (list(node.assets), dict(node.deleted_ids), dict(node.deleted_at), node.last_seq)
+
+        node.assets[:] = request["assets"]
+        restore_deleted(request["deleted"], request.get("deleted_at", {}))
+        node.last_seq = request["seq"]
+        try:
+            node.save_assets()
+        except OSError:
+            node.assets[:], restored_deleted, restored_times, node.last_seq = previous
+            restore_deleted(restored_deleted, restored_times)
+            raise
+
+        logger.info("In sync with the primary, at change %s", node.last_seq)
+
+    return {"status": "OK"}
+
+
+def monitor_primary() -> None:
+    """Ping the primary forever, taking over if it stops answering. Runs on its own
+    thread."""
+    global missed_heartbeats
+
+    while True:
+        time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        try:
+            request_from(common.SERVERS[0], {"action": "PING"}, timeout=HEARTBEAT_TIMEOUT_SECONDS)
+        except (OSError, ValueError):
+            with node.assets_lock:
+                missed_heartbeats += 1
+                if missed_heartbeats >= MISSED_HEARTBEATS_LIMIT and not node.accepts_writes:
+                    node.accepts_writes = True
+                    logger.warning(
+                        "The primary missed %s heartbeats. TAKING OVER: now accepting changes.",
+                        missed_heartbeats,
+                    )
+        else:
+            with node.assets_lock:
+                missed_heartbeats = 0
+
+
+# ---- Leading: how the primary keeps the backup up to date ----
 
 def is_valid_peer_asset(record: object) -> bool:
     """Check a record from the backup before it is stored.
@@ -162,10 +321,7 @@ def catch_up_backup() -> bool:
             except OSError:
                 # Keep memory and disk in agreement. The next check will try again.
                 node.assets[:], restored_deleted, restored_times, node.last_seq = previous
-                node.deleted_ids.clear()
-                node.deleted_ids.update(restored_deleted)
-                node.deleted_at.clear()
-                node.deleted_at.update(restored_times)
+                restore_deleted(restored_deleted, restored_times)
                 raise
 
             reply = request_from(backup_address, {
@@ -252,12 +408,11 @@ def watch_backup() -> None:
             catch_up_backup()
 
 
-def main() -> None:
+# ---- Starting up ----
+
+def run_primary() -> None:
     global backup_address
 
-    node.ROLE = "primary"
-    node.ID_PREFIX = "AST-P"
-    node.ASSETS_FILE = ASSETS_FILE
     node.accepts_writes = True
     node.on_change = replicate_change
 
@@ -278,6 +433,45 @@ def main() -> None:
             node.run_server(server_sock)
         except KeyboardInterrupt:
             logger.info("Server stopped.")
+
+
+def run_backup() -> None:
+    node.accepts_writes = False
+    node.role_actions = {
+        "REPLICATE": apply_change,
+        "HANDOVER": hand_over,
+        "INSTALL_STATE": install_state,
+    }
+
+    server_sock = node.start_up(common.SERVERS[1])
+    with server_sock:
+        # daemon=True means this thread does not stop the program from exiting.
+        threading.Thread(target=monitor_primary, name="heartbeat", daemon=True).start()
+
+        try:
+            node.run_server(server_sock)
+        except KeyboardInterrupt:
+            logger.info("Server stopped.")
+
+
+def main(argv: list = None) -> None:
+    """Start this server. `argv` is the command-line options, given by tests, or None to
+    read them from the command line."""
+    parser = argparse.ArgumentParser(description="Run an asset server.")
+    parser.add_argument("--backup", type=int, default=0, metavar="N",
+                        help="run the backup, the entry after the primary in the server list (N=1)")
+    index = parser.parse_args(argv).backup
+    if index not in (0, 1) or index >= len(common.SERVERS):
+        parser.error("--backup must be 1, and the server list must have an entry for it")
+
+    node.ROLE = name_of(index)
+    node.ID_PREFIX = "AST-P" if index == 0 else "AST-B"
+    node.ASSETS_FILE = ASSETS_FILE or data_file(index)
+
+    if index == 0:
+        run_primary()
+    else:
+        run_backup()
 
 
 # Only run main() if this file is executed directly (not imported).

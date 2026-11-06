@@ -43,13 +43,15 @@ class ServerTestCase(unittest.TestCase):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = self.servers
 
-    def start(self, module: str) -> subprocess.Popen:
+    def start(self, index: int = 0) -> subprocess.Popen:
+        """Start the server at this position in the list: 0 for the primary, 1 for the
+        backup, with its own temporary data file."""
         code = (
             f"import common\ncommon.SERVERS = {self.servers!r}\n"
             f"common.LOG_FOLDER = {self.folder!r}\n"
-            f"import {module} as program\n"
-            f"program.ASSETS_FILE = {os.path.join(self.folder, module + '.json')!r}\n"
-            "program.main()\n"
+            "import server\n"
+            f"server.ASSETS_FILE = {os.path.join(self.folder, f'server{index}.json')!r}\n"
+            f"server.main(['--backup', '{index}'])\n"
         )
         process = subprocess.Popen(
             [sys.executable, "-c", code], cwd=FOLDER, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
@@ -73,7 +75,7 @@ class ServerTestCase(unittest.TestCase):
 
 class StopTest(ServerTestCase):
     def test_a_stop_request_ends_the_server_like_a_crash(self):
-        primary = self.start("server")
+        primary = self.start()
         self.wait_until_answering(self.servers[0])
 
         reply = common.request_from(self.servers[0], {"action": "STOP"})
@@ -82,7 +84,7 @@ class StopTest(ServerTestCase):
         self.assertEqual(primary.wait(timeout=10), 1)
 
     def test_a_stop_request_without_the_secret_is_refused(self):
-        primary = self.start("server")
+        primary = self.start()
         self.wait_until_answering(self.servers[0])
 
         with common.connect(self.servers[0], timeout=5) as sock:
@@ -102,8 +104,8 @@ class DemoTest(ServerTestCase):
         return result, output.getvalue()
 
     def test_the_whole_demo_runs_and_leaves_no_assets_behind(self):
-        primary = self.start("server")
-        self.start("backup")
+        primary = self.start()
+        self.start(1)
         self.wait_until_answering(self.servers[0])
         deadline = time.monotonic() + 20
         while demo.server_state(self.servers[1]) != "on standby" and time.monotonic() < deadline:
@@ -115,7 +117,7 @@ class DemoTest(ServerTestCase):
             primary.wait()
             while not any(asset_id.startswith("AST-B") for asset_id in demo.held_by(self.servers[1])):
                 time.sleep(0.2)
-            self.start("server")
+            self.start()
 
         threading.Thread(target=restart_when_stopped, daemon=True).start()
 

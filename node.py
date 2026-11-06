@@ -2,9 +2,9 @@
 The code shared by both servers: the stored data, the rules for changing it, and
 the network loop that serves requests.
 
-server.py (the primary) and backup.py (the backup) are separate programs, each run
-as its own process with its own data file, possibly on different machines. This file
-holds only what they have in common. What makes each one different is in its own file.
+Every server, primary or backup, is server.py, each run as its own process with its own
+data file, possibly on different machines. This file holds what they all have in
+common. How a server leads or follows the others is in server.py.
 
 Requests from clients:
 

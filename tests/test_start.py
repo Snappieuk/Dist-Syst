@@ -27,7 +27,7 @@ class StartTest(unittest.TestCase):
         self.addCleanup(lambda: start.stop_all(self.processes))
 
     def test_all_the_programs_are_started(self):
-        self.assertEqual(start.PROGRAMS, ("server.py", "backup.py", "web.py"))
+        self.assertEqual(start.PROGRAMS, ("server.py", "server.py --backup 1", "web.py"))
 
     def test_nothing_is_reported_while_all_are_running(self):
         self.processes = {"one": run_for(30), "two": run_for(30)}

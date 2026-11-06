@@ -18,10 +18,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-import backup
 import common
 import node
-import server
 import setup
 import web
 
@@ -50,8 +48,7 @@ class SetupTestCase(unittest.TestCase):
         self.patch_value(web, "USERS_FILE", self.path("web_users.json"))
         self.addCleanup(web.users.clear)
         self.patch_value(web, "HASH_ITERATIONS", 1000)  # the real number is slow on purpose
-        self.patch_value(server, "ASSETS_FILE", self.path("assets.json"))
-        self.patch_value(backup, "ASSETS_FILE", self.path("assets_backup.json"))
+        self.patch_value(common, "DATA_FOLDER", self.folder)  # where each server's data file goes
         self.patch_value(common, "SERVERS", [unused_address(), unused_address()])
         self.patch_value(web, "WEB_ADDRESS", unused_address())
         self.patch_value(setup, "PORT_CHECK_SECONDS", 0.2)
@@ -247,7 +244,7 @@ class ResetTest(SetupTestCase):
     def test_it_refuses_while_any_part_of_the_system_is_running(self):
         for setting, name in (
             ((common, "SERVERS", 0), "server.py"),
-            ((common, "SERVERS", 1), "backup.py"),
+            ((common, "SERVERS", 1), "server.py --backup 1"),
             ((web, "WEB_ADDRESS", None), "web.py"),
         ):
             with self.subTest(name):

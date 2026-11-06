@@ -52,8 +52,8 @@ class FillTest(ServerTestCase):
         return common.request_from(address, {"action": "LIST"})["assets"]
 
     def test_it_adds_the_number_asked_for_and_the_backup_gets_them_too(self):
-        self.start("server")
-        self.start("backup")
+        self.start()
+        self.start(1)
         self.wait_until_answering(self.servers[0])
         self.wait_until_answering(self.servers[1])
 

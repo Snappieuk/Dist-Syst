@@ -14,7 +14,7 @@ found by name rather than by fixed addresses in the code.
                \           |           /           find the servers by name through
                 v          v          v            ASSET_SERVERS, and try the
     +-----------------+              +-----------------+   primary first, then the backup
-    |    server.py    |  heartbeats  |    backup.py    |
+    |    server.py    |  heartbeats  |    server.py    |
     |    (primary)    |<-------------|    (backup)     |
     |                 |  each change |                 |
     |  accepts all    |------------->|  on standby:    |
@@ -41,9 +41,8 @@ rule still load, and can be changed to one of the two.
 
 | File | Purpose |
 |---|---|
-| `server.py` | The primary server. Accepts changes, puts them in order and copies each one to the backup. Stores its data in `data/assets.json`. |
-| `backup.py` | The backup server. Keeps its own copy of the data in `data/assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
-| `node.py` | Code used by both servers: the data, the rules for changing it and the network loop. |
+| `server.py` | An asset server. `python server.py` runs the primary, which accepts changes, puts them in order and copies each one to the backup, and stores its data in `data/assets.json`. `python server.py --backup 1` runs the backup, which keeps its own copy in `data/assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
+| `node.py` | Code used by every server: the data, the rules for changing it and the network loop. |
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `cli.py` | The command-line client. `python cli.py add` registers a new asset, `list` lists the assets with their IDs, statuses and tags, and `change` marks one as "Not In Use" or "In Use", edits its details, or deletes it. |
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. |
@@ -92,7 +91,7 @@ terminal instead:
 
 ```
 python server.py
-python backup.py
+python server.py --backup 1
 python gui.py
 ```
 
@@ -174,7 +173,7 @@ Then:
 1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` and
    `tls.pem` it creates to the `data/` folder beside the code on every other machine. Every machine must have the
    same two files, or its connections are refused.
-2. Run `python server.py` on the first machine and `python backup.py` on the second.
+2. Run `python server.py` on the first machine and `python server.py --backup 1` on the second.
 3. Run clients or `web.py` anywhere that can reach both servers.
 
 Each server's firewall must allow its port. Don't use `start.py` here, because it starts
@@ -339,7 +338,7 @@ Every program logs to the console and to its own file in `data/logs/`:
 | File | Written by | Records |
 |---|---|---|
 | `primary.log` | `server.py` | Requests it couldn't complete, each change copied to the backup, the backup falling behind or catching up, and taking back control |
-| `backup.log` | `backup.py` | Each change applied, missed heartbeats, taking over and returning to standby |
+| `backup.log` | `server.py --backup 1` | Each change applied, missed heartbeats, taking over and returning to standby |
 | `web.log` | `web.py` | Logins and failed logins with where they came from, logouts, and which account added, deleted or created what |
 | `start.log` | `start.py` | When the system started and stopped, and each program that stopped and was restarted |
 
@@ -401,8 +400,8 @@ don't exist yet. `test_tls.py` checks that a server with a different certificate
 that a client that doesn't encrypt gets nothing, and that nothing readable crosses the
 network.
 `test_web.py` makes real HTTP requests but doesn't run the page's script in a browser, so that
-part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py` and
-`backup.py` as separate programs and kills them partway through. `test_config.py` starts
+part was checked separately in Microsoft Edge. `DistributedTest` runs the primary and
+the backup as separate programs and kills them partway through. `test_config.py` starts
 programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
 it can't listen on. `test_demo.py` runs the whole demo against real servers.
 `test_logging.py` checks that the servers write separate files, that full files are replaced
@@ -416,12 +415,12 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 | Message passing | Servers and clients share no memory and only communicate over sockets | `common.py`: `send_message`, `receive_message` |
 | External data representation | Length-prefixed UTF-8 JSON, so programs don't depend on a language or platform | `common.py`: `send_message` |
 | Naming and location transparency | Programs find the servers by name from configuration, so a server can move machine without any code changing | `common.py`: `SERVERS`, `parse_servers`, `request_from` |
-| Replication | The backup holds a full copy of the data in its own file | `backup.py`: `apply_change` |
+| Replication | The backup holds a full copy of the data in its own file | `server.py`: `apply_change` |
 | Synchronous replication | A client only hears that a change worked after the backup has saved it | `server.py`: `replicate_change` |
 | Single leader | Only the primary accepts changes, so there is one order of events | `node.py`: `accepts_writes` |
-| Total ordering | Every change has a sequence number, so a gap can be detected | `backup.py`: `apply_change` |
-| Failure detection | The backup pings the primary every second and treats 3 missed heartbeats as a failure | `backup.py`: `monitor_primary` |
-| Failover | The backup promotes itself and clients move to it automatically | `backup.py`: `monitor_primary`, `common.py`: `send_request` |
+| Total ordering | Every change has a sequence number, so a gap can be detected | `server.py`: `apply_change` |
+| Failure detection | The backup pings the primary every second and treats 3 missed heartbeats as a failure | `server.py`: `monitor_primary` |
+| Failover | The backup promotes itself and clients move to it automatically | `server.py`: `monitor_primary`, `common.py`: `send_request` |
 | Automatic restart | A server that stops is restarted while the others carry on, as a cluster manager would | `start.py`: `check_programs` |
 | Recovery and reconciliation | A returning primary merges the backup's changes and takes back control | `server.py`: `catch_up_backup`, `merge_state` |
 | Conflict resolution | A delete wins, then the higher version, then the primary's copy | `server.py`: `merge_state` |
