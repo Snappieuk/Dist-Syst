@@ -480,6 +480,12 @@ file, which the program reads when it starts. To build it yourself, run
 address and trusts the first certificate it sees, like a plain `gui.py`. Windows may show
 a "SmartScreen" warning for an unsigned program: choose More info, then Run anyway.
 
+The Windows app also has **HTTPS mode**, like `gui.py`: type `https://assets.example.com`
+as the server and it uses the web page's own API over ordinary HTTPS (port 443 only,
+through a reverse proxy). The certificate is checked the normal way by Windows (TLS 1.2 is
+switched on, since .NET Framework 4.x doesn't always do that), plain `http://` and redirects
+are refused, and pinning and Find servers are not used. The code is in `clients\app\WebNet.cs`.
+
 **Without the download**, a plain copy of `gui.py` works on its own:
 
 1. Run `python gui.py`. On the login screen, type the server's IP address or host name

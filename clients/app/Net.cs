@@ -105,6 +105,7 @@ namespace AssetApp
         public static string Token;                            // proves the login to the servers
         public static string Username;
         public static string Role;
+        public static string WebUrl;                           // https://host when using the web API, else null (see WebNet.cs)
     }
 
     // Settings added to the end of the .exe by the web page's download button: where the
@@ -300,6 +301,7 @@ namespace AssetApp
         // Throws IOException if no server can be reached.
         public static Dictionary<string, object> Send(Dictionary<string, object> request)
         {
+            if (Session.WebUrl != null) return WebNet.Send(request);   // HTTPS mode: web.py does the failover
             if (Session.Token != null) request["token"] = Session.Token;
             DateTime deadline = DateTime.UtcNow.AddSeconds(FailoverWaitSeconds);
 

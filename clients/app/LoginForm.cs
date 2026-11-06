@@ -1,5 +1,5 @@
 // The login window. It finds the server, decides which certificate to trust, and logs in.
-// It follows the same steps as the login window in gui.py:
+// An address starting with https:// skips all that: see WebNet.cs. Otherwise it follows the same steps as the login window in gui.py:
 //   1. PING the typed server (no password sent yet) to see its certificate and learn the
 //      full list of servers.
 //   2. Decide whether to trust that certificate:
@@ -42,16 +42,46 @@ namespace AssetApp
         // (Problem returns a message or "" to stay open without a popup) until it succeeds.
         protected override string Problem()
         {
-            Addr typed;
-            try { typed = Net.ParseAddress(server.Text); }
+            string web;
+            Addr typed = null;
+            try
+            {
+                web = WebNet.Address(server.Text);   // an https:// address uses the web API
+                if (web == null) typed = Net.ParseAddress(server.Text);
+            }
             catch (FormatException error) { return error.Message; }
             if (user.Text.Trim().Length == 0) return "Enter your username.";
             if (password.Text.Length == 0) return "Enter your password.";
 
             string name = user.Text.Trim(), pass = password.Text;
             SetBusy(true, "Connecting...");
-            Background.Run<Dictionary<string, object>>(this, delegate { return Connect(typed, name, pass); }, LoggedIn);
+            Background.Run<Dictionary<string, object>>(this,
+                delegate { return web != null ? ConnectWeb(web, name, pass) : Connect(typed, name, pass); }, LoggedIn);
             return "";
+        }
+
+        // HTTPS mode. Runs on a background thread. There is no certificate to pin and no
+        // server to find: the site's certificate is checked the normal way, and web.py does
+        // the failover. Returns the LOGIN reply, or throws.
+        static Dictionary<string, object> ConnectWeb(string web, string name, string pass)
+        {
+            WebNet.Prepare();
+            WebNet.NewConnection();
+            Session.WebUrl = web;
+            Session.Token = null;
+            try
+            {
+                WebNet.CheckSite();
+                Dictionary<string, object> login = Net.Request("LOGIN");
+                login["username"] = name;
+                login["password"] = pass;
+                return Net.Send(login);
+            }
+            catch (Exception)
+            {
+                Session.WebUrl = null;   // a failed attempt leaves no half-chosen mode behind
+                throw;
+            }
         }
 
         void SetBusy(bool busy, string text)
@@ -65,6 +95,7 @@ namespace AssetApp
         // Runs on a background thread. Returns the LOGIN reply, or throws.
         static Dictionary<string, object> Connect(Addr typed, string name, string pass)
         {
+            Session.WebUrl = null;   // an ordinary (local network) address: the servers' own protocol
             // Try the typed server first, then (for a downloaded copy) the others it knows.
             List<Addr> candidates = new List<Addr> { typed };
             foreach (Addr other in SiteSettings.Servers) if (!candidates.Contains(other)) candidates.Add(other);
