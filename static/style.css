@@ -913,3 +913,276 @@ button.icon-button:hover {
     font-size: 1.3rem;
   }
 }
+
+/* ---- Flagged for review ---- */
+
+/* Stands out with a heavy amber edge, because these assets need someone's attention. */
+.review {
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border-left: 4px solid var(--warning);
+}
+
+.review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.review-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.review-head p,
+.review-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.review-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button.deny {
+  color: var(--problem);
+}
+
+.review-table table {
+  min-width: 760px;
+}
+
+.check-column {
+  width: 36px;
+}
+
+.check-column input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* The small "Needs review" label beside a flagged asset's ID in the main table. */
+.review-marker {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 5px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  color: var(--warning);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* ---- Loans ---- */
+
+/* Who has the asset and until when, under its status. */
+.loan-note {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: normal;
+}
+
+.loan-note.overdue {
+  color: var(--problem);
+  font-weight: 600;
+}
+
+/* Rows open the asset's history when clicked. */
+tbody tr.clickable {
+  cursor: pointer;
+}
+
+tbody tr.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.table-hint {
+  margin: 8px 0 28px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* ---- History ---- */
+
+.dialog-note {
+  margin: 14px 20px 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.history-list {
+  margin: 0;
+  padding: 12px 20px 20px;
+  list-style: none;
+}
+
+.history-list li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 0 10px 14px;
+  border-left: 2px solid var(--border);
+}
+
+.history-list time {
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.history-detail {
+  font-weight: 600;
+}
+
+.history-who {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* ---- Loans calendar ---- */
+
+.calendar-section {
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--text);
+}
+
+.calendar-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calendar-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-nav strong {
+  min-width: 150px;
+  text-align: center;
+}
+
+.calendar-nav button {
+  padding: 5px 12px;
+}
+
+.calendar-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.key::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+
+.key.on-loan::before,
+.calendar-bar.on-loan {
+  background: var(--good);
+}
+
+.key.overdue::before,
+.calendar-bar.overdue {
+  background: var(--problem);
+}
+
+.key.returned::before,
+.calendar-bar.returned {
+  background: var(--muted);
+}
+
+/* A wide month scrolls inside this box, so the page itself doesn't scroll sideways. */
+.calendar-wrap {
+  overflow-x: auto;
+}
+
+/* Each row is a grid: a column for the asset and borrower, then one for each day. */
+.calendar-row {
+  display: grid;
+  grid-template-columns: 220px repeat(var(--days), minmax(24px, 1fr));
+  align-items: center;
+  min-width: calc(220px + var(--days) * 24px);
+  min-height: 30px;
+  border-bottom: 1px solid var(--border);
+}
+
+.calendar-days {
+  border-bottom: 2px solid var(--text);
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.calendar-days .weekend {
+  background: var(--surface-raised);
+}
+
+.calendar-days .today {
+  background: var(--text);
+  color: var(--background);
+  font-weight: 700;
+}
+
+.calendar-label {
+  overflow: hidden;
+  padding-right: 8px;
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The loan itself, from its first to its last day in the month. */
+button.calendar-bar {
+  height: 20px;
+  overflow: hidden;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.calendar-bar:hover {
+  filter: brightness(1.15);
+}
+
+.calendar-empty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}

@@ -17,7 +17,8 @@ const search = document.getElementById("search");
 const statusFilter = document.getElementById("status-filter");
 
 // The last heading is for the Edit and Delete buttons, and isn't sortable.
-const headings = [...document.querySelectorAll("thead th")].slice(0, COLUMNS.length);
+// Only the main table's headings: the review table has its own, which don't sort.
+const headings = [...tableBody.closest("table").querySelectorAll("thead th")].slice(0, COLUMNS.length);
 const loginSection = document.getElementById("login-section");
 const appSection = document.getElementById("app-section");
 const loginForm = document.getElementById("login-form");
@@ -47,6 +48,11 @@ const accountsDialog = document.getElementById("accounts-dialog");
 const accountsClose = document.getElementById("accounts-close");
 const accountsMessage = document.getElementById("accounts-message");
 const accountList = document.getElementById("account-list");
+const checkoutDialog = document.getElementById("checkout-dialog");
+const checkoutForm = document.getElementById("checkout-form");
+const historyDialog = document.getElementById("history-dialog");
+const reviewSection = document.getElementById("review-section");
+const reviewSelectAll = document.getElementById("review-select-all");
 
 const ROLE_DESCRIPTIONS = {
   admin: "Admin: can also delete assets and manage accounts",
@@ -76,8 +82,334 @@ function matchesFilters(asset) {
     return false;
   }
   const wanted = search.value.trim().toLowerCase();
-  return COLUMNS.some((column) => cellText(asset, column).toLowerCase().includes(wanted));
+  const borrower = currentLoan(asset) ? currentLoan(asset).borrower : "";
+  return [...COLUMNS.map((column) => cellText(asset, column)), borrower]
+    .some((text) => text.toLowerCase().includes(wanted));
 }
+
+// ---------- Dates ----------
+
+// Dates are handled as YYYY-MM-DD text, the form the servers use. Text in that form sorts
+// in date order, so dates can be compared with < and >.
+function isoDate(date) {
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function addDays(iso, days) {
+  const date = new Date(`${iso}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return isoDate(date);
+}
+
+function today() {
+  return isoDate(new Date());
+}
+
+// ---------- Loans ----------
+
+// An asset keeps every loan it has had. Only the last one can still be out.
+function currentLoan(asset) {
+  const last = asset.loans[asset.loans.length - 1];
+  return last && !last.returned ? last : null;
+}
+
+function isOverdue(loan) {
+  return !loan.returned && loan.due < today();
+}
+
+// Sends one change about one asset (approve, check-out or check-in), with the version the
+// page was showing, and returns the updated asset, or throws with the server's reason.
+async function assetAction(asset, name, details = {}) {
+  const response = await fetch(`/api/assets/${encodeURIComponent(asset.asset_id)}/${name}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version: asset.version, ...details }),
+  });
+  if (response.status === 401) {
+    showLogin();
+    throw new Error("Please log in again");
+  }
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body.error);
+  }
+  return body.asset;
+}
+
+let checkoutAsset = null; // the asset the check-out form is for
+
+function startCheckOut(asset) {
+  checkoutAsset = asset;
+  document.getElementById("checkout-heading").textContent = `Check out ${asset.asset_id}: ${asset.description}`;
+  document.getElementById("checkout-message").textContent = "";
+  checkoutForm.reset();
+  checkoutForm.elements.start.value = today();
+  checkoutForm.elements.due.value = addDays(today(), 7); // a week, unless changed
+  checkoutDialog.showModal();
+  checkoutForm.elements.borrower.focus();
+}
+
+async function saveCheckOut(event) {
+  event.preventDefault();
+  const details = Object.fromEntries(new FormData(checkoutForm));
+  const button = document.getElementById("checkout-button");
+  button.disabled = true;
+  try {
+    await assetAction(checkoutAsset, "check-out", details);
+    checkoutDialog.close();
+    showActionResult(`Checked out ${checkoutAsset.asset_id} to ${details.borrower} until ${details.due}`);
+    await loadAssets();
+  } catch (error) {
+    document.getElementById("checkout-message").textContent = `Could not check it out: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function checkIn(asset) {
+  const loan = currentLoan(asset);
+  if (!confirm(`Check ${asset.asset_id} back in from ${loan.borrower}?`)) {
+    return;
+  }
+  try {
+    await assetAction(asset, "check-in");
+    showActionResult(`Checked ${asset.asset_id} back in`);
+  } catch (error) {
+    showActionResult(`Could not check ${asset.asset_id} in: ${error.message}`, true);
+  }
+  await loadAssets();
+}
+
+// Under the status, who has the asset and until when, in red once it is overdue.
+function loanNote(asset) {
+  const loan = currentLoan(asset);
+  if (!loan) {
+    return null;
+  }
+  const note = document.createElement("span");
+  note.className = "loan-note";
+  note.classList.toggle("overdue", isOverdue(loan));
+  note.textContent = isOverdue(loan)
+    ? `Overdue: ${loan.borrower}, due ${loan.due}`
+    : `On loan to ${loan.borrower} until ${loan.due}`;
+  return note;
+}
+
+// ---------- History ----------
+
+function showHistory(asset) {
+  document.getElementById("history-heading").textContent = `History of ${asset.asset_id}`;
+  document.getElementById("history-summary").textContent =
+    `${asset.description}, ${asset.category}, at ${asset.location}. ` +
+    `${asset.loans.length} loan(s) so far. Newest first.`;
+  const entries = [...asset.history].reverse().map((entry) => {
+    const item = document.createElement("li");
+    const when = document.createElement("time");
+    when.dateTime = entry.at;
+    when.textContent = new Date(entry.at).toLocaleString();
+    const what = document.createElement("span");
+    what.className = "history-detail";
+    what.textContent = entry.detail;
+    const who = document.createElement("span");
+    who.className = "history-who";
+    who.textContent = `${entry.user ? `by ${entry.user}, ` : ""}on the ${entry.server} server`;
+    item.append(when, what, who);
+    return item;
+  });
+  // Assets saved before history was added have none.
+  if (!entries.length) {
+    const item = document.createElement("li");
+    item.textContent = "Nothing has been recorded for this asset yet.";
+    entries.push(item);
+  }
+  document.getElementById("history-list").replaceChildren(...entries);
+  historyDialog.showModal();
+}
+
+// ---------- Flagged for review ----------
+
+// The flagged assets that are ticked, by ID. Kept between refreshes, so the list redrawing
+// every few seconds doesn't untick anything.
+let reviewChecked = new Set();
+
+function flaggedAssets() {
+  return allAssets.filter((asset) => asset.flagged).sort((a, b) => a.asset_id.localeCompare(b.asset_id));
+}
+
+function reviewRow(asset) {
+  const row = document.createElement("tr");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = reviewChecked.has(asset.asset_id);
+  box.disabled = role !== "admin";
+  box.setAttribute("aria-label", `Select ${asset.asset_id}`);
+  box.addEventListener("change", () => {
+    if (box.checked) {
+      reviewChecked.add(asset.asset_id);
+    } else {
+      reviewChecked.delete(asset.asset_id);
+    }
+    showReview();
+  });
+  const cells = [box, asset.asset_id, asset.description, asset.location,
+    new Date(asset.created_at).toLocaleString(), asset.history[0] ? `the ${asset.history[0].server} server` : ""];
+  for (const content of cells) {
+    const cell = document.createElement("td");
+    cell.append(content);
+    row.append(cell);
+  }
+  row.cells[0].className = "check-column";
+  const actions = document.createElement("td");
+  actions.className = "actions";
+  if (role === "admin") {
+    actions.append(
+      actionButton("Approve", "secondary", `Approve ${asset.asset_id}`, () => review([asset], "approve")),
+      actionButton("Deny", "delete", `Deny ${asset.asset_id}`, () => review([asset], "deny")),
+    );
+  }
+  row.append(actions);
+  return row;
+}
+
+function showReview() {
+  const flagged = flaggedAssets();
+  reviewSection.hidden = flagged.length === 0;
+  // Forget ticks on assets that are no longer flagged.
+  reviewChecked = new Set(flagged.map((asset) => asset.asset_id).filter((id) => reviewChecked.has(id)));
+
+  document.getElementById("review-explanation").textContent = flagged.length === 1
+    ? "This asset was added while the primary server was offline. Check it, then approve or deny it."
+    : `These ${flagged.length} assets were added while the primary server was offline. Check them, then approve or deny them.`;
+  document.getElementById("review-assets").replaceChildren(...flagged.map(reviewRow));
+
+  const isAdmin = role === "admin";
+  document.getElementById("review-buttons").hidden = !isAdmin;
+  document.getElementById("review-note").hidden = isAdmin;
+  reviewSelectAll.disabled = !isAdmin;
+  reviewSelectAll.checked = flagged.length > 0 && reviewChecked.size === flagged.length;
+  reviewSelectAll.indeterminate = reviewChecked.size > 0 && reviewChecked.size < flagged.length;
+  for (const id of ["approve-selected", "deny-selected"]) {
+    document.getElementById(id).disabled = reviewChecked.size === 0;
+  }
+  document.getElementById("approve-selected").textContent = `Approve selected (${reviewChecked.size})`;
+  document.getElementById("deny-selected").textContent = `Deny selected (${reviewChecked.size})`;
+}
+
+// Approves or denies each asset in turn. Denying deletes, so it asks first. Each one is a
+// separate request, so one that fails (say, someone else changed it) doesn't stop the rest.
+async function review(assets, decision) {
+  if (!assets.length) {
+    return;
+  }
+  if (decision === "deny" &&
+      !confirm(`Deny ${assets.length} asset(s)? Denied assets are deleted for good. This can't be undone.`)) {
+    return;
+  }
+  const problems = [];
+  for (const asset of assets) {
+    try {
+      if (decision === "approve") {
+        await assetAction(asset, "approve");
+      } else {
+        await deleteRequest(asset);
+      }
+      reviewChecked.delete(asset.asset_id);
+    } catch (error) {
+      problems.push(`${asset.asset_id}: ${error.message}`);
+    }
+  }
+  const done = assets.length - problems.length;
+  const verb = decision === "approve" ? "Approved" : "Denied and deleted";
+  showActionResult(problems.length
+    ? `${verb} ${done} of ${assets.length}. Could not do ${problems.join("; ")}`
+    : `${verb} ${done} asset(s)`, problems.length > 0);
+  await loadAssets();
+}
+
+function selectedFlagged() {
+  return flaggedAssets().filter((asset) => reviewChecked.has(asset.asset_id));
+}
+
+// ---------- Loans calendar ----------
+
+// The first day of the month the calendar shows.
+let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+// Each loan that overlaps the month, with the asset it belongs to. A loan still out ends
+// on its due date, or today if it is overdue. A returned one ends when it came back.
+function loansInMonth(assets, first, last) {
+  const found = [];
+  for (const asset of assets) {
+    for (const loan of asset.loans) {
+      const end = loan.returned || (isOverdue(loan) ? today() : loan.due);
+      if (loan.start <= last && end >= first) {
+        found.push({ asset, loan, end });
+      }
+    }
+  }
+  return found.sort((a, b) => a.loan.start.localeCompare(b.loan.start));
+}
+
+function showCalendar(assets) {
+  const year = calendarMonth.getFullYear();
+  const month = calendarMonth.getMonth();
+  const days = new Date(year, month + 1, 0).getDate();
+  const first = isoDate(new Date(year, month, 1));
+  const last = isoDate(new Date(year, month, days));
+  document.getElementById("calendar-month").textContent =
+    calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  // One column for the names, then one for each day of the month.
+  const calendar = document.getElementById("calendar");
+  calendar.style.setProperty("--days", days);
+
+  const header = document.createElement("div");
+  header.className = "calendar-row calendar-days";
+  header.append(document.createElement("span"));
+  for (let day = 1; day <= days; day += 1) {
+    const date = new Date(year, month, day);
+    const cell = document.createElement("span");
+    cell.textContent = day;
+    cell.classList.toggle("weekend", date.getDay() === 0 || date.getDay() === 6);
+    cell.classList.toggle("today", isoDate(date) === today());
+    header.append(cell);
+  }
+
+  const rows = loansInMonth(assets, first, last).map(({ asset, loan, end }) => {
+    const row = document.createElement("div");
+    row.className = "calendar-row";
+    const label = document.createElement("span");
+    label.className = "calendar-label";
+    label.textContent = `${asset.asset_id} · ${loan.borrower}`;
+    label.title = asset.description;
+
+    // The bar runs from the first to the last of its days that fall in this month.
+    const startDay = loan.start < first ? 1 : Number(loan.start.slice(8));
+    const endDay = end > last ? days : Number(end.slice(8));
+    const bar = document.createElement("button");
+    bar.type = "button";
+    bar.className = "calendar-bar";
+    bar.classList.add(loan.returned ? "returned" : isOverdue(loan) ? "overdue" : "on-loan");
+    bar.style.gridColumn = `${startDay + 1} / ${endDay + 2}`;
+    bar.textContent = asset.description;
+    bar.title = `${asset.asset_id} ${asset.description}: ${loan.borrower}, ${loan.start} to ${loan.due}` +
+      (loan.returned ? `, returned ${loan.returned}` : isOverdue(loan) ? ", overdue" : "");
+    bar.addEventListener("click", () => showHistory(asset));
+    row.append(label, bar);
+    return row;
+  });
+  calendar.replaceChildren(header, ...rows);
+  document.getElementById("calendar-empty").hidden = rows.length > 0;
+}
+
+function moveCalendar(months) {
+  calendarMonth = months === 0
+    ? new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+    : new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + months, 1);
+  showAssets();
+}
+
 
 // numeric makes "AST-10" sort after "AST-9", and sensitivity ignores capitals.
 function compareAssets(first, second) {
@@ -311,6 +643,11 @@ function actionButton(text, className, label, action) {
 function actionsCell(asset) {
   const cell = document.createElement("td");
   cell.className = "actions";
+  if (currentLoan(asset)) {
+    cell.append(actionButton("Check in", "secondary", `Check in ${asset.asset_id}`, () => checkIn(asset)));
+  } else {
+    cell.append(actionButton("Check out", "secondary", `Check out ${asset.asset_id}`, () => startCheckOut(asset)));
+  }
   cell.append(actionButton("Edit", "edit secondary", `Edit ${asset.asset_id}`, () => startEdit(asset)));
   if (role === "admin") {
     cell.append(actionButton("Delete", "delete", `Delete ${asset.asset_id}`, () => deleteAsset(asset)));
@@ -391,23 +728,28 @@ async function saveEdit(event) {
 
 // The version is the one this page was showing, so if someone else has changed the asset
 // since, the server refuses, and the refresh below shows what is there now.
+// Deletes one asset, with the version the page was showing, or throws with the reason.
+async function deleteRequest(asset) {
+  const response = await fetch(`/api/assets/${encodeURIComponent(asset.asset_id)}?version=${asset.version}`, {
+    method: "DELETE",
+  });
+  if (response.status === 401) {
+    showLogin();
+    throw new Error("Please log in again");
+  }
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body.error);
+  }
+}
+
 async function deleteAsset(asset) {
   if (!confirm(`Delete ${asset.asset_id} (${asset.description}) for good? This can't be undone.`)) {
     return;
   }
 
   try {
-    const response = await fetch(`/api/assets/${encodeURIComponent(asset.asset_id)}?version=${asset.version}`, {
-      method: "DELETE",
-    });
-    if (response.status === 401) {
-      showLogin();
-      return;
-    }
-    const body = await response.json();
-    if (!response.ok) {
-      throw new Error(body.error);
-    }
+    await deleteRequest(asset);
     showActionResult(`Deleted ${asset.asset_id}`);
   } catch (error) {
     showActionResult(`Could not delete ${asset.asset_id}: ${error.message}`, true);
@@ -415,13 +757,17 @@ async function deleteAsset(asset) {
   await loadAssets();
 }
 
-// The totals cover every asset, whatever the filters are showing. During an outage the
-// list on screen is an old one, so nothing is named as having answered.
-function showStats() {
-  const withStatus = (status) => allAssets.filter((asset) => asset.status === status).length;
-  document.getElementById("stat-total").textContent = allAssets.length;
+// The totals count the assets the search and status filter match, so searching "switch"
+// shows how many switches there are. During an outage the list on screen is an old one,
+// so nothing is named as having answered.
+function showStats(visible) {
+  const withStatus = (status) => visible.filter((asset) => asset.status === status).length;
+  const filtering = search.value.trim() !== "" || statusFilter.value !== "";
+  document.getElementById("stat-total-label").textContent = filtering ? "Matching assets" : "Total assets";
+  document.getElementById("stat-total").textContent = visible.length;
   document.getElementById("stat-in-use").textContent = withStatus("In Use");
   document.getElementById("stat-not-in-use").textContent = withStatus("Not In Use");
+  document.getElementById("stat-on-loan").textContent = visible.filter(currentLoan).length;
 
   const server = document.getElementById("stat-server");
   server.textContent = loadError || !servedBy ? "No server" : servedBy;
@@ -431,9 +777,9 @@ function showStats() {
   server.classList.toggle("server-none", loadError !== "" || !servedBy);
 }
 
-function showMessage(visibleCount) {
-  showStats();
-  const counts = `Showing ${visibleCount} of ${allAssets.length} asset(s)`;
+function showMessage(visible) {
+  showStats(visible);
+  const counts = `Showing ${visible.length} of ${allAssets.length} asset(s)`;
   message.classList.toggle("problem", loadError !== "");
 
   if (!loadError) {
@@ -453,6 +799,15 @@ function showAssets() {
       const cell = document.createElement("td");
       if (column === "status") {
         cell.append(statusBadge(asset.status));
+        const note = loanNote(asset);
+        if (note) {
+          cell.append(note);
+        }
+      } else if (column === "asset_id" && asset.flagged) {
+        const marker = document.createElement("span");
+        marker.className = "review-marker";
+        marker.textContent = "Needs review";
+        cell.append(asset.asset_id, marker);
       } else if (column === "tags") {
         cell.className = "tags";
         cell.append(...asset.tags.map((tag) => {
@@ -467,10 +822,26 @@ function showAssets() {
       row.append(cell);
     }
     row.append(actionsCell(asset));
+
+    // Clicking a row (but not one of its buttons) or pressing Enter on it shows the history.
+    row.className = "clickable";
+    row.tabIndex = 0;
+    row.addEventListener("click", (event) => {
+      if (!event.target.closest("button")) {
+        showHistory(asset);
+      }
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target === row) {
+        showHistory(asset);
+      }
+    });
     return row;
   });
   tableBody.replaceChildren(...rows);
-  showMessage(visible.length);
+  showMessage(visible);
+  showReview();
+  showCalendar(visible);
 }
 
 // Status is free text, so the choices come from the assets themselves. The current
@@ -661,6 +1032,18 @@ for (const button of document.querySelectorAll("[data-close]")) {
   button.addEventListener("click", () => button.closest("dialog").close());
 }
 editForm.addEventListener("submit", saveEdit);
+checkoutForm.addEventListener("submit", saveCheckOut);
+document.getElementById("calendar-prev").addEventListener("click", () => moveCalendar(-1));
+document.getElementById("calendar-next").addEventListener("click", () => moveCalendar(1));
+document.getElementById("calendar-today").addEventListener("click", () => moveCalendar(0));
+reviewSelectAll.addEventListener("change", () => {
+  reviewChecked = new Set(reviewSelectAll.checked ? flaggedAssets().map((asset) => asset.asset_id) : []);
+  showReview();
+});
+document.getElementById("approve-selected").addEventListener("click", () => review(selectedFlagged(), "approve"));
+document.getElementById("approve-all").addEventListener("click", () => review(flaggedAssets(), "approve"));
+document.getElementById("deny-selected").addEventListener("click", () => review(selectedFlagged(), "deny"));
+document.getElementById("deny-all").addEventListener("click", () => review(flaggedAssets(), "deny"));
 editCancel.addEventListener("click", stopEdit);
 
 makeHeadingsSortable();

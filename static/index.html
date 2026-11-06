@@ -138,6 +138,43 @@
     </form>
   </dialog>
 
+  <!-- Lending an asset: who to, and from when until when. -->
+  <dialog id="checkout-dialog" class="dialog" aria-labelledby="checkout-heading">
+    <div class="dialog-head">
+      <h2 id="checkout-heading">Check out an asset</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close">&times;</button>
+    </div>
+    <p id="checkout-message" class="dialog-message problem" role="alert"></p>
+    <form id="checkout-form" class="dialog-form">
+      <label class="wide">
+        Borrower's name
+        <input name="borrower" required maxlength="1000" placeholder="Sam Lee" autocomplete="off">
+      </label>
+      <label>
+        Start date
+        <input name="start" type="date" required>
+      </label>
+      <label>
+        Due back
+        <input name="due" type="date" required>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button id="checkout-button" type="submit">Check out</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Everything that has happened to one asset, opened by clicking its row. -->
+  <dialog id="history-dialog" class="dialog" aria-labelledby="history-heading">
+    <div class="dialog-head">
+      <h2 id="history-heading">History</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close">&times;</button>
+    </div>
+    <p id="history-summary" class="dialog-note"></p>
+    <ol id="history-list" class="history-list"></ol>
+  </dialog>
+
   <p id="action-message" class="toast" role="status"></p>
 
   <main>
@@ -172,10 +209,47 @@
         </button>
       </div>
 
+      <!-- Assets added while the primary server was offline, waiting for someone to
+           approve or deny them. Hidden while there are none. -->
+      <section id="review-section" class="review panel" hidden aria-labelledby="review-heading">
+        <div class="review-head">
+          <div>
+            <h2 id="review-heading">Flagged for review</h2>
+            <p id="review-explanation"></p>
+          </div>
+          <div id="review-buttons" class="review-buttons">
+            <button id="approve-selected" type="button">Approve selected</button>
+            <button id="approve-all" type="button" class="secondary">Approve all</button>
+            <button id="deny-selected" type="button" class="secondary deny">Deny selected</button>
+            <button id="deny-all" type="button" class="secondary deny">Deny all</button>
+          </div>
+        </div>
+        <p id="review-note" class="review-note">Only an admin can approve or deny these.</p>
+        <div class="table-wrap review-table">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col" class="check-column">
+                  <input id="review-select-all" type="checkbox" aria-label="Select all flagged assets">
+                </th>
+                <th scope="col">Asset ID</th>
+                <th scope="col">Description</th>
+                <th scope="col">Location</th>
+                <th scope="col">Added</th>
+                <th scope="col">Added by</th>
+                <th scope="col"><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="review-assets"></tbody>
+          </table>
+        </div>
+      </section>
+
       <div class="stats">
-        <div class="stat"><span class="stat-label">Total assets</span><strong id="stat-total">0</strong></div>
+        <div class="stat"><span id="stat-total-label" class="stat-label">Total assets</span><strong id="stat-total">0</strong></div>
         <div class="stat"><span class="stat-label">In use</span><strong id="stat-in-use">0</strong></div>
         <div class="stat"><span class="stat-label">Not in use</span><strong id="stat-not-in-use">0</strong></div>
+        <div class="stat"><span class="stat-label">On loan</span><strong id="stat-on-loan">0</strong></div>
         <div class="stat">
           <span class="stat-label">Answered by</span>
           <strong id="stat-server" class="server-pill">-</strong>
@@ -211,6 +285,30 @@
           <tbody id="assets"></tbody>
         </table>
       </div>
+      <p class="table-hint">Click an asset to see its history.</p>
+
+      <!-- Every loan that falls in the month shown, as a bar from its start to its end. It
+           follows the search, like the table. -->
+      <section class="calendar-section" aria-labelledby="calendar-heading">
+        <div class="calendar-head">
+          <h2 id="calendar-heading">Loans calendar</h2>
+          <div class="calendar-nav">
+            <button id="calendar-prev" type="button" class="secondary" aria-label="Previous month">&lsaquo;</button>
+            <strong id="calendar-month"></strong>
+            <button id="calendar-next" type="button" class="secondary" aria-label="Next month">&rsaquo;</button>
+            <button id="calendar-today" type="button" class="secondary">This month</button>
+          </div>
+        </div>
+        <p class="calendar-key">
+          <span class="key on-loan">On loan</span>
+          <span class="key overdue">Overdue</span>
+          <span class="key returned">Returned</span>
+        </p>
+        <div class="calendar-wrap">
+          <div id="calendar" class="calendar"></div>
+        </div>
+        <p id="calendar-empty" class="calendar-empty">No loans in this month.</p>
+      </section>
     </section>
   </main>
 </body>
