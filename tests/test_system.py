@@ -27,10 +27,9 @@ import unittest
 from unittest import mock
 
 import backup
+import cli
 import common
-import manage
 import node
-import receive
 import server
 
 
@@ -187,7 +186,7 @@ class SystemTest(NodeTestCase):
 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            receive.main()
+            cli.list_assets()
 
         self.assertIn("In Use", output.getvalue())
         self.assertIn("dell", output.getvalue())
@@ -711,10 +710,10 @@ class SystemTest(NodeTestCase):
     # ---- The management client ----
 
     def run_manage(self, *answers) -> str:
-        """Run manage.py, giving it these answers to its prompts, and return its output."""
+        """Run cli.py change, giving it these answers to its prompts, and return its output."""
         output = io.StringIO()
         with mock.patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(output):
-            manage.main()
+            cli.change_asset()
         return output.getvalue()
 
     def test_manage_client_edits_only_what_is_typed(self):

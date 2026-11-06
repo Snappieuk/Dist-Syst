@@ -14,8 +14,8 @@ import time
 import unittest
 from unittest import mock
 
+import cli
 import common
-import send
 
 # The project folder, one above this tests folder.
 FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,11 +35,36 @@ def make_gui():
     return root, app
 
 
+class CommandTest(unittest.TestCase):
+    """cli.py runs the command it is given, or asks for one."""
+
+    def run_cli(self, argv: list, answers: list = ()) -> list:
+        """Run cli.main() with these arguments and typed answers, returning which
+        command functions it called."""
+        called = []
+        commands = {name: (label, lambda name=name: called.append(name))
+                    for name, (label, _) in cli.COMMANDS.items()}
+        with mock.patch.object(cli, "COMMANDS", commands), mock.patch("sys.argv", ["cli.py", *argv]),                 mock.patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
+            cli.main()
+        return called
+
+    def test_each_command_runs_its_own_function(self):
+        for name in ("add", "list", "change"):
+            self.assertEqual(self.run_cli([name]), [name])
+
+    def test_without_a_command_it_asks_until_given_a_valid_number(self):
+        self.assertEqual(self.run_cli([], answers=["9", "x", "2"]), ["list"])
+
+    def test_an_unknown_command_is_refused(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.run_cli(["remove"])
+
+
 class SendStatusTest(unittest.TestCase):
     def choose(self, *answers) -> tuple:
         output = io.StringIO()
         with mock.patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(output):
-            return send.choose_status(), output.getvalue()
+            return cli.choose_status(), output.getvalue()
 
     def test_each_number_gives_its_status(self):
         for number, status in enumerate(common.STATUSES, start=1):

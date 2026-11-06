@@ -9,10 +9,10 @@ found by name rather than by fixed addresses in the code.
 ```
                                        browser
                                           | HTTP
-  send.py   receive.py   manage.py   gui.py   web.py      clients, on any machine
-      \          |           |        /        /
-       \         |           |       /        /     find the servers by name through
-        v        v           v      v               ASSET_SERVERS, and try the
+          cli.py         gui.py         web.py            clients, on any machine
+              \            |            /
+               \           |           /           find the servers by name through
+                v          v          v            ASSET_SERVERS, and try the
     +-----------------+              +-----------------+   primary first, then the backup
     |    server.py    |  heartbeats  |    backup.py    |
     |    (primary)    |<-------------|    (backup)     |
@@ -33,7 +33,7 @@ are ignored. UTC means times from servers in different time zones can be compare
 and deletions from before these were added have none. The status says
 whether the item is being used at the moment, and can only be "In Use" or "Not In Use".
 Every client offers just these two: a read-only list in the GUI and on the web page, and a
-numbered choice in `send.py`. The server also rejects anything else with `BAD_REQUEST`,
+numbered choice in `cli.py add`. The server also rejects anything else with `BAD_REQUEST`,
 because any program could send other text. Assets saved with other statuses before this
 rule still load, and can be changed to one of the two.
 
@@ -45,9 +45,7 @@ rule still load, and can be changed to one of the two.
 | `backup.py` | The backup server. Keeps its own copy of the data in `data/assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
 | `node.py` | Code used by both servers: the data, the rules for changing it and the network loop. |
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
-| `send.py` | Registers a new asset. |
-| `receive.py` | Lists the assets with their IDs, statuses and tags. |
-| `manage.py` | Marks an asset as "Not In Use" or "In Use", edits its details, or deletes it. |
+| `cli.py` | The command-line client. `python cli.py add` registers a new asset, `list` lists the assets with their IDs, statuses and tags, and `change` marks one as "Not In Use" or "In Use", edits its details, or deletes it. |
 | `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. |
 | `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
@@ -99,9 +97,9 @@ python backup.py
 python gui.py
 ```
 
-You can use `python send.py`, `python receive.py` and `python manage.py` instead of the
-GUI. These wait for you to press Enter before closing, so the window stays open if you
-start them by double-clicking.
+You can use `python cli.py add`, `python cli.py list` and `python cli.py change` instead of
+the GUI. Without a command, it asks which one you want. It waits for you to press Enter
+before closing, so the window stays open if you start it by double-clicking.
 
 To use the web page, run this as well and open http://127.0.0.1:8080:
 
@@ -320,7 +318,7 @@ last admin can't be removed or made a user, so the system can't be left with no 
 --set-password`, run on the machine itself, can replace a password. An existing account
 keeps its role when its password is replaced.
 
-**The GUI and the command-line clients (`send.py`, `receive.py`, `manage.py`, `demo.py`)
+**The GUI and the command-line clients (`cli.py`, `demo.py`)
 are trusted admin tools.** They have no login, because they prove themselves with
 `secret.key` instead, and anything with that file can do everything, including deleting.
 Only give `secret.key` to people who should have admin rights.

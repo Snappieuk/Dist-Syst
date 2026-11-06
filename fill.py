@@ -5,7 +5,7 @@ Fills the system with made-up assets, so the table has plenty of rows to look at
     python fill.py --count 100   adds 100 assets (or -n 100)
 
 Start the system first, with python start.py. Each asset is registered through the
-servers exactly as send.py does it, so the backup gets a copy and the web page and GUI
+servers exactly as python cli.py add does it, so the backup gets a copy and the web page and GUI
 show the new rows on their next refresh. To remove them all again, use
 python setup.py --reset, which deletes every asset.
 """
