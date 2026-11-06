@@ -7,6 +7,7 @@ These don't need a server. The GUI tests are skipped if no window can be opened.
 """
 
 import contextlib
+import datetime
 import io
 import os
 import re
@@ -264,3 +265,79 @@ class GuiReviewTest(unittest.TestCase):
                 mock.patch.object(self.app, "_start_request") as start:
             self.app.review("deny", everything=True)
         start.assert_not_called()
+
+
+class GuiLoanTest(unittest.TestCase):
+    """The GUI's check-out form, check-in and loans list."""
+
+    LOANED = {"asset_id": "AST-P000001", "description": "Laptop", "category": "IT", "location": "Site A",
+              "status": common.IN_USE, "version": 4,
+              "loans": [{"borrower": "Ann", "start": "2026-01-01", "due": "2026-01-08", "returned": "2026-01-07"},
+                        {"borrower": "Bob", "start": "2026-03-01", "due": "2026-03-08", "returned": None}]}
+    FREE = {"asset_id": "AST-P000002", "description": "Phone", "category": "IT", "location": "Site A",
+            "status": common.IN_USE, "version": 2,
+            "loans": [{"borrower": "Cy", "start": "2026-02-01", "due": "2026-02-08", "returned": "2026-02-05"}]}
+
+    def setUp(self):
+        self.root, self.app = make_gui()
+        self.addCleanup(self.root.destroy)
+        self.app._show_assets([self.LOANED, self.FREE])
+
+    def fill_form(self, asset_id, **values):
+        """Open the check-out form, overwrite the given boxes and return its save function."""
+        window, boxes, save = self.app.open_check_out_window(asset_id)
+        self.addCleanup(lambda: window.winfo_exists() and window.destroy())
+        for key, value in values.items():
+            boxes[key].delete(0, "end")
+            boxes[key].insert(0, value)
+        return boxes, save
+
+    def test_form_defaults_to_today_and_a_week_later(self):
+        boxes, _ = self.fill_form("AST-P000002")
+        today = datetime.date.today()
+        self.assertEqual(boxes["start"].get(), today.isoformat())
+        self.assertEqual(boxes["due"].get(), (today + datetime.timedelta(days=7)).isoformat())
+
+    def test_check_out_sends_the_request(self):
+        _, save = self.fill_form("AST-P000002", borrower=" Dee ", start="2026-11-06", due="2026-11-10")
+        with mock.patch.object(self.app, "_start_request") as start:
+            save()
+        start.assert_called_once_with("check_out", {
+            "action": "CHECK_OUT", "asset_id": "AST-P000002", "borrower": "Dee",
+            "start": "2026-11-06", "due": "2026-11-10", "expected_version": 2})
+
+    def test_bad_input_is_not_sent(self):
+        for values in ({"borrower": ""}, {"start": "6/11/2026"}, {"due": "2026-1-5"},
+                       {"start": "2026-11-10", "due": "2026-11-06"}):
+            _, save = self.fill_form("AST-P000002", **{"borrower": "Dee", **values})
+            with mock.patch("gui.messagebox.showwarning") as warn, \
+                    mock.patch.object(self.app, "_start_request") as start:
+                save()
+            warn.assert_called_once()
+            start.assert_not_called()
+
+    def test_asset_on_loan_is_checked_in_after_confirming(self):
+        self.app.tree.selection_set("AST-P000001")
+        with mock.patch("gui.messagebox.askyesno", return_value=True), \
+                mock.patch.object(self.app, "_start_request") as start:
+            self.app.check_out_or_in_selected()
+        start.assert_called_once_with(
+            "check_in", {"action": "CHECK_IN", "asset_id": "AST-P000001", "expected_version": 4})
+
+    def test_declining_the_check_in_sends_nothing(self):
+        self.app.tree.selection_set("AST-P000001")
+        with mock.patch("gui.messagebox.askyesno", return_value=False), \
+                mock.patch.object(self.app, "_start_request") as start:
+            self.app.check_out_or_in_selected()
+        start.assert_not_called()
+
+    def test_asset_not_on_loan_opens_the_form(self):
+        self.app.tree.selection_set("AST-P000002")
+        with mock.patch.object(self.app, "open_check_out_window") as form:
+            self.app.check_out_or_in_selected()
+        form.assert_called_once_with("AST-P000002")
+
+    def test_loans_are_sorted_by_start_date_and_show_overdue(self):
+        rows = self.app.loan_rows()
+        self.assertEqual([row[1] for row in rows], ["Ann", "Cy", "Bob"])
+        self.assertEqual([row[4] for row in rows], ["2026-01-07", "2026-02-05", "Overdue"])
