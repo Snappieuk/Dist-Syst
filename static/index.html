@@ -204,6 +204,7 @@
            page can be bookmarked and the back button works. -->
       <nav id="tabs" class="tabs" aria-label="Pages">
         <a href="#assets" data-tab="assets">Assets</a>
+        <a href="#loans" data-tab="loans">Loans</a>
         <a href="#calendar" data-tab="calendar">Calendar</a>
         <a href="#review" data-tab="review">Review <span id="review-count" class="count">0</span></a>
       </nav>
@@ -260,6 +261,41 @@
         </table>
       </div>
       <p class="table-hint">Click an asset to see its history.</p>
+    </section>
+
+    <!-- Every loan of every asset, newest first. -->
+    <section data-page="loans" hidden aria-labelledby="loans-heading">
+      <div class="page-title">
+        <div>
+          <h2 id="loans-heading">Loans</h2>
+          <p id="loans-message"></p>
+        </div>
+        <label class="status-field">
+          <span class="visually-hidden">Show</span>
+          <select id="loan-filter">
+            <option value="">All loans</option>
+            <option value="out">On loan</option>
+            <option value="overdue">Overdue</option>
+            <option value="returned">Returned</option>
+          </select>
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table class="loans-table">
+          <thead>
+            <tr>
+              <th scope="col">Asset ID</th>
+              <th scope="col">Description</th>
+              <th scope="col">Borrower</th>
+              <th scope="col">Start</th>
+              <th scope="col">Due</th>
+              <th scope="col">Returned</th>
+            </tr>
+          </thead>
+          <tbody id="loans"></tbody>
+        </table>
+      </div>
+      <p class="table-hint">Click a loan to see the asset's history.</p>
     </section>
 
     <!-- Every loan in the month shown, on a month grid. -->

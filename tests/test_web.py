@@ -1175,6 +1175,14 @@ class PageTest(WebTestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(headers["Content-Type"], f"{content_type}; charset=utf-8")
 
+    def test_every_page_has_a_tab_and_a_section(self):
+        _, _, body = self.fetch("/")
+
+        for page in (b"assets", b"loans", b"calendar", b"review"):
+            with self.subTest(page):
+                self.assertIn(b'data-tab="' + page + b'"', body)
+                self.assertIn(b'data-page="' + page + b'"', body)
+
     def test_the_script_never_adds_asset_details_as_html(self):
         _, _, body = self.fetch("/app.js")
 

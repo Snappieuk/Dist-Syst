@@ -336,6 +336,47 @@ function selectedFlagged() {
   return flaggedAssets().filter((asset) => reviewChecked.has(asset.asset_id));
 }
 
+// ---------- The Loans page ----------
+
+// What state a loan is in, matching the choices in the Loans page's filter.
+function loanState(loan) {
+  return loan.returned ? "returned" : isOverdue(loan) ? "overdue" : "out";
+}
+
+// Every loan of every asset, newest first (then by asset ID, so the order is steady).
+function showLoans() {
+  const wanted = document.getElementById("loan-filter").value;
+  const all = allAssets.flatMap((asset) => asset.loans.map((loan) => ({ asset, loan })));
+  const shown = all
+    .filter(({ loan }) => !wanted || loanState(loan) === wanted)
+    .sort((a, b) => b.loan.start.localeCompare(a.loan.start) || a.asset.asset_id.localeCompare(b.asset.asset_id));
+
+  const rows = shown.map(({ asset, loan }) => {
+    const row = document.createElement("tr");
+    const state = loanState(loan);
+    const last = state === "returned" ? loan.returned : state === "overdue" ? "Overdue" : "Not yet";
+    for (const text of [asset.asset_id, asset.description, loan.borrower, loan.start, loan.due, last]) {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      row.append(cell);
+    }
+    row.cells[5].className = `loan-${state}`;
+    row.className = "clickable";
+    row.tabIndex = 0;
+    row.addEventListener("click", () => showHistory(asset));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        showHistory(asset);
+      }
+    });
+    return row;
+  });
+  document.getElementById("loans").replaceChildren(...rows);
+  const overdue = all.filter(({ loan }) => loanState(loan) === "overdue").length;
+  document.getElementById("loans-message").textContent =
+    `Showing ${shown.length} of ${all.length} loan(s), ${overdue} overdue`;
+}
+
 // ---------- Loans calendar ----------
 
 // The first day of the month the calendar shows.
@@ -846,6 +887,7 @@ function showAssets() {
   tableBody.replaceChildren(...rows);
   showMessage(visible);
   showReview();
+  showLoans();
   showCalendar(allAssets);
 }
 
@@ -853,7 +895,7 @@ function showAssets() {
 
 // The page is chosen by the address after the #, so a page can be bookmarked and the
 // browser's back button moves between pages. Anything unknown means the first page.
-const PAGES = ["assets", "calendar", "review"];
+const PAGES = ["assets", "loans", "calendar", "review"];
 
 function showPage() {
   const wanted = location.hash.slice(1);
@@ -1036,6 +1078,7 @@ async function refreshRepeatedly() {
 
 search.addEventListener("input", showAssets);
 statusFilter.addEventListener("change", showAssets);
+document.getElementById("loan-filter").addEventListener("change", showLoans);
 
 // There is nothing to submit, so pressing Enter must not reload the page.
 filters.addEventListener("submit", (event) => event.preventDefault());

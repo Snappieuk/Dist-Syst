@@ -996,6 +996,40 @@ button.deny {
   text-transform: uppercase;
 }
 
+/* ---- The Loans page ---- */
+
+.loans-table td:first-child,
+.loans-table td:nth-child(4),
+.loans-table td:nth-child(5),
+.loans-table td:nth-child(6) {
+  white-space: nowrap;
+}
+
+.loans-table td:first-child {
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.loans-table {
+  min-width: 800px;
+}
+
+td.loan-overdue {
+  color: var(--problem);
+  font-weight: 700;
+}
+
+td.loan-out {
+  color: var(--muted);
+}
+
+#loans-message {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 /* ---- Loans ---- */
 
 /* Who has the asset and until when, under its status. */
