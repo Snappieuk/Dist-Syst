@@ -18,6 +18,12 @@ anywhere else trusts the first certificate it sees, and after that only that exa
 certificate until the window is closed. That is encrypted and refuses a different
 server mid-session, but cannot notice someone intercepting the very first connection.
 
+From outside the network: type a web address that starts with https:// (for example
+https://assets.example.com) instead. The program then uses the web page's own API over
+ordinary HTTPS, through the reverse proxy, so only port 443 is needed. The site's
+certificate is checked the normal way, plain http:// is refused, and Find servers and
+certificate pinning are not used. web.py does the failover and checks every permission.
+
 WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
 seconds, and running it on the main thread would freeze the window. So each
@@ -28,6 +34,7 @@ the queue regularly and updates the window itself.
 
 import datetime   # today's date, and checking the dates typed into the check-out form
 import hashlib    # fingerprints a server's certificate
+import http.cookiejar  # keeps the session cookie in memory in HTTPS mode
 import ipaddress  # checks a typed server address
 import json       # requests and replies are JSON
 import queue      # carries results from background threads to the main thread
@@ -37,6 +44,9 @@ import ssl        # encrypts every connection
 import threading  # runs network requests without freezing the window
 import time       # waits for a backup to take over
 import tkinter as tk
+import urllib.error    # the errors HTTPS mode can get back
+import urllib.parse    # builds the web addresses of HTTPS mode
+import urllib.request  # HTTPS mode talks to web.py with this
 import uuid       # gives each registration its own ID, so a retry can't register twice
 from typing import Any, Optional, Union  # type hints only
 from tkinter import messagebox, ttk
@@ -86,6 +96,10 @@ class Session:
     token: Optional[str] = None       # proves the login to the servers
     username: Optional[str] = None
     role: Optional[str] = None
+    # HTTPS mode (an address typed as https://...): the site's address and the connection
+    # that holds its session cookie. In this mode `servers` and `trusted` are not used.
+    web_url: Optional[str] = None
+    opener: Optional[urllib.request.OpenerDirector] = None
 
 
 session = Session()
@@ -245,6 +259,8 @@ def send_request(request: dict) -> dict:
 
     Raises ConnectionError if no server can be reached, and ValueError for an invalid reply.
     """
+    if session.web_url:
+        return https_send(request)  # HTTPS mode: web.py does the failover
     if session.token:
         request = {**request, "token": session.token}
     deadline = time.monotonic() + FAILOVER_WAIT_SECONDS
@@ -273,6 +289,185 @@ def send_request(request: dict) -> dict:
         time.sleep(1)
 
     raise ConnectionError(f"Could not reach any asset server ({last_error}).\nCheck that the server is running, then try again.")
+
+
+# ---- HTTPS mode: talking to web.py through a reverse proxy ----------------------------
+# When the address typed starts with https:// (for example https://assets.example.com), the
+# program doesn't use the servers' own protocol. It uses the same JSON API as the web page,
+# over normal HTTPS, so only port 443 is needed. web.py does the failover between the
+# servers, and checks every permission itself. The site's certificate is checked the
+# normal way (it is from a public authority, such as Let's Encrypt), and plain http:// is
+# never used. https_send() turns each request the rest of this file makes into a call to
+# the API, and the answer back into the reply the servers would have given, so the window
+# works the same in both modes.
+
+# web.py may wait for a backup to take over, so give it longer than a single server.
+HTTPS_TIMEOUT_SECONDS = FAILOVER_WAIT_SECONDS + TIMEOUT_SECONDS
+
+# The error code the servers use for each HTTP status web.py answers with.
+HTTP_ERROR_CODES = {400: "BAD_REQUEST", 401: "UNAUTHORIZED", 403: "FORBIDDEN", 404: "NOT_FOUND",
+                    409: "CONFLICT", 429: "UNAUTHORIZED"}
+
+# The asset fields a typed search looks in, the same as the servers use.
+SEARCH_FIELDS = ("asset_id", "description", "category", "location", "status")
+
+# Approve, check out and check in: the address each is sent to, and which request fields
+# the API takes for it.
+HTTPS_ASSET_ACTIONS = {
+    "APPROVE": ("approve", ()),
+    "CHECK_OUT": ("check-out", ("borrower", "start", "due")),
+    "CHECK_IN": ("check-in", ("returned",)),
+}
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it could lead to plain http://, and the API never redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def https_context() -> ssl.SSLContext:
+    """The settings for the connection: the normal checks of the certificate and the host
+    name, against the operating system's trusted authorities. Never switch these off."""
+    return ssl.create_default_context()
+
+
+def new_https_connection() -> urllib.request.OpenerDirector:
+    """A connection that remembers the session cookie, in memory only."""
+    return urllib.request.build_opener(
+        NoRedirects(),
+        urllib.request.HTTPSHandler(context=https_context()),
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+    )
+
+
+def https_address(text: str) -> Optional[str]:
+    """Return the typed https://host[:port] address tidied up, or None if it isn't one.
+
+    Raises ValueError for plain http:// (which is refused) and for an address with
+    anything after the host name.
+    """
+    text = text.strip()
+    if text.lower().startswith("http://"):
+        raise ValueError("Plain http:// is not supported, because it would send the password unprotected. "
+                         "Use https://, or type just the server's address to use the local network.")
+    if not text.lower().startswith("https://"):
+        return None
+    parts = urllib.parse.urlsplit(text)
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError("The port in the address is not valid.") from None
+    host = parts.hostname
+    if not host or parts.path.strip("/") or parts.query or parts.fragment or "@" in parts.netloc:
+        raise ValueError("Type just the site's address, such as https://assets.example.com")
+    parse_address(host)  # checks it is a valid host name or IP address
+    shown = f"[{host}]" if ":" in host else host
+    return f"https://{shown}" + (f":{port}" if port else "")
+
+
+def https_call(method: str, path: str, body: Optional[dict] = None) -> tuple:
+    """Make one API call, returning (HTTP status, the reply's JSON object).
+
+    Raises ConnectionError if the site can't be reached or its certificate isn't trusted,
+    and ValueError if the reply isn't what web.py sends.
+    """
+    if not session.web_url or session.opener is None:
+        raise ConnectionError("Not connected to a site.")
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {"Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(session.web_url + path, data=data, method=method, headers=headers)
+    try:
+        with session.opener.open(request, timeout=HTTPS_TIMEOUT_SECONDS) as response:
+            status, raw = response.status, response.read(MAX_MESSAGE_BYTES + 1)
+    except urllib.error.HTTPError as error:  # an error status is still an answer
+        with error:
+            status, raw = error.code, error.read(MAX_MESSAGE_BYTES + 1)
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, ssl.SSLCertVerificationError):
+            raise ConnectionError(f"The certificate of {session.web_url} could not be verified "
+                                  f"({error.reason.verify_message}), so nothing was sent.") from None
+        raise ConnectionError(f"Could not reach {session.web_url}: {error.reason}") from None
+    except OSError as exc:  # a timeout or a dropped connection
+        raise ConnectionError(f"Could not reach {session.web_url}: {exc}") from None
+
+    if len(raw) > MAX_MESSAGE_BYTES:
+        raise ValueError("The reply is too large")
+    try:
+        reply = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        reply = None
+    if isinstance(reply, dict):
+        return status, reply
+    if status >= 400:
+        return status, {}  # for example the proxy's own error page
+    raise ValueError("The reply is not valid. Is this a web.py site?")
+
+
+def https_reply(status: int, data: dict, logging_in: bool = False) -> dict:
+    """Turn an API answer into the reply a server would have given."""
+    if 200 <= status < 300:
+        reply = {"status": "OK", **data}
+        if "asset" in data:
+            reply["stored"] = data["asset"]  # the servers call the saved asset "stored"
+        return reply
+    detail = data.get("error")
+    if status in (502, 503, 504):  # web.py or its proxy can't get an answer from the servers
+        raise ConnectionError(detail or "The site is not answering at the moment. Please try again.")
+    if status == 401 and not logging_in:
+        detail = "Your login has expired. Close this window and log in again."
+    return {"status": "ERROR", "code": HTTP_ERROR_CODES.get(status, "INTERNAL"),
+            "detail": detail or f"The site returned an error ({status})."}
+
+
+def https_send(request: dict) -> dict:
+    """Do what a request asks, through the web API, and return the reply a server would give."""
+    action = request.get("action")
+    asset = "/api/assets/" + urllib.parse.quote(str(request.get("asset_id", "")), safe="")
+    version = request.get("expected_version")
+
+    if action == "LOGIN":
+        status, data = https_call("POST", "/api/login",
+                                  {"username": request.get("username"), "password": request.get("password")})
+        if status != 200:
+            return https_reply(status, data, logging_in=True)
+        # The login reply doesn't say what the account may do; the asset list does.
+        status, listing = https_call("GET", "/api/assets")
+        if status != 200:
+            return https_reply(status, listing)
+        return {"status": "OK", "token": "web-session", "username": data.get("username", request.get("username")),
+                "role": listing.get("role", "user")}
+
+    if action == "LIST":
+        status, data = https_call("GET", "/api/assets")
+        if status != 200:
+            return https_reply(status, data)
+        # The API lists everything, so the search box and status filter are applied here.
+        wanted = str(request.get("query") or "").strip().casefold()
+        shown = [item for item in data.get("assets", [])
+                 if (request.get("status") is None or item.get("status") == request["status"])
+                 and (not wanted or any(wanted in str(item.get(field, "")).casefold() for field in SEARCH_FIELDS))]
+        return {"status": "OK", "assets": shown, "total": len(shown), "served_by": data.get("served_by", "unknown")}
+
+    if action == "REGISTER":
+        status, data = https_call("POST", "/api/assets",
+                                  {"request_id": request.get("request_id"), "asset": request.get("asset")})
+    elif action == "SET_STATUS":
+        status, data = https_call("PATCH", asset, {"version": version, "changes": {"status": request.get("status")}})
+    elif action == "EDIT":
+        status, data = https_call("PATCH", asset, {"version": version, "changes": request.get("changes")})
+    elif action == "DELETE":
+        status, data = https_call("DELETE", f"{asset}?version={urllib.parse.quote(str(version), safe='')}")
+    elif action in HTTPS_ASSET_ACTIONS:
+        name, fields = HTTPS_ASSET_ACTIONS[str(action)]
+        body = {"version": version, **{field: request[field] for field in fields if field in request}}
+        status, data = https_call("POST", f"{asset}/{name}", body)
+    else:
+        raise ValueError(f"{action} is not available over HTTPS")
+    return https_reply(status, data)
 
 
 # ---- Small helpers the main window uses ------------------------------------------------
@@ -1078,6 +1273,7 @@ class LoginWindow(ttk.Frame):
     def check(self) -> None:
         """Test the address, without logging in."""
         self._connect(lambda: self._say(
+            "The site answered over HTTPS; you can log in." if session.web_url else
             f"The server answered. It knows of {len(session.servers)} server(s); you can log in."))
 
     def log_in(self) -> None:
@@ -1089,12 +1285,19 @@ class LoginWindow(ttk.Frame):
 
     def _connect(self, then) -> None:
         """Check the typed address, get the user's trust in its certificate, and learn where
-        every server is, then call then()."""
+        every server is, then call then(). An https:// address is handled separately."""
         try:
-            address = parse_address(self.server_box.get())
+            web_url = https_address(self.server_box.get())
+            address = None if web_url else parse_address(self.server_box.get())
         except ValueError as exc:
             self._say(str(exc))
             return
+        if web_url:
+            self._connect_https(web_url, then)
+            return
+        if address is None:  # only for an https address, which is handled above
+            return
+        session.web_url = None  # an ordinary (local network) address
         self._say("Connecting...")
         answered = [address]  # the server that replied, which may not be the typed one
 
@@ -1116,6 +1319,28 @@ class LoginWindow(ttk.Frame):
             raise error
 
         self._run(work, lambda result, error: self._trust(answered[0], result, error, then))
+
+    def _connect_https(self, web_url: str, then) -> None:
+        """HTTPS mode: no certificate to pin and no servers to find. The site's certificate
+        is checked the normal way. Asking for the assets (which needs a login, so the answer
+        is a refusal) shows that this really is a web.py site, before a password is sent."""
+        self._say("Connecting...")
+        session.web_url, session.opener = web_url, new_https_connection()
+
+        def work() -> int:
+            status, _ = https_call("GET", "/api/assets")
+            if status not in (200, 401):
+                raise ConnectionError(f"{web_url} does not look like an asset site (it answered {status}).")
+            return status
+
+        def finished(result: Any, error: Any) -> None:
+            if error:
+                session.web_url, session.opener = None, None
+                self._say(f"Could not connect to {web_url}: {error}")
+                return
+            then()
+
+        self._run(work, finished)
 
     def _trust(self, address: tuple, result: Any, error: Any, then) -> None:
         if error:

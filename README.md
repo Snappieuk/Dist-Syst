@@ -486,8 +486,12 @@ a "SmartScreen" warning for an unsigned program: choose More info, then Run anyw
    (add `:port` if it isn't 65432), or press **Find servers**. Find servers broadcasts on
    the local network to the usual ports, 65432 and 65433, and lists the servers that
    answer, so a server on another port has to be typed in. **Check** tests an address
-   without logging in.
-2. There is no certificate question: the first certificate the GUI sees is trusted
+   without logging in. **From outside the network**, type the site's web address instead,
+   starting with `https://` (for example `https://assets.example.com`). The GUI then uses
+   the web page's own API over ordinary HTTPS (only port 443 is needed): the site's
+   certificate is checked the normal way, plain `http://` is refused, and Find servers
+   and pinning are not used. web.py does the failover and checks every permission.
+2. In the local-network mode there is no certificate question: the first certificate the GUI sees is trusted
    automatically, and from then on only that exact certificate is used, so a different
    server at the same address is refused. This is remembered only until the window
    closes. The weak spot is that an attacker already intercepting the very first
