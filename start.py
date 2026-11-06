@@ -21,6 +21,7 @@ import socket      # checks when the web interface is ready
 import subprocess  # runs each program as its own process
 import sys         # sys.executable is the Python running this script
 import time        # waits between checks
+from typing import Optional  # type hints only
 import webbrowser  # opens the web page
 
 import setup
@@ -99,7 +100,7 @@ def first_stopped(processes: dict) -> object:
     return None
 
 
-def check_programs(processes: dict, started: dict, restart_at: dict) -> object:
+def check_programs(processes: dict, started: dict, restart_at: dict) -> Optional[str]:
     """Check every program once, returning the name of one that failed as it started.
 
     A program that stopped later is given a restart time in `restart_at`, and restarted

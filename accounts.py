@@ -23,7 +23,7 @@ import json
 import os
 import threading
 import time
-
+from typing import Any  # type hints only
 import common
 
 # The same file web.py keeps its accounts in.
@@ -104,10 +104,10 @@ def login(username: str, password: str) -> tuple:
     with login_lock:
         failed_logins = 0
     expires = int(time.time()) + TOKEN_SECONDS
-    return f"{username}:{expires}:{sign(f'{username}:{expires}')}", username, role_of(record)
+    return f"{username}:{expires}:{sign(f'{username}:{expires}')}", username, role_of(record or {})
 
 
-def check_token(token: object) -> tuple:
+def check_token(token: Any) -> tuple:
     """Return (username, role) for a current token, or raise LoginError."""
     try:
         username, expires, signature = token.split(":")

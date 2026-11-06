@@ -16,6 +16,7 @@ import logging.handlers  # replaces a log file with a new one when it gets too b
 import os           # finds and creates the shared secret file
 import secrets      # generates the shared secret
 import socket      # provides the networking building blocks (sockets)
+import ssl         # encrypts every connection (TLS)
 import sys          # records crashes in the log
 import time         # waits while the backup takes over
 import unicodedata  # recognises letters and digits in any language, for tags
@@ -494,7 +495,7 @@ def configure_logging(name: str) -> None:
     Passwords and the shared secret are never logged. If the file can't be opened, the
     program still runs, logging to the console only.
     """
-    handlers = [logging.StreamHandler()]
+    handlers: list = [logging.StreamHandler()]
     audit_handlers = []
     problem = None
     try:
@@ -631,15 +632,13 @@ def ensure_tls_file() -> str:
     return TLS_FILE
 
 
-def tls_context(server_side: bool) -> "ssl.SSLContext":
+def tls_context(server_side: bool) -> ssl.SSLContext:
     """The TLS settings for one side of a connection, loaded once and then reused.
 
     A server presents the certificate. A client accepts only that same certificate, and
     skips the usual check of the server's name, because trusting one exact certificate
     is a stronger check, and the servers may be reached by any name.
     """
-    import ssl
-
     context = _tls_contexts.get(server_side)
     if context is None:
         path = ensure_tls_file()
@@ -676,7 +675,7 @@ def connect(address: tuple, timeout: float = TIMEOUT_SECONDS) -> socket.socket:
 
     # create_connection() is used because it takes a timeout. Without one, a
     # stalled server would leave the program waiting forever.
-    plain = socket.create_connection(ipv4_address, timeout=timeout)
+    plain = socket.create_connection((str(ipv4_address[0]), int(ipv4_address[1])), timeout=timeout)
     try:
         return tls_context(server_side=False).wrap_socket(plain, server_hostname=host)
     except BaseException:

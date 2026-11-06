@@ -27,6 +27,7 @@ import subprocess # runs the C# compiler that builds the desktop app
 import sys        # sys.argv holds the --set-password option
 import threading  # the locks protect the data shared between request threads
 import time       # sessions and lockouts expire
+from typing import Optional  # type hints only
 
 import common     # where the web interface listens
 from http.cookies import CookieError, SimpleCookie
@@ -137,7 +138,7 @@ users = {}  # each account's password hash, by username
 users_lock = threading.Lock()  # protects `users` and its file
 
 
-def hash_password(password: str, salt: str = None, iterations: int = None) -> dict:
+def hash_password(password: str, salt: Optional[str] = None, iterations: Optional[int] = None) -> dict:
     """Hash a password, returning everything needed to check a guess against it later.
 
     A random salt means that two identical passwords have different hashes, so ready-made
@@ -235,7 +236,7 @@ def role_of(record: dict) -> str:
     return record.get("role", ADMIN)
 
 
-def add_account(username: str, password: str, replace: bool = False, role: str = None,
+def add_account(username: str, password: str, replace: bool = False, role: Optional[str] = None,
                 keep_role: bool = False) -> object:
     """Store an account, returning a message saying why not if it can't be done, or None.
 
@@ -285,7 +286,7 @@ def create_session(username: str) -> str:
     return token
 
 
-def session_username(token: object) -> object:
+def session_username(token: Optional[str]) -> Optional[str]:
     """Return who a token belongs to, or None if it isn't a current login."""
     with login_lock:
         session = sessions.get(token)
@@ -508,7 +509,7 @@ def asset_action_reply(asset_id: str, name: str, body: dict, username: str = "so
     return status, result
 
 
-def asset_action_address(path: str) -> object:
+def asset_action_address(path: str) -> Optional[tuple]:
     """Split /api/assets/<id>/<name> into the asset ID and the action's name, or return
     None if the path isn't one of these."""
     if not path.startswith(ASSET_ADDRESS_PREFIX):
@@ -632,7 +633,7 @@ APP_MARKER = b"--ASSET-" + b"SITE--"  # what the app looks for at the end of its
 build_lock = threading.Lock()
 
 
-def find_csc() -> str:
+def find_csc() -> Optional[str]:
     """The C# compiler that comes with Windows, or None on other systems."""
     for folder in ("Framework64", "Framework"):
         path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Microsoft.NET", folder, "v4.0.30319", "csc.exe")
@@ -732,12 +733,13 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         path = urlsplit(self.path).path
+        action_address = asset_action_address(path)
         if path == "/api/login":
             self.handle_login()
         elif path == "/api/logout":
             self.handle_logout()
-        elif asset_action_address(path) is not None:
-            self.handle_asset_action(*asset_action_address(path))
+        elif action_address is not None:
+            self.handle_asset_action(*action_address)
         elif path not in ("/api/assets", "/api/users"):
             self.send_json(404, {"error": "There is nothing at this address"})
         else:
@@ -765,10 +767,11 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         address = urlsplit(self.path)
-        if self.account_address(address.path) is not None:
+        target = self.account_address(address.path)
+        if target is not None:
             username = self.admin_or_refuse()
             if username is not None:
-                self.send_json(*delete_account_reply(self.account_address(address.path), username))
+                self.send_json(*delete_account_reply(target, username))
         elif not address.path.startswith(ASSET_ADDRESS_PREFIX) or address.path == ASSET_ADDRESS_PREFIX:
             self.send_json(404, {"error": "There is nothing at this address"})
         else:
@@ -789,12 +792,13 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         path = urlsplit(self.path).path
-        if self.account_address(path) is not None:
+        target = self.account_address(path)
+        if target is not None:
             username = self.admin_or_refuse()
             if username is not None:
                 body = self.read_json_body()
                 if body is not None:
-                    self.send_json(*set_role_reply(self.account_address(path), body, username))
+                    self.send_json(*set_role_reply(target, body, username))
             return
         if not path.startswith(ASSET_ADDRESS_PREFIX) or path == ASSET_ADDRESS_PREFIX:
             self.send_json(404, {"error": "There is nothing at this address"})
@@ -854,7 +858,7 @@ class WebHandler(BaseHTTPRequestHandler):
             audit("LOGOUT", user=username)
         self.send_json(200, {}, session_cookie("", 0))
 
-    def session_token(self) -> object:
+    def session_token(self) -> Optional[str]:
         """Return the token in the browser's cookie, or None if it has none."""
         try:
             morsel = SimpleCookie(self.headers.get("Cookie", "")).get("session")
@@ -863,13 +867,13 @@ class WebHandler(BaseHTTPRequestHandler):
         return morsel.value if morsel else None
 
     @staticmethod
-    def account_address(path: str) -> object:
+    def account_address(path: str) -> Optional[str]:
         """The username in an account's address, such as /api/users/alex, or None."""
         if path.startswith(USERS_ADDRESS_PREFIX) and path != USERS_ADDRESS_PREFIX:
             return normalise_username(unquote(path[len(USERS_ADDRESS_PREFIX):]))
         return None
 
-    def admin_or_refuse(self) -> object:
+    def admin_or_refuse(self) -> Optional[str]:
         """Return the logged-in admin's username, or reply 401 or 403 and return None."""
         username = session_username(self.session_token())
         if username is None:
@@ -893,7 +897,7 @@ class WebHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or urlsplit(origin).netloc == self.headers.get("Host")
 
-    def read_json_body(self) -> object:
+    def read_json_body(self) -> Optional[dict]:
         """Return the request's JSON object, or reply with an error and return None."""
         try:
             length = int(self.headers.get("Content-Length", ""))
@@ -957,11 +961,11 @@ class WebHandler(BaseHTTPRequestHandler):
         with open(os.path.join(STATIC_FOLDER, file_name), "rb") as file:
             self.send_body(200, content_type, file.read())
 
-    def send_json(self, status: int, body: dict, cookie: str = None) -> None:
+    def send_json(self, status: int, body: dict, cookie: Optional[str] = None) -> None:
         self.send_body(status, "application/json", json.dumps(body).encode("utf-8"), cookie)
 
-    def send_body(self, status: int, content_type: str, payload: bytes, cookie: str = None,
-                  extra_headers: dict = None) -> None:
+    def send_body(self, status: int, content_type: str, payload: bytes, cookie: Optional[str] = None,
+                  extra_headers: Optional[dict] = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))

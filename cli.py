@@ -15,6 +15,7 @@ from a terminal you already have open does not need it.
 """
 
 import argparse  # reads which command was asked for
+from typing import Optional  # type hints only
 
 # The shared networking code used by every client.
 from common import IN_USE, NOT_IN_USE, STATUSES, generate_asset_tags, new_register_request, send_request
@@ -129,7 +130,7 @@ def prompt_for_changes(asset: dict) -> dict:
     return changes
 
 
-def prompt_for_request(asset: dict) -> object:
+def prompt_for_request(asset: dict) -> Optional[dict]:
     """Ask the user what to do, returning the request, or None if they cancel.
 
     The request says which version of the asset the user was shown. If someone else

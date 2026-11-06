@@ -37,6 +37,7 @@ import argparse   # reads the --backup option
 import os         # os.path finds the data file
 import threading  # runs the heartbeats alongside the clients
 import time       # waits between heartbeats
+from typing import Optional  # type hints only
 
 import common
 import node
@@ -103,9 +104,10 @@ def apply_change(request: dict) -> dict:
         if node.accepts_writes:
             return node.error_reply(NOT_STANDBY, f"The {node.ROLE} server has taken over")
 
-        seq = request.get("seq")
-        if seq != node.last_seq + 1:
-            return node.error_reply(OUT_OF_SYNC, f"Expected change {node.last_seq + 1}, but received {seq}")
+        expected = node.last_seq + 1
+        if request.get("seq") != expected:
+            return node.error_reply(OUT_OF_SYNC, f"Expected change {expected}, but received {request.get('seq')}")
+        seq = expected
 
         previous = (list(node.assets), dict(node.deleted_ids), dict(node.deleted_at))
 
@@ -261,7 +263,7 @@ def is_valid_peer_asset(record: object) -> bool:
     )
 
 
-def merge_state(peer_assets: list, peer_deleted: dict, peer_deleted_at: dict = None) -> int:
+def merge_state(peer_assets: list, peer_deleted: dict, peer_deleted_at: Optional[dict] = None) -> int:
     """Combine a later server's data into this server's, returning how many records
     changed. The caller must hold the lock.
 
@@ -464,7 +466,7 @@ def watch_followers() -> None:
 
 # ---- Starting up ----
 
-def main(argv: list = None) -> None:
+def main(argv: Optional[list] = None) -> None:
     """Start this server. `argv` is the command-line options, given by tests, or None to
     read them from the command line."""
     global my_index
