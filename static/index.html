@@ -72,10 +72,83 @@
     </form>
   </dialog>
 
+  <dialog id="add-dialog" class="dialog" aria-labelledby="add-title">
+    <div class="dialog-head">
+      <h2 id="add-title">Add an asset</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close">&times;</button>
+    </div>
+    <p id="add-message" class="dialog-message problem" role="alert"></p>
+    <form id="add-form" class="dialog-form">
+      <label class="wide">
+        Description
+        <input name="description" required maxlength="1000" placeholder="Dell Latitude 5440 laptop">
+      </label>
+      <label>
+        Category
+        <input name="category" required maxlength="1000" placeholder="IT Equipment">
+      </label>
+      <label>
+        Location
+        <input name="location" required maxlength="1000" placeholder="Site A - IT Store">
+      </label>
+      <label>
+        Status
+        <select name="status">
+          <option>In Use</option>
+          <option>Not In Use</option>
+        </select>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button id="add-button" type="submit">Add asset</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-panel" class="dialog" aria-labelledby="edit-heading">
+    <div class="dialog-head">
+      <h2 id="edit-heading">Edit an asset</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close">&times;</button>
+    </div>
+    <p id="edit-message" class="dialog-message problem" role="alert"></p>
+    <form id="edit-form" class="dialog-form">
+      <label class="wide">
+        Description
+        <input name="description" required maxlength="1000">
+      </label>
+      <label>
+        Category
+        <input name="category" required maxlength="1000">
+      </label>
+      <label>
+        Location
+        <input name="location" required maxlength="1000">
+      </label>
+      <label>
+        Status
+        <select name="status">
+          <option>In Use</option>
+          <option>Not In Use</option>
+        </select>
+      </label>
+      <div class="dialog-actions">
+        <button id="edit-cancel" type="button" class="secondary">Cancel</button>
+        <button id="edit-button" type="submit">Save changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <p id="action-message" class="toast" role="status"></p>
+
   <main>
 
     <section id="login-section" hidden>
       <form id="login-form" class="panel login-form">
+        <div class="login-head">
+          <span class="login-mark" aria-hidden="true"></span>
+          <h2>Sign in</h2>
+          <p>Use the account you were given for the asset system.</p>
+        </div>
         <label>
           Username
           <input id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
@@ -90,74 +163,33 @@
     </section>
 
     <section id="app-section" hidden>
-      <div class="stats">
-        <div class="stat panel"><span class="stat-label">Total assets</span><strong id="stat-total">0</strong></div>
-        <div class="stat panel"><span class="stat-label">In use</span><strong id="stat-in-use">0</strong></div>
-        <div class="stat panel"><span class="stat-label">Not in use</span><strong id="stat-not-in-use">0</strong></div>
-        <div class="stat panel"><span class="stat-label">Answered by</span><strong id="stat-server">-</strong></div>
+      <div class="page-title">
+        <div>
+          <h2>Assets</h2>
+          <p id="message" role="status">Loading...</p>
+        </div>
+        <button id="open-add" type="button" class="primary-action">
+          <span class="plus" aria-hidden="true">+</span> Add asset
+        </button>
       </div>
-      <p id="message" role="status">Loading...</p>
-      <details class="panel add-panel">
-        <summary>Add an asset</summary>
-        <form id="add-form" class="add-form">
-          <label>
-            Description
-            <input name="description" required maxlength="1000" placeholder="Dell Latitude 5440 laptop">
-          </label>
-          <label>
-            Category
-            <input name="category" required maxlength="1000" placeholder="IT Equipment">
-          </label>
-          <label>
-            Location
-            <input name="location" required maxlength="1000" placeholder="Site A - IT Store">
-          </label>
-          <label>
-            Status
-            <select name="status">
-              <option>In Use</option>
-              <option>Not In Use</option>
-            </select>
-          </label>
-          <button id="add-button" type="submit">Add asset</button>
-        </form>
-      </details>
-      <section id="edit-panel" class="panel edit-panel" hidden>
-        <h2 id="edit-heading">Edit an asset</h2>
-        <form id="edit-form" class="add-form">
-          <label>
-            Description
-            <input name="description" required maxlength="1000">
-          </label>
-          <label>
-            Category
-            <input name="category" required maxlength="1000">
-          </label>
-          <label>
-            Location
-            <input name="location" required maxlength="1000">
-          </label>
-          <label>
-            Status
-            <select name="status">
-              <option>In Use</option>
-              <option>Not In Use</option>
-            </select>
-          </label>
-          <div class="edit-buttons">
-            <button id="edit-button" type="submit">Save changes</button>
-            <button id="edit-cancel" type="button" class="secondary">Cancel</button>
-          </div>
-        </form>
-      </section>
-      <p id="action-message" role="alert"></p>
-      <form id="filters" class="filters">
-        <label>
-          Search
-          <input id="search" type="search" placeholder="Description, location, tags...">
+
+      <div class="stats">
+        <div class="stat panel stat-total"><span class="stat-label">Total assets</span><strong id="stat-total">0</strong></div>
+        <div class="stat panel stat-in-use"><span class="stat-label">In use</span><strong id="stat-in-use">0</strong></div>
+        <div class="stat panel stat-not-in-use"><span class="stat-label">Not in use</span><strong id="stat-not-in-use">0</strong></div>
+        <div class="stat panel stat-server-card">
+          <span class="stat-label">Answered by</span>
+          <strong id="stat-server" class="server-pill">-</strong>
+        </div>
+      </div>
+
+      <form id="filters" class="filters panel">
+        <label class="search-field">
+          <span class="visually-hidden">Search</span>
+          <input id="search" type="search" placeholder="Search descriptions, locations, tags...">
         </label>
-        <label>
-          Status
+        <label class="status-field">
+          <span class="visually-hidden">Status</span>
           <select id="status-filter">
             <option value="">All statuses</option>
           </select>

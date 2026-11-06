@@ -1,44 +1,51 @@
 /* Follows the viewer's light or dark setting. */
 :root {
   color-scheme: light dark;
-  --background: #f3f4f8;
+  --background: #f4f5fa;
+  --background-glow: rgba(99, 102, 241, 0.10);
   --surface: #ffffff;
-  --surface-raised: #f8f9fc;
-  --text: #1a1d29;
+  --surface-raised: #f7f8fc;
+  --text: #171a26;
   --muted: #5d6478;
-  --border: #e1e4ec;
-  --accent: #4338ca;
-  --accent-hover: #3730a3;
+  --border: #e3e6ef;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef0ff;
   --on-accent: #ffffff;
   --problem: #b3261e;
-  --good: #116a3e;
-  --good-background: #e0f4e8;
-  --warning: #8a5300;
-  --warning-background: #fbeed5;
-  --neutral-background: #eceef3;
-  --shadow: 0 1px 2px rgba(26, 29, 41, 0.05), 0 4px 16px rgba(26, 29, 41, 0.06);
-  --shadow-large: 0 4px 12px rgba(26, 29, 41, 0.08), 0 16px 48px rgba(26, 29, 41, 0.16);
+  --problem-soft: #fdecea;
+  --good: #11804a;
+  --good-background: #def5e8;
+  --warning: #9a5b00;
+  --warning-background: #fcf0d6;
+  --neutral-background: #eceef4;
+  --shadow: 0 1px 2px rgba(23, 26, 38, 0.04), 0 4px 14px rgba(23, 26, 38, 0.05);
+  --shadow-large: 0 4px 12px rgba(23, 26, 38, 0.08), 0 18px 48px rgba(23, 26, 38, 0.18);
+  --radius: 14px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #101218;
-    --surface: #1a1d26;
-    --surface-raised: #22262f;
-    --text: #e8eaf0;
-    --muted: #a2a9b8;
-    --border: #2f3440;
+    --background: #0e1016;
+    --background-glow: rgba(129, 140, 248, 0.10);
+    --surface: #181b24;
+    --surface-raised: #20242f;
+    --text: #e9ebf2;
+    --muted: #a0a7b7;
+    --border: #2c313d;
     --accent: #a5b4fc;
     --accent-hover: #c7d2fe;
+    --accent-soft: #262b45;
     --on-accent: #14162a;
     --problem: #ff9d94;
+    --problem-soft: #3a1d1b;
     --good: #86e0ad;
-    --good-background: #17352a;
+    --good-background: #163428;
     --warning: #f5c77a;
-    --warning-background: #3b2d14;
-    --neutral-background: #2a2f3a;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
-    --shadow-large: 0 4px 12px rgba(0, 0, 0, 0.35), 0 16px 48px rgba(0, 0, 0, 0.45);
+    --warning-background: #3a2c12;
+    --neutral-background: #282d39;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 14px rgba(0, 0, 0, 0.22);
+    --shadow-large: 0 4px 12px rgba(0, 0, 0, 0.35), 0 18px 48px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -48,8 +55,11 @@
 }
 
 body {
+  min-height: 100vh;
   margin: 0;
-  background: var(--background);
+  background:
+    radial-gradient(1200px 400px at 50% -120px, var(--background-glow), transparent),
+    var(--background);
   color: var(--text);
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   line-height: 1.45;
@@ -58,7 +68,12 @@ body {
 main {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 0 16px 40px;
+  padding: 0 16px 48px;
+}
+
+h2,
+h3 {
+  letter-spacing: -0.01em;
 }
 
 /* ---- The bar across the top, with the account menu at its right ---- */
@@ -67,9 +82,10 @@ main {
   position: sticky;
   top: 0;
   z-index: 10;
-  margin-bottom: 20px;
-  background: var(--surface);
+  margin-bottom: 28px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
   border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
 }
 
 .topbar-inner {
@@ -79,7 +95,7 @@ main {
   gap: 12px;
   max-width: 1240px;
   margin: 0 auto;
-  padding: 12px 16px;
+  padding: 10px 16px;
 }
 
 .brand {
@@ -87,19 +103,21 @@ main {
   align-items: center;
   gap: 10px;
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 1.15rem;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 
 /* A small mark beside the title, drawn here so the page needs no image files. */
-.brand::before {
+.brand::before,
+.login-mark {
   content: "";
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
-  background: var(--accent);
-  box-shadow: inset 0 0 0 5px var(--accent), inset 0 0 0 7px var(--on-accent);
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  box-shadow: inset 0 0 0 6px transparent, inset 0 0 0 8px rgba(255, 255, 255, 0.85);
 }
 
 .account-menu {
@@ -110,7 +128,7 @@ button.account-toggle {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 5px 10px 5px 5px;
+  padding: 4px 10px 4px 4px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
@@ -137,6 +155,12 @@ button.account-toggle[aria-expanded="true"] {
   border-right: 2px solid var(--muted);
   border-bottom: 2px solid var(--muted);
   transform: rotate(45deg);
+  transition: transform 0.15s;
+}
+
+[aria-expanded="true"] .chevron {
+  margin: 3px 2px 0 0;
+  transform: rotate(-135deg);
 }
 
 /* A round badge with the person's initial. */
@@ -147,15 +171,15 @@ button.account-toggle[aria-expanded="true"] {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  color: #ffffff;
   font-size: 0.85rem;
   font-weight: 700;
 }
 
 .avatar-large {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   font-size: 1.1rem;
 }
 
@@ -164,15 +188,15 @@ button.account-toggle[aria-expanded="true"] {
   border-radius: 999px;
   background: var(--neutral-background);
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 .role-chip.admin {
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* The small window that drops down from the account button. */
@@ -180,12 +204,13 @@ button.account-toggle[aria-expanded="true"] {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  width: 280px;
+  width: 290px;
   padding: 8px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-large);
+  animation: appear 0.12s ease-out;
 }
 
 .popover-head {
@@ -220,6 +245,504 @@ button.menu-item:hover {
   color: var(--accent);
 }
 
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* ---- Forms and buttons ---- */
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+input,
+select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 400;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+input:hover,
+select:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+input:focus,
+select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The column heading buttons have their own, plainer style further down. */
+button {
+  padding: 9px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
+}
+
+button:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button.secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+button.secondary:hover {
+  border-color: var(--accent);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+button.delete {
+  border-color: transparent;
+  background: none;
+  color: var(--problem);
+}
+
+button.delete:hover {
+  border-color: var(--problem-soft);
+  background: var(--problem-soft);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.plus {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.problem {
+  color: var(--problem);
+  font-weight: 600;
+}
+
+.problem:empty {
+  display: none;
+}
+
+/* Read out by screen readers, but not shown. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.panel {
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* ---- Logging in ---- */
+
+#login-section {
+  display: flex;
+  justify-content: center;
+  padding-top: 8vh;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 380px;
+  box-sizing: border-box;
+  padding: 32px;
+  box-shadow: var(--shadow-large);
+}
+
+.login-head {
+  margin-bottom: 4px;
+}
+
+.login-mark {
+  display: block;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 9px transparent, inset 0 0 0 12px rgba(255, 255, 255, 0.85);
+}
+
+.login-head h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.login-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.login-form button {
+  padding: 11px 16px;
+}
+
+.login-form .problem {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* ---- The page heading and summary ---- */
+
+.page-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.page-title h2 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+#message {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+#message.problem {
+  color: var(--problem);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.stat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  padding-left: 22px;
+}
+
+/* A coloured strip down the left of each summary card. */
+.stat::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--accent);
+}
+
+.stat-in-use::before {
+  background: var(--good);
+}
+
+.stat-not-in-use::before {
+  background: var(--warning);
+}
+
+.stat-server-card::before {
+  background: var(--muted);
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat strong {
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Which server answered, as a coloured pill. The backup answering means the primary is
+   down, so it stands out. */
+.stat strong.server-pill {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 3px 12px 3px 10px;
+  border-radius: 999px;
+  background: var(--neutral-background);
+  font-size: 1rem;
+  text-transform: capitalize;
+}
+
+.server-pill::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+
+.server-pill.server-primary {
+  background: var(--good-background);
+  color: var(--good);
+}
+
+.server-pill.server-backup {
+  background: var(--warning-background);
+  color: var(--warning);
+}
+
+.server-pill.server-none {
+  background: var(--problem-soft);
+  color: var(--problem);
+}
+
+/* ---- Search and filter ---- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px;
+}
+
+.search-field {
+  flex: 1 1 260px;
+}
+
+.status-field {
+  flex: 0 1 200px;
+}
+
+/* A magnifying glass inside the search box, drawn here so no image is needed. */
+#search {
+  padding-left: 38px;
+  background-image:
+    radial-gradient(circle at 15px 19px, transparent 5px, var(--muted) 5.5px, var(--muted) 7px, transparent 7.5px),
+    linear-gradient(45deg, transparent 47%, var(--muted) 47%, var(--muted) 57%, transparent 57%);
+  background-size: 100% 100%, 6px 6px;
+  background-position: 0 0, 20px 24px;
+  background-repeat: no-repeat;
+}
+
+/* ---- The table ---- */
+
+/* A wide table scrolls inside this box, so a phone's page itself does not scroll sideways. */
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+table {
+  width: 100%;
+  min-width: 1100px;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+th button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+th button:hover {
+  border: 0;
+  background: none;
+  color: var(--accent);
+}
+
+th[aria-sort] {
+  color: var(--accent);
+}
+
+th[aria-sort="ascending"] button::after {
+  content: " \25B2";
+}
+
+th[aria-sort="descending"] button::after {
+  content: " \25BC";
+}
+
+tbody tr {
+  transition: background-color 0.1s;
+}
+
+tbody tr:hover {
+  background: var(--surface-raised);
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td {
+  overflow-wrap: break-word;
+}
+
+/* Keep IDs, statuses and dates on one line. */
+td:first-child,
+td:nth-child(5),
+td:nth-child(7) {
+  white-space: nowrap;
+}
+
+td:first-child {
+  color: var(--accent);
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+td:nth-child(2) {
+  font-weight: 600;
+}
+
+td:nth-child(7) {
+  color: var(--muted);
+}
+
+td.tags {
+  max-width: 260px;
+}
+
+.tag {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--neutral-background);
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+td.actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+td.actions button {
+  padding: 5px 12px;
+  font-size: 0.85rem;
+}
+
+td.actions button + button {
+  margin-left: 6px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--neutral-background);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.status-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-badge.in-use {
+  background: var(--good-background);
+  color: var(--good);
+}
+
+.status-badge.not-in-use {
+  background: var(--warning-background);
+  color: var(--warning);
+}
+
 /* ---- Windows that open over the page ---- */
 
 .dialog {
@@ -230,13 +753,16 @@ button.menu-item:hover {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 18px;
   box-shadow: var(--shadow-large);
 }
 
+.dialog[open] {
+  animation: appear 0.15s ease-out;
+}
+
 .dialog::backdrop {
-  background: rgba(16, 18, 24, 0.45);
-  backdrop-filter: blur(2px);
+  background: rgba(14, 16, 22, 0.55);
 }
 
 .dialog-head {
@@ -260,12 +786,18 @@ button.menu-item:hover {
 }
 
 .dialog-message {
-  margin: 12px 20px 0;
+  margin: 14px 20px 0;
   font-size: 0.9rem;
 }
 
 .dialog-message:empty {
   display: none;
+}
+
+.dialog-message.problem {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--problem-soft);
 }
 
 button.icon-button {
@@ -285,6 +817,25 @@ button.icon-button:hover {
   color: var(--text);
 }
 
+.dialog-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 16px 20px 20px;
+}
+
+.dialog-form .wide {
+  grid-column: 1 / -1;
+}
+
+.dialog-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .account-list {
   margin: 0;
   padding: 8px 12px;
@@ -293,7 +844,7 @@ button.icon-button:hover {
 
 .account-row {
   display: grid;
-  grid-template-columns: auto 1fr 120px 72px;
+  grid-template-columns: auto 1fr 120px 76px;
   align-items: center;
   gap: 12px;
   padding: 8px;
@@ -319,18 +870,36 @@ button.icon-button:hover {
   padding: 6px 8px;
 }
 
-.dialog-form {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 14px 20px 20px;
+.account-row button.delete {
+  padding: 5px 10px;
+  font-size: 0.85rem;
 }
 
-.dialog-actions {
-  display: flex;
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-  gap: 8px;
+/* ---- The notice in the corner after an action ---- */
+
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 20;
+  max-width: min(420px, calc(100vw - 40px));
+  margin: 0;
+  padding: 12px 16px 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--good);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-large);
+  font-size: 0.92rem;
+  animation: appear 0.15s ease-out;
+}
+
+.toast.problem {
+  border-left-color: var(--problem);
+}
+
+.toast:empty {
+  display: none;
 }
 
 @media (max-width: 520px) {
@@ -345,340 +914,8 @@ button.icon-button:hover {
   .account-name {
     display: none;
   }
-}
 
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.stat-label {
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-
-.stat strong {
-  font-size: 1.5rem;
-  font-weight: 700;
-  text-transform: capitalize;
-}
-
-/* The backup answering means the primary is down, so it should stand out. */
-.stat strong.server-backup {
-  color: var(--warning);
-}
-
-#message {
-  margin: 0 0 16px;
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-.problem,
-#message.problem {
-  color: var(--problem);
-  font-weight: 600;
-}
-
-.problem:empty,
-#action-message:empty {
-  display: none;
-}
-
-#action-message {
-  margin: 0 0 16px;
-  font-size: 0.92rem;
-}
-
-.panel {
-  padding: 16px 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-}
-
-/* The login form sits alone in the middle of the page. */
-#login-section {
-  display: flex;
-  justify-content: center;
-  padding-top: 8vh;
-}
-
-.login-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  width: 100%;
-  max-width: 360px;
-  box-sizing: border-box;
-  padding: 28px;
-}
-
-.login-form .problem {
-  margin: 0;
-  font-size: 0.9rem;
-}
-
-.add-panel {
-  margin-bottom: 12px;
-}
-
-.add-panel summary {
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.add-panel summary:hover {
-  color: var(--accent);
-}
-
-.edit-panel {
-  margin-bottom: 12px;
-  border-color: var(--accent);
-}
-
-.edit-panel h2 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.edit-buttons {
-  display: flex;
-  gap: 8px;
-}
-
-td.actions {
-  white-space: nowrap;
-}
-
-td.actions button + button {
-  margin-left: 6px;
-}
-
-.add-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  align-items: end;
-  margin-top: 14px;
-}
-
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin: 16px 0;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-.filters label {
-  flex: 1 1 200px;
-  max-width: 400px;
-}
-
-input,
-select {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.95rem;
-  font-weight: 400;
-}
-
-input:focus-visible,
-select:focus-visible,
-button:focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* The column heading buttons have their own, plainer style further down. */
-button {
-  padding: 9px 16px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font: inherit;
-  font-size: 0.92rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
-}
-
-button:hover {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-}
-
-button.secondary {
-  padding: 6px 12px;
-  border-color: var(--border);
-  background: var(--surface);
-  color: var(--text);
-}
-
-button.secondary:hover {
-  border-color: var(--accent);
-  background: var(--surface);
-  color: var(--accent);
-}
-
-button.delete {
-  padding: 4px 10px;
-  border-color: transparent;
-  background: none;
-  color: var(--problem);
-  font-size: 0.85rem;
-}
-
-button.delete:hover {
-  border-color: var(--problem);
-  background: none;
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* Read out by screen readers, but not shown. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-/* A wide table scrolls inside this box, so a phone's page itself does not scroll sideways. */
-.table-wrap {
-  overflow-x: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-}
-
-table {
-  width: 100%;
-  min-width: 1100px;
-  border-collapse: collapse;
-  font-size: 0.92rem;
-}
-
-th,
-td {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-  vertical-align: top;
-}
-
-th {
-  background: var(--surface-raised);
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-th button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-weight: inherit;
-  cursor: pointer;
-}
-
-th button:hover {
-  border: 0;
-  background: none;
-  color: var(--accent);
-}
-
-th[aria-sort] {
-  color: var(--accent);
-}
-
-th[aria-sort="ascending"] button::after {
-  content: " \25B2";
-}
-
-th[aria-sort="descending"] button::after {
-  content: " \25BC";
-}
-
-tbody tr:hover {
-  background: var(--surface-raised);
-}
-
-tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-/* Keep IDs, statuses and dates on one line, and let long unbroken text wrap rather than overflow. */
-td:first-child,
-td:nth-child(5),
-td:nth-child(7) {
-  white-space: nowrap;
-}
-
-td:first-child {
-  font-weight: 600;
-}
-
-td:nth-child(6) {
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-td {
-  overflow-wrap: break-word;
-}
-
-.status-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: var(--neutral-background);
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-
-.status-badge.in-use {
-  background: var(--good-background);
-  color: var(--good);
-}
-
-.status-badge.not-in-use {
-  background: var(--warning-background);
-  color: var(--warning);
+  .page-title h2 {
+    font-size: 1.3rem;
+  }
 }

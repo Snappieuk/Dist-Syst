@@ -33,6 +33,7 @@ const actionMessage = document.getElementById("action-message");
 const accountForm = document.getElementById("account-form");
 const accountButton = document.getElementById("account-button");
 const editPanel = document.getElementById("edit-panel");
+const addDialog = document.getElementById("add-dialog");
 const editHeading = document.getElementById("edit-heading");
 const editForm = document.getElementById("edit-form");
 const editButton = document.getElementById("edit-button");
@@ -326,15 +327,22 @@ function startEdit(asset) {
   for (const field of EDITABLE_FIELDS) {
     editForm.elements[field].value = asset[field];
   }
-  editPanel.hidden = false;
+  editPanel.showModal();
   editForm.elements.description.focus();
 }
 
+// Closing the window by any route, including Escape, forgets the asset being edited.
 function stopEdit() {
+  if (editPanel.open) {
+    editPanel.close();
+  }
+}
+
+editPanel.addEventListener("close", () => {
   editingAsset = null;
   editForm.reset();
-  editPanel.hidden = true;
-}
+  document.getElementById("edit-message").textContent = "";
+});
 
 async function saveEdit(event) {
   event.preventDefault();
@@ -373,7 +381,8 @@ async function saveEdit(event) {
     stopEdit();
     showActionResult(`Saved the changes to ${asset.asset_id}`);
   } catch (error) {
-    showActionResult(`Could not save the changes to ${asset.asset_id}: ${error.message}`, true);
+    document.getElementById("edit-message").textContent =
+      `Could not save the changes to ${asset.asset_id}: ${error.message}`;
   } finally {
     editButton.disabled = false;
   }
@@ -416,8 +425,9 @@ function showStats() {
 
   const server = document.getElementById("stat-server");
   server.textContent = loadError || !servedBy ? "No server" : servedBy;
+  server.classList.toggle("server-primary", !loadError && servedBy === "primary");
   server.classList.toggle("server-backup", !loadError && servedBy === "backup");
-  server.classList.toggle("problem", loadError !== "");
+  server.classList.toggle("server-none", loadError !== "" || !servedBy);
 }
 
 function showMessage(visibleCount) {
@@ -442,6 +452,14 @@ function showAssets() {
       const cell = document.createElement("td");
       if (column === "status") {
         cell.append(statusBadge(asset.status));
+      } else if (column === "tags") {
+        cell.className = "tags";
+        cell.append(...asset.tags.map((tag) => {
+          const chip = document.createElement("span");
+          chip.className = "tag";
+          chip.textContent = tag;
+          return chip;
+        }));
       } else {
         cell.textContent = cellText(asset, column);
       }
@@ -488,8 +506,8 @@ function showLogin() {
   appSection.hidden = true;
   account.hidden = true;
   setMenuOpen(false);
-  if (accountsDialog.open) {
-    accountsDialog.close();
+  for (const dialog of document.querySelectorAll("dialog[open]")) {
+    dialog.close();
   }
   showAccount("", "");
   loginSection.hidden = false;
@@ -530,9 +548,15 @@ async function logOut() {
   }
 }
 
+// Results appear as a small notice in the corner, which goes by itself after a while.
+let actionTimer = null;
 function showActionResult(text, isProblem = false) {
+  clearTimeout(actionTimer);
   actionMessage.textContent = text;
   actionMessage.classList.toggle("problem", isProblem);
+  if (text) {
+    actionTimer = setTimeout(() => showActionResult(""), isProblem ? 9000 : 5000);
+  }
 }
 
 function newRequestId() {
@@ -567,10 +591,11 @@ async function addAsset(event) {
     }
     unconfirmedAdd = null;
     addForm.reset();
+    addDialog.close();
     showActionResult(`Added ${body.asset.asset_id}`);
     await loadAssets();
   } catch (error) {
-    showActionResult(`Could not add the asset: ${error.message}`, true);
+    document.getElementById("add-message").textContent = `Could not add the asset: ${error.message}`;
   } finally {
     addButton.disabled = false;
   }
@@ -624,6 +649,16 @@ accountForm.addEventListener("submit", createAccount);
 accountToggle.addEventListener("click", () => setMenuOpen(accountPopover.hidden));
 manageAccountsButton.addEventListener("click", openAccounts);
 accountsClose.addEventListener("click", () => accountsDialog.close());
+document.getElementById("open-add").addEventListener("click", () => {
+  document.getElementById("add-message").textContent = "";
+  addDialog.showModal();
+  addForm.elements.description.focus();
+});
+
+// Every Cancel and close button in a window closes the window it is in.
+for (const button of document.querySelectorAll("[data-close]")) {
+  button.addEventListener("click", () => button.closest("dialog").close());
+}
 editForm.addEventListener("submit", saveEdit);
 editCancel.addEventListener("click", stopEdit);
 
