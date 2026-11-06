@@ -18,6 +18,21 @@ namespace AssetApp
         readonly StatusStrip statusBar = new StatusStrip();
         readonly ToolStripStatusLabel statusText = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
 
+        // A red notice at the right of the status bar, shown only while no server answers.
+        readonly ToolStripStatusLabel offlineText = new ToolStripStatusLabel {
+            Text = "  Cannot reach the server - showing the last data. Retrying...  ",
+            ForeColor = Color.White, BackColor = Color.Firebrick, Visible = false };
+        bool offline;
+
+        // Called after every attempt to talk to the server: true if it answered.
+        void SetOnline(bool online)
+        {
+            offline = !online;
+            offlineText.Visible = !online;
+            if (!online) Text = "Asset Management - " + Session.Username + " (" + Session.Role + ") - OFFLINE";
+            else Text = "Asset Management - " + Session.Username + " (" + Session.Role + ")";
+        }
+
         // Assets tab
         readonly TextBox search = new TextBox { Width = 200 };
         readonly ComboBox statusFilter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
@@ -34,6 +49,7 @@ namespace AssetApp
             StartPosition = FormStartPosition.CenterScreen;
 
             statusBar.Items.Add(statusText);
+            statusBar.Items.Add(offlineText);
             Controls.Add(tabs);
             Controls.Add(statusBar);
             tabs.BringToFront();   // so the status bar keeps its place at the bottom
@@ -195,10 +211,12 @@ namespace AssetApp
                 SetBusy(false, "");
                 if (error != null)
                 {
+                    SetOnline(false);
                     statusText.Text = "Not connected.";
                     MessageBox.Show(this, error.Message, "Connection problem", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
+                SetOnline(true);
                 Dictionary<string, object> reply = (Dictionary<string, object>)results[0];
                 Dictionary<string, object> list = (Dictionary<string, object>)results[1];
 
@@ -261,7 +279,11 @@ namespace AssetApp
             delegate(Dictionary<string, object> list, Exception error)
             {
                 autoRefreshing = false;
-                if (error != null || busy || Form.ActiveForm != this || J.Text(list, "status") != "OK") return;
+                if (error != null) { SetOnline(false); return; }   // no box: it retries in 5 seconds
+                bool wasOffline = offline;
+                SetOnline(true);
+                if (wasOffline) statusText.Text = "Reconnected.";
+                if (busy || Form.ActiveForm != this || J.Text(list, "status") != "OK") return;
 
                 List<Dictionary<string, object>> fresh = J.Objects(list, "assets");
                 if (Signature(fresh) == Signature(assets)) return;
