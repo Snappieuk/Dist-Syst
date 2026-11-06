@@ -462,9 +462,12 @@ old downloads stop working and need downloading again. Anyone who can change the
 could hand out a different file, so serve the page only over a network you trust.
 
 **Windows app (.exe), no Python needed.** `clients\app\` holds the same desktop app written
-in C# (Windows Forms): login, Assets, Loans and Review tabs, add, edit, status, delete,
-history and check out / in, with the same search, failover and certificate pinning as
-`gui.py`. The web page's account menu has **Download Windows app (.exe)**. The server
+in C# (Windows Forms): login, Assets, Loans, People, Calendar and Review tabs, add, edit,
+status, delete, history and check out / in, with the same search, failover and certificate
+pinning as `gui.py`. It refreshes itself every few seconds. The Loans and People tabs have
+check-in buttons, a click on a person lists what they have out, and a click on a calendar
+day lists that day's loans. Items are shown by description rather than asset tag. If no
+server answers, a red notice appears in the status bar until one does. The web page's account menu has **Download Windows app (.exe)**. The server
 builds `AssetApp.exe` the first time with the C# compiler that comes with Windows (no
 SDK needed; only a Windows server can do this, otherwise the link says so), caches it in
 `data\`, and appends the server addresses and certificate fingerprint to the end of the
