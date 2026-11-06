@@ -464,41 +464,27 @@ button.primary-action {
   color: var(--problem);
 }
 
+/* The totals sit in one ruled strip, divided by thin lines, rather than separate cards.
+   The heavier line along the top is in the text colour. */
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 14px;
   margin-bottom: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--text);
 }
 
 .stat {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  overflow: hidden;
-  padding-left: 22px;
+  padding: 14px 18px;
+  border-right: 1px solid var(--border);
 }
 
-/* A coloured strip down the left of each summary card. */
-.stat::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  background: var(--accent);
-}
-
-.stat-in-use::before {
-  background: var(--good);
-}
-
-.stat-not-in-use::before {
-  background: var(--warning);
-}
-
-.stat-server-card::before {
-  background: var(--muted);
+.stat:last-child {
+  border-right: 0;
 }
 
 .stat-label {
@@ -512,6 +498,7 @@ button.primary-action {
 .stat strong {
   font-size: 1.8rem;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;  /* digits all the same width */
   letter-spacing: -0.02em;
 }
 
