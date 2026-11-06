@@ -43,6 +43,7 @@ from common import (
     UNSUPPORTED_VERSION,
     MessageTooLargeError,
     audit,
+    make_folder_for,
     configure_logging,
     generate_asset_tags,
     normalise_text,
@@ -170,6 +171,7 @@ def save_assets() -> None:
     temporary file, and os.replace() swaps it into place in one atomic step. The
     file on disk is therefore always a complete old or complete new version.
     """
+    make_folder_for(ASSETS_FILE)
     temp_path = ASSETS_FILE + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
         json.dump({"seq": last_seq, "assets": assets, "deleted": deleted_ids, "deleted_at": deleted_at}, file, indent=2)

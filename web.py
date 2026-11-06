@@ -69,7 +69,7 @@ STATIC_FILES = {
 
 # Where the single web password was stored before accounts were added. If this exists, it
 # is converted to an account once, then removed.
-PASSWORD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_password.json")
+PASSWORD_FILE = os.path.join(common.DATA_FOLDER, "web_password.json")
 
 # How many rounds of hashing a password gets. This is deliberately slow, so that someone
 # who obtained the file could only try a few guesses each second.
@@ -78,7 +78,7 @@ HASH_ITERATIONS = 600_000
 MINIMUM_PASSWORD_LENGTH = 8
 
 # Where each account's username and password hash are stored.
-USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_users.json")
+USERS_FILE = os.path.join(common.DATA_FOLDER, "web_users.json")
 
 # Usernames are short and plain, so they are easy to type and safe to display.
 USERNAME_PATTERN = re.compile(r"[a-z0-9._-]{3,32}")
@@ -221,6 +221,7 @@ def read_users_file() -> dict:
 def write_users_file(accounts: dict) -> None:
     """Store the accounts. The swap means a crash can't leave a damaged file, and other
     users of the machine can't read it on Linux and macOS."""
+    common.make_folder_for(USERS_FILE)
     temp_path = USERS_FILE + ".tmp"
     with os.fdopen(os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as file:
         json.dump(accounts, file, indent=2)

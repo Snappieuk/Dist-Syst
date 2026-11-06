@@ -23,7 +23,7 @@ import common
 import node
 from common import HEARTBEAT_TIMEOUT_SECONDS, request_from
 
-ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets.json")
+ASSETS_FILE = os.path.join(common.DATA_FOLDER, "assets.json")
 
 # How often the primary checks whether the backup needs bringing up to date.
 BACKUP_CHECK_SECONDS = 1

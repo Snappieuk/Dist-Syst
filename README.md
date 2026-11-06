@@ -41,8 +41,8 @@ rule still load, and can be changed to one of the two.
 
 | File | Purpose |
 |---|---|
-| `server.py` | The primary server. Accepts changes, puts them in order and copies each one to the backup. Stores its data in `assets.json`. |
-| `backup.py` | The backup server. Keeps its own copy of the data in `assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
+| `server.py` | The primary server. Accepts changes, puts them in order and copies each one to the backup. Stores its data in `data/assets.json`. |
+| `backup.py` | The backup server. Keeps its own copy of the data in `data/assets_backup.json`, sends heartbeats to the primary and takes over if the primary fails. |
 | `node.py` | Code used by both servers: the data, the rules for changing it and the network loop. |
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `send.py` | Registers a new asset. |
@@ -57,7 +57,7 @@ rule still load, and can be changed to one of the two.
 | `config.example.json` | An example of the optional settings file, `config.json`. |
 | `setup.py` | First-time setup, which creates the shared secret, the TLS certificate and the first web account, and a full reset with `--reset`. |
 | `requirements.txt` | The one package needed, `cryptography`, to create the certificate. |
-| `logs/` | Created as the programs run. Each program's own log file: `primary.log`, `backup.log`, `web.log` and `start.log`. |
+| `data/` | Created as the programs run, and ignored by git. Everything they create: the data files, the web accounts (`web_users.json`), the shared secret (`secret.key`), the certificate (`tls.pem`) and each program's log in `data/logs/`. |
 | `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py`, `test_tls.py`, `test_fill.py` | The automated tests. |
 
 ## Running it on one machine
@@ -175,7 +175,7 @@ couldn't listen on that name and wouldn't start.
 Then:
 
 1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` and
-   `tls.pem` it creates to every other machine, beside the code. Every machine must have the
+   `tls.pem` it creates to the `data/` folder beside the code on every other machine. Every machine must have the
    same two files, or its connections are refused.
 2. Run `python server.py` on the first machine and `python backup.py` on the second.
 3. Run clients or `web.py` anywhere that can reach both servers.
@@ -332,12 +332,12 @@ in a cookie that scripts can't read and other websites can't send. A wrong usern
 same reply as a wrong password, so neither reveals which accounts exist. After 5 failed
 logins in a row, on any usernames, logins are refused for a minute.
 
-`secret.key`, `tls.pem` and `web_users.json` are ignored by git and should never be shared
-publicly.
+`secret.key`, `tls.pem` and `web_users.json` are kept in `data/`, which git ignores. They
+should never be shared publicly.
 
 ## Logs
 
-Every program logs to the console and to its own file in `logs/`:
+Every program logs to the console and to its own file in `data/logs/`:
 
 | File | Written by | Records |
 |---|---|---|
@@ -386,7 +386,7 @@ sent, so for a registration it ties the record to the client's retries. Times ar
 Passwords and the shared secret are never logged, including the password `web.py` creates
 when nobody is at the keyboard, which is only printed. Anything a user typed, such as a
 description, is logged in quotes with line breaks shown as `\n`, so it can't fake an extra
-log line. The `logs/` folder is ignored by git, and a full reset deletes it.
+log line. The `data/` folder is ignored by git, and a full reset deletes the logs.
 
 ## Tests
 
@@ -407,7 +407,7 @@ part was checked separately in Microsoft Edge. `DistributedTest` runs `server.py
 programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
 it can't listen on. `test_demo.py` runs the whole demo against real servers.
 `test_logging.py` checks that the servers write separate files, that full files are replaced
-and that crashes are recorded. Tests write logs to temporary folders, never to `logs/`. Some
+and that crashes are recorded. Tests write logs to temporary folders, never to `data/logs/`. Some
 tests make a save fail on purpose, so you will see logged errors and tracebacks in the output.
 
 ## Distributed systems concepts used

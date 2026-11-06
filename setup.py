@@ -153,10 +153,12 @@ def reset() -> bool:
         except OSError as exc:
             failed.append(f"{os.path.basename(path)} ({exc})")
 
-    try:
-        os.rmdir(common.LOG_FOLDER)  # only succeeds if nothing else was put in it
-    except OSError:
-        pass
+    # Each rmdir only succeeds if nothing else was put in the folder.
+    for folder in (common.LOG_FOLDER, common.DATA_FOLDER):
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
 
     if failed:
         print("These could not be deleted, so the reset is not complete:")

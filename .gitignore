@@ -2,19 +2,9 @@
 __pycache__/
 *.pyc
 
-# Data created when the server runs
-assets.json
-assets_backup.json
-*.tmp
-
-# Each program's log file
-logs/
+# Everything the programs create as they run: the data, web accounts, the shared
+# secret and certificate (which must never be shared), and the logs
+data/
 
 # This machine's own settings. config.example.json shows what it can hold.
 config.json
-
-# Secrets created when the programs run, which must never be shared
-secret.key
-tls.pem
-web_password.json
-web_users.json

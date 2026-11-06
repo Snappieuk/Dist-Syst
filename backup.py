@@ -26,7 +26,7 @@ import node
 from common import HEARTBEAT_TIMEOUT_SECONDS, NOT_STANDBY, OUT_OF_SYNC, request_from
 
 # The backup keeps its own copy of the data, separate from the primary's.
-ASSETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets_backup.json")
+ASSETS_FILE = os.path.join(common.DATA_FOLDER, "assets_backup.json")
 
 # How often to ping the primary, and how many pings in a row must go unanswered before
 # taking over. Needing several means that one lost message does not cause a takeover.

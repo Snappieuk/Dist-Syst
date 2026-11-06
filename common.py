@@ -129,9 +129,21 @@ SERVERS = (parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS
 WEB_ADDRESS = (parse_address(os.environ[WEB_ADDRESS_VARIABLE], WEB_ADDRESS_VARIABLE)
                if os.environ.get(WEB_ADDRESS_VARIABLE) else _config.get("web_address", DEFAULT_WEB_ADDRESS))
 
+# Everything the programs create as they run goes in this one folder: the data files,
+# the web accounts, the shared secret, the certificate and the logs. Keeping it all in
+# one place keeps the code folder tidy, and git ignores the whole folder. Each program
+# creates the folder when it first writes something there.
+DATA_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+
+def make_folder_for(path: str) -> None:
+    """Create the folder a file is about to be written in, if it doesn't exist yet."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+
 # The key every program sends to prove it belongs to this system. It is created the first
 # time any program runs. To use several machines, copy this file to each of them.
-SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret.key")
+SECRET_FILE = os.path.join(DATA_FOLDER, "secret.key")
 
 _secret = None  # the key, once read, so the file is only read once
 
@@ -139,7 +151,7 @@ _secret = None  # the key, once read, so the file is only read once
 # file. Setup creates it, or the first program to run if setup hasn't. Like secret.key, it
 # must be copied to every machine. Clients trust this one certificate and nothing else, so
 # a server with any other certificate is refused, even one a public authority signed.
-TLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tls.pem")
+TLS_FILE = os.path.join(DATA_FOLDER, "tls.pem")
 TLS_CERTIFICATE_DAYS = 3650  # about 10 years, after which setup --reset makes a new one
 
 _tls_contexts = {}  # the client and server settings, once loaded, by side
@@ -147,7 +159,7 @@ _tls_contexts = {}  # the client and server settings, once loaded, by side
 # Where each program keeps its log file, named after it: primary.log, backup.log, web.log
 # and start.log. A file that reaches LOG_FILE_BYTES is renamed to name.log.1, the older
 # ones move up to name.log.2 and so on, and only LOG_FILE_COPIES old files are kept.
-LOG_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+LOG_FOLDER = os.path.join(DATA_FOLDER, "logs")
 LOG_NAMES = ("primary", "backup", "web", "start")
 LOG_FILE_BYTES = 1024 * 1024
 LOG_FILE_COPIES = 5
@@ -514,6 +526,7 @@ def shared_secret() -> str:
     global _secret
 
     if _secret is None:
+        make_folder_for(SECRET_FILE)
         try:
             file = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
@@ -577,6 +590,7 @@ def ensure_tls_file() -> str:
     """Return the path of the certificate file, creating it if this is the first program
     to run. Exclusive creation means that if the servers start at the same moment, only
     one creates it, and the others wait for it to be complete, so both use the same one."""
+    make_folder_for(TLS_FILE)
     try:
         file = os.open(TLS_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
