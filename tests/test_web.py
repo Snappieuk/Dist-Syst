@@ -1,12 +1,12 @@
 """
 Tests for the web interface.
 
-    python -m unittest -v test_web
+    python -m unittest -v tests.test_web
 
 These run a real asset server and a real web server, and make real HTTP requests, so
 they test the whole path from a browser to the data. The asset server uses a temporary
 data file and spare ports, so your real assets.json and accounts are never touched. The
-programs do share secret.key, which is created beside the code if it doesn't exist yet.
+programs do share secret.key, which is created in data/ if it doesn't exist yet.
 """
 
 import contextlib
@@ -27,7 +27,6 @@ import node
 import web
 
 # The project folder, where the real data, accounts and secret live.
-FOLDER = os.path.dirname(os.path.abspath(__file__))
 
 # These tests cause errors on purpose, so the logged warnings are only noise here.
 logging.getLogger("asset_web").setLevel(logging.ERROR)
@@ -851,7 +850,7 @@ class RoleTest(WebTestCase):
 
     def test_an_older_single_password_becomes_an_admin(self):
         os.remove(web.USERS_FILE)
-        self.assertNotEqual(os.path.dirname(web.PASSWORD_FILE), FOLDER)  # never the real file
+        self.assertNotEqual(os.path.dirname(web.PASSWORD_FILE), common.DATA_FOLDER)  # never the real file
         with open(web.PASSWORD_FILE, "w", encoding="utf-8") as file:
             json.dump(web.hash_password("old password"), file)
 

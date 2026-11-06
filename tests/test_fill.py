@@ -1,7 +1,7 @@
 """
 Tests for fill.py, which adds made-up assets.
 
-    python -m unittest -v test_fill
+    python -m unittest -v tests.test_fill
 
 These run real servers as separate programs on spare ports, with temporary data files,
 so your data is never touched.
@@ -16,7 +16,7 @@ from unittest import mock
 
 import common
 import fill
-from test_demo import ServerTestCase  # starts real servers on spare ports
+from tests.test_demo import ServerTestCase  # starts real servers on spare ports
 
 
 class MadeUpAssetTest(unittest.TestCase):

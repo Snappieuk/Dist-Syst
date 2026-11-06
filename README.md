@@ -58,7 +58,7 @@ rule still load, and can be changed to one of the two.
 | `setup.py` | First-time setup, which creates the shared secret, the TLS certificate and the first web account, and a full reset with `--reset`. |
 | `requirements.txt` | The one package needed, `cryptography`, to create the certificate. |
 | `data/` | Created as the programs run, and ignored by git. Everything they create: the data files, the web accounts (`web_users.json`), the shared secret (`secret.key`), the certificate (`tls.pem`) and each program's log in `data/logs/`. |
-| `test_system.py`, `test_web.py`, `test_start.py`, `test_setup.py`, `test_config.py`, `test_demo.py`, `test_logging.py`, `test_clients.py`, `test_tls.py`, `test_fill.py` | The automated tests. |
+| `tests/` | The automated tests, one file for each part of the system. |
 
 ## Running it on one machine
 
@@ -390,11 +390,13 @@ log line. The `data/` folder is ignored by git, and a full reset deletes the log
 
 ## Tests
 
+Run every test from the project folder with:
+
 ```
-python -m unittest -v test_system test_web test_start test_setup test_config test_demo test_logging test_clients test_tls test_fill
+python -m unittest
 ```
 
-Or run every test file at once with `python -m unittest discover -p "test_*.py"`.
+Or run one file, such as the web tests, with `python -m unittest -v tests.test_web`.
 
 The tests start real servers on spare ports and use temporary files for data and accounts,
 so yours aren't touched. They do use `secret.key` and `tls.pem`, and create them if they

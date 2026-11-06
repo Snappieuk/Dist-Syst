@@ -1,7 +1,7 @@
 """
 Tests for configuring where the servers run.
 
-    python -m unittest -v test_config
+    python -m unittest -v tests.test_config
 
 These never start a server. They check how the settings are read, including in real
 processes, because environment variables are read when a program starts.
@@ -21,7 +21,8 @@ from unittest import mock
 import common
 import node
 
-FOLDER = os.path.dirname(os.path.abspath(__file__))
+# The project folder, one above this tests folder.
+FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run_with(variables: dict, code: str) -> subprocess.CompletedProcess:

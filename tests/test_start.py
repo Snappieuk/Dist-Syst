@@ -1,7 +1,7 @@
 """
 Tests for the program that starts the whole system.
 
-    python -m unittest -v test_start
+    python -m unittest -v tests.test_start
 
 These run short stand-in programs rather than the real servers, and replace setup with a
 stand-in, so they do not need the system's ports and never touch your data.

@@ -1,7 +1,7 @@
 """
 Tests for the encryption of every connection to a server.
 
-    python -m unittest -v test_tls
+    python -m unittest -v tests.test_tls
 
 These run real servers as separate programs on spare ports, with temporary data files.
 They use the real tls.pem, creating it if it doesn't exist yet, as the other tests use
@@ -19,7 +19,8 @@ import unittest
 
 import common
 
-FOLDER = os.path.dirname(os.path.abspath(__file__))
+# The project folder, one above this tests folder.
+FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def spare_address() -> tuple:

@@ -1,7 +1,7 @@
 """
 Tests for the failover demonstration: stopping a server on request, and demo.py itself.
 
-    python -m unittest -v test_demo
+    python -m unittest -v tests.test_demo
 
 These run real servers as separate programs on spare ports, with temporary data files,
 so your data is never touched.
@@ -22,7 +22,8 @@ from unittest import mock
 import common
 import demo
 
-FOLDER = os.path.dirname(os.path.abspath(__file__))
+# The project folder, one above this tests folder.
+FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def spare_address() -> tuple:

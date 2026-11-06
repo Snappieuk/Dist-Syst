@@ -1,7 +1,7 @@
 """
 Tests for the log files.
 
-    python -m unittest -v test_logging
+    python -m unittest -v tests.test_logging
 
 Every log here is written to a temporary folder, so your real logs are never touched.
 """
@@ -20,7 +20,8 @@ from unittest import mock
 
 import common
 
-FOLDER = os.path.dirname(os.path.abspath(__file__))
+# The project folder, one above this tests folder.
+FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def spare_address() -> tuple:

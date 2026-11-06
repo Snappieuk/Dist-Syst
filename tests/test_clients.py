@@ -1,7 +1,7 @@
 """
 Tests for what the client programs offer the user.
 
-    python -m unittest -v test_clients
+    python -m unittest -v tests.test_clients
 
 These don't need a server. The GUI tests are skipped if no window can be opened.
 """
@@ -17,7 +17,8 @@ from unittest import mock
 import common
 import send
 
-FOLDER = os.path.dirname(os.path.abspath(__file__))
+# The project folder, one above this tests folder.
+FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def make_gui():

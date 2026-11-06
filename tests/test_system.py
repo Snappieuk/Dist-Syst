@@ -1,7 +1,7 @@
 """
 Tests for the Asset Management System.
 
-    python -m unittest -v test_system
+    python -m unittest -v tests.test_system
 
 These run real servers and talk to them over real TCP sockets, so they test the
 whole path a client uses. SystemTest runs one server on a background thread, and
@@ -1368,7 +1368,7 @@ class DistributedTest(unittest.TestCase):
         )
         process = subprocess.Popen(
             [sys.executable, "-c", code],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

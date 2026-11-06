@@ -1,7 +1,7 @@
 """
 Tests for first-time setup and the full reset.
 
-    python -m unittest -v test_setup
+    python -m unittest -v tests.test_setup
 
 Every file these use is in a temporary folder, so your real data, accounts and secrets
 are never touched, and a test that went wrong could not delete them.
@@ -155,7 +155,7 @@ class NoKeyboardTest(unittest.TestCase):
     CHECK = "import setup; print(setup.can_ask_questions())"
 
     def ask_with_input(self, stdin) -> str:
-        folder = os.path.dirname(os.path.abspath(__file__))
+        folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the project folder
         result = subprocess.run(
             [sys.executable, "-c", self.CHECK], cwd=folder, stdin=stdin,
             capture_output=True, text=True, timeout=30,
