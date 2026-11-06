@@ -28,6 +28,7 @@ import os         # os.replace() and os.fsync() make saving safe
 import socket     # provides the networking building blocks (sockets)
 import sys        # sys.exit() reports startup failures
 import threading  # gives each client a thread, and provides the lock
+from typing import Optional  # type hints only
 
 import accounts   # logins and tokens for clients without the shared secret (gui.py)
 import common     # common.SERVERS is read when a PING reply lists the servers
@@ -94,7 +95,7 @@ logger = logging.getLogger("asset_server")
 
 ROLE = "primary"         # the name of this node, sent with every reply
 ID_PREFIX = "AST-P"      # the range of asset IDs this node may issue
-ASSETS_FILE = None       # this node's own data file
+ASSETS_FILE: str = ""    # this node's own data file, set by the program that runs the node
 accepts_writes = True    # whether this node currently accepts changes from clients
 on_change = None         # called with each change, while holding the lock
 role_actions = {}        # requests only this role understands: {action: function}
@@ -276,7 +277,7 @@ def validate_asset(asset: object) -> dict:
 
     # Copying only the expected fields means any extra fields are dropped, including
     # any asset_id the client sent.
-    clean = {field: check_text(asset.get(field), field) for field in CLIENT_FIELDS}
+    clean: dict = {field: check_text(asset.get(field), field) for field in CLIENT_FIELDS}
     clean["status"] = check_status(clean["status"])
 
     # Made-up assets, such as those from tools/fill.py, say so, and get a "sample data"
@@ -290,7 +291,7 @@ def validate_asset(asset: object) -> dict:
     return clean
 
 
-def find_asset(asset_id: str) -> object:
+def find_asset(asset_id: str) -> Optional[int]:
     """Return the position of an asset in `assets`, or None. The caller must hold
     the lock."""
     for index, asset in enumerate(assets):
@@ -439,7 +440,7 @@ def register_asset(clean: dict, request_id: object) -> dict:
     return {"status": "OK", "stored": asset}
 
 
-def version_conflict(asset: dict, expected_version: object) -> object:
+def version_conflict(asset: dict, expected_version: object) -> Optional[dict]:
     """Return a CONFLICT reply if the asset has changed since the client read it.
 
     This is optimistic concurrency control. Without it, two people looking at the
@@ -574,7 +575,7 @@ def check_date(value: object, name: str) -> str:
         raise ValueError(f"{name} must be a date written as YYYY-MM-DD") from None
 
 
-def current_loan(asset: dict) -> object:
+def current_loan(asset: dict) -> Optional[dict]:
     """Return the loan an asset is out on, or None. Only the last loan can be unreturned."""
     loans = asset.get("loans") or []
     return loans[-1] if loans and loans[-1].get("returned") is None else None
@@ -598,7 +599,7 @@ def check_out_asset(asset_id: str, borrower: str, start: str, due: str, expected
         return save_update(index, previous, updated)
 
 
-def check_in_asset(asset_id: str, returned: str = None, expected_version: object = None) -> dict:
+def check_in_asset(asset_id: str, returned: Optional[str] = None, expected_version: object = None) -> dict:
     """Record an asset on loan as returned, today unless another date is given, and
     return the reply."""
     returned = returned or datetime.date.today().isoformat()
@@ -671,7 +672,8 @@ def check_search(request: dict) -> dict:
     return options
 
 
-def search_assets(candidates: list, query: str = "", status: str = None, offset: int = 0, limit: int = None) -> dict:
+def search_assets(candidates: list, query: str = "", status: Optional[str] = None, offset: int = 0,
+                  limit: Optional[int] = None) -> dict:
     """Return one page of the assets that match, and how many match in total.
 
     `query` is found anywhere in the ID, description, category, location or status,
@@ -791,7 +793,7 @@ def process_request(request: dict) -> dict:
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
-def check_token_request(request: dict) -> object:
+def check_token_request(request: dict) -> Optional[dict]:
     """Decide whether a request that carries a login token may go ahead. Returns an error
     reply if not, or None if it may, after naming the account as the request's "user" so
     the audit log says who made the change (whatever the client claimed)."""
