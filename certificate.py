@@ -1,8 +1,12 @@
 """
 Creates the TLS certificate that encrypts every connection to the servers.
 
-    python certificate.py            (create server.crt and server.key)
+    python certificate.py            (create server.crt and server.key, or show the fingerprint)
     python certificate.py --replace  (make a new pair, e.g. after changing a server address)
+
+It prints the certificate's fingerprint. Give it to the people using gui.py: the
+first time they connect, the GUI shows the server's fingerprint, and they should
+only trust it if the two match.
 
 The certificate is self-signed: rather than trusting a public certificate authority,
 every client trusts exactly this certificate (the certificate_file in config.json)
@@ -16,6 +20,7 @@ Needs the cryptography package: pip install -r requirements.txt
 """
 
 import datetime
+import hashlib
 import ipaddress
 import os
 import sys
@@ -76,15 +81,24 @@ def create_certificate(config: dict) -> None:
         file.write(certificate.public_bytes(serialization.Encoding.PEM))
 
 
+def fingerprint(config: dict) -> str:
+    """The certificate's SHA-256 fingerprint, formatted the way gui.py shows it."""
+    with open(common.config_path(config, config["certificate_file"]), "rb") as file:
+        der = x509.load_pem_x509_certificate(file.read()).public_bytes(serialization.Encoding.DER)
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
 def main(arguments: list) -> None:
     config = common.load_config()
     certificate_path = common.config_path(config, config["certificate_file"])
     if os.path.exists(certificate_path) and "--replace" not in arguments:
-        print(f"{certificate_path} already exists. To make a new one, run: python certificate.py --replace")
-        return
-    create_certificate(config)
-    print(f"Created {config['certificate_file']} and {config['private_key_file']}.")
-    print("Copy the certificate to every machine; keep the key on the server machines only.")
+        print(f"{config['certificate_file']} already exists. To make a new one, run: python certificate.py --replace")
+    else:
+        create_certificate(config)
+        print(f"Created {config['certificate_file']} and {config['private_key_file']}.")
+        print("Copy the certificate to every machine; keep the key on the server machines only.")
+    print(f"\nCertificate fingerprint (give this to GUI users to check):\n{fingerprint(config)}")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@
       "port": 65433
     }
   },
+  "listen_host": "0.0.0.0",
+  "discoverable": true,
   "max_message_bytes": 1048576,
   "client_timeout_seconds": 5,
   "server_timeout_seconds": 10,

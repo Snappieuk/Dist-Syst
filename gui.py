@@ -1,24 +1,53 @@
 """
-Tkinter graphical client for the Asset Management System.
+Tkinter client for the Asset Management System. A single file: copy it to any
+computer with Python 3.8+ and run it.
 
     python gui.py
 
-Log in, then register, view, search, edit and delete assets without typing any
-commands. Select a row to load it into the form, change it and press "Save changes".
-Only administrators can delete; the server enforces this, and the button is
-disabled for other users.
+On the login screen, enter the server's IP address or host name (add :port if it
+isn't the usual one), or press "Find servers" to look for them on the local
+network. "Check" tests an address before you log in. The backup address is
+optional; if it's given, the GUI moves to the backup when the primary can't be
+reached.
 
-Each request runs on a background thread, so the window never freezes while it
-waits for the server.
+Certificates: the first time you connect to a server, the GUI shows the
+fingerprint of its certificate and asks whether to trust it (trust on first use).
+After that it only accepts that exact certificate, so a different server at the
+same address is refused. Server addresses and trusted certificates are remembered
+in .asset_management_gui.json in your home folder.
+
+What you can do depends on your account; the server checks every request.
 """
 
+import hashlib
+import ipaddress
+import itertools
+import json
+import os
 import queue
+import re
+import socket
+import ssl
 import threading
+import time
 import tkinter as tk
+import uuid
 from tkinter import messagebox, ttk
 
-from common import ASSET_FIELDS, EDITABLE_FIELDS, STATUSES, new_request_id, send_request
+# ---- Must match the server (common.py and server.py) ----------------------------
+PROTOCOL_VERSION = 1
+MAX_MESSAGE_BYTES = 1048576
+ASSET_FIELDS = ("asset_id", "description", "category", "location", "status")
+EDITABLE_FIELDS = ("description", "category", "location", "status")
+STATUSES = ("In Use", "Not In Use")
+DEFAULT_PORTS = {"primary": 65432, "backup": 65433}
+DISCOVERY_REQUEST = b"ASSET_MANAGEMENT_DISCOVER"
+SERVICE_NAME = "asset-management"
+# ---------------------------------------------------------------------------------
 
+TIMEOUT_SECONDS = 5
+DISCOVERY_SECONDS = 1.5
+SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".asset_management_gui.json")
 PAGE_SIZE = 20
 ANY_FIELD = "Any field"
 LABELS = {
@@ -29,25 +58,244 @@ LABELS = {
     "status": "Status",
 }
 COLUMNS = ASSET_FIELDS + ("updated_at",)
+HOST_NAME = re.compile(r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+
+
+class UntrustedServer(Exception):
+    """The server's certificate is not one this GUI trusts."""
+
+
+# ---- Addresses ------------------------------------------------------------------
+
+def parse_address(text: str, default_port: int) -> tuple:
+    """Turn "host" or "host:port" into (host, port), or raise ValueError saying what's wrong."""
+    text = text.strip()
+    if not text:
+        raise ValueError("Enter the server's IP address or host name.")
+    has_port = text.count(":") == 1
+    host, port_text = text.split(":") if has_port else (text, "")
+    if has_port and not (port_text.isdigit() and 1 <= int(port_text) <= 65535):
+        raise ValueError(f"'{port_text}' is not a port. Use a number from 1 to 65535.")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if re.fullmatch(r"[\d.]+", host) or not HOST_NAME.fullmatch(host):
+            raise ValueError(f"'{host}' is not a valid IP address or host name.") from None
+    return host, int(port_text) if has_port else default_port
+
+
+def show_address(address: tuple) -> str:
+    return f"{address[0]}:{address[1]}"
+
+
+# ---- Talking to a server ----------------------------------------------------------
+
+def fingerprint(certificate: bytes) -> str:
+    """The SHA-256 fingerprint of a certificate, as people compare it: AB:CD:..."""
+    digest = hashlib.sha256(certificate).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def connect(address: tuple) -> tuple:
+    """Open an encrypted connection and return it with the server's certificate fingerprint.
+
+    Python's usual certificate check is switched off because these servers use their own
+    certificate; the caller checks the fingerprint against the trusted ones instead,
+    before anything is sent.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    raw = socket.create_connection(address, timeout=TIMEOUT_SECONDS)
+    try:
+        sock = context.wrap_socket(raw)
+    except Exception:
+        raw.close()
+        raise
+    return sock, fingerprint(sock.getpeercert(binary_form=True))
+
+
+def receive_exact(sock: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise ConnectionError("The server closed the connection")
+        data += chunk
+    return data
+
+
+def exchange(sock: socket.socket, request: dict) -> dict:
+    """Send one request as length-prefixed JSON and return the reply."""
+    payload = json.dumps({**request, "protocol_version": PROTOCOL_VERSION}).encode("utf-8")
+    if len(payload) > MAX_MESSAGE_BYTES:
+        raise ValueError("The request is too large")
+    sock.sendall(len(payload).to_bytes(4, "big") + payload)
+    length = int.from_bytes(receive_exact(sock, 4), "big")
+    if length > MAX_MESSAGE_BYTES:
+        raise ValueError("The reply is too large")
+    reply = json.loads(receive_exact(sock, length).decode("utf-8"))
+    if not isinstance(reply, dict):
+        raise ValueError("The reply is not valid")
+    return reply
+
+
+def probe(address: tuple) -> tuple:
+    """Check that an address is an Asset Management server. Returns (role, fingerprint).
+    Only PING is sent, which needs no login, so nothing secret goes to an untrusted server."""
+    sock, print_ = connect(address)
+    with sock:
+        reply = exchange(sock, {"action": "PING"})
+    if reply.get("service") != SERVICE_NAME:
+        raise ValueError(f"{show_address(address)} answered, but it isn't an Asset Management server.")
+    return reply.get("role", "server"), print_
+
+
+def explain(exc: Exception) -> str:
+    """A short, plain reason a connection failed."""
+    if isinstance(exc, socket.gaierror):
+        return "no such host name"
+    if isinstance(exc, (ConnectionRefusedError, socket.timeout, TimeoutError)):
+        return "nothing answered there"
+    if isinstance(exc, ssl.SSLError):
+        return "not an Asset Management server (no TLS)"
+    return str(exc)
+
+
+def send_to_servers(addresses: list, trusted: dict, request: dict) -> tuple:
+    """Send a request to the primary, or the backup if the primary can't be reached.
+    Returns (reply, address).
+
+    The certificate is checked before anything is sent. A server not checked at login
+    is accepted only if it has the same certificate as one already trusted (the
+    primary and backup share one).
+    """
+    last_error = OSError("No server address")
+    for address in addresses:
+        try:
+            sock, print_ = connect(address)
+        except OSError as exc:
+            last_error = exc
+            continue
+        with sock:
+            key = show_address(address)
+            if trusted.get(key, print_) != print_ or print_ not in trusted.values():
+                raise UntrustedServer(f"The server at {key} is not trusted. Log in again to check it.")
+            return exchange(sock, request), address
+    raise last_error
+
+
+def check_addresses(addresses: list, trusted: dict) -> list:
+    """What "Check" reports for each address."""
+    results = []
+    for address in addresses:
+        try:
+            role, print_ = probe(address)
+            known = trusted.get(show_address(address)) == print_
+            results.append(f"{show_address(address)}: {role} server found" + ("" if known else " (certificate not yet trusted)"))
+        except (OSError, ValueError) as exc:
+            results.append(f"{show_address(address)}: {explain(exc)}")
+    return results
+
+
+def probe_addresses(addresses: list) -> list:
+    """[(address, fingerprint)] for each address that is an Asset Management server now."""
+    found = []
+    for address in addresses:
+        try:
+            found.append((address, probe(address)[1]))
+        except (OSError, ValueError):
+            pass  # a backup that's down now is checked again when it's needed
+    if not found:
+        raise ConnectionError("no server answered at that address")
+    return found
+
+
+def run_in_thread(replies: queue.Queue, key: int, work) -> None:
+    """Do `work` and queue its result (or exception) for the window. It is given no
+    window objects, so Tk is only ever touched from the window's own thread."""
+    try:
+        result = work()
+    except Exception as exc:  # handed back to the window, which reports it
+        result = exc
+    replies.put((key, result))
+
+
+def discover(ports: list) -> list:
+    """Broadcast on the local network and return the servers that answer:
+    [{"role", "host", "port"}], primary first."""
+    found = {}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.2)
+        for port in ports:
+            for target in ("<broadcast>", "127.0.0.1"):  # this machine too
+                try:
+                    sock.sendto(DISCOVERY_REQUEST, (target, port))
+                except OSError:
+                    pass
+        deadline = time.monotonic() + DISCOVERY_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                data, (host, _port) = sock.recvfrom(1024)
+                info = json.loads(data.decode("utf-8"))
+            except socket.timeout:
+                continue
+            except (OSError, ValueError):
+                break
+            if not isinstance(info, dict) or info.get("service") != SERVICE_NAME:
+                continue
+            key = (info.get("role"), info.get("port"))
+            # The same server can answer on 127.0.0.1 and its network address; keep the
+            # network one, which works from other machines too.
+            if key not in found or found[key]["host"].startswith("127."):
+                found[key] = {"role": info.get("role"), "host": host, "port": info.get("port")}
+    return sorted(found.values(), key=lambda server: server["role"] != "primary")
+
+
+# ---- Remembered settings ----------------------------------------------------------
+
+def load_settings(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as file:
+            settings = json.load(file)
+    except (OSError, ValueError):
+        return {"server": "", "backup": "", "trusted": {}}
+    if not isinstance(settings, dict) or not isinstance(settings.get("trusted"), dict):
+        return {"server": "", "backup": "", "trusted": {}}
+    return settings
+
+
+def save_settings(path: str, settings: dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(settings, file, indent=2)
+    except OSError:
+        pass  # not being able to remember is no reason to stop working
 
 
 class AssetApp:
     """The application window: a login screen, then the asset screen."""
 
-    def __init__(self, root: tk.Tk, config: dict = None) -> None:
+    def __init__(self, root: tk.Tk, settings_file: str = SETTINGS_FILE) -> None:
         self.root = root
-        self.config = config
+        self.settings_file = settings_file
+        self.settings = load_settings(settings_file)
+        self.addresses = []   # [primary, backup?] as (host, port)
         self.token = None
         self.role = None
         self.page = 1
         self.search = {}      # the LIST parameters of the search being shown
         self.shown = {}       # the assets in the table, by asset_id
         self.notice = None    # a message to show once the table has refreshed
-        self.replies = queue.Queue()
+        self.replies = queue.Queue()  # finished background work: (key, result)
+        self.pending = {}             # what to do with each result, by key
+        self.keys = itertools.count()
 
         root.title("Asset Management System")
         root.minsize(900, 500)
-        self.status_text = tk.StringVar(value="Please log in.")
+        self.status_text = tk.StringVar(value="Enter a server, or press Find servers, then log in.")
         self.build_login()
         self.build_main()
         ttk.Label(root, textvariable=self.status_text, anchor=tk.W, relief=tk.SUNKEN).pack(side=tk.BOTTOM, fill=tk.X)
@@ -57,15 +305,25 @@ class AssetApp:
     # ---- Layout ---------------------------------------------------------------
 
     def build_login(self) -> None:
-        frame = self.login_frame = ttk.LabelFrame(self.root, text="Log in", padding=12)
-        ttk.Label(frame, text="Username").grid(row=0, column=0, sticky=tk.W, pady=3)
+        frame = self.login_frame = ttk.LabelFrame(self.root, text="Connect and log in", padding=12)
+        ttk.Label(frame, text="Server").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.server_entry = ttk.Entry(frame, width=30)
+        self.server_entry.insert(0, self.settings.get("server", ""))
+        self.server_entry.grid(row=0, column=1, pady=3)
+        ttk.Button(frame, text="Check", command=self.check_server).grid(row=0, column=2, padx=4)
+        ttk.Button(frame, text="Find servers", command=self.find_servers).grid(row=0, column=3)
+        ttk.Label(frame, text="Backup (optional)").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.backup_entry = ttk.Entry(frame, width=30)
+        self.backup_entry.insert(0, self.settings.get("backup", ""))
+        self.backup_entry.grid(row=1, column=1, pady=3)
+        ttk.Label(frame, text="Username").grid(row=2, column=0, sticky=tk.W, pady=(12, 3))
         self.username_entry = ttk.Entry(frame, width=30)
-        self.username_entry.grid(row=0, column=1, pady=3)
-        ttk.Label(frame, text="Password").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.username_entry.grid(row=2, column=1, pady=(12, 3))
+        ttk.Label(frame, text="Password").grid(row=3, column=0, sticky=tk.W, pady=3)
         self.password_entry = ttk.Entry(frame, width=30, show="*")
-        self.password_entry.grid(row=1, column=1, pady=3)
+        self.password_entry.grid(row=3, column=1, pady=3)
         self.login_button = ttk.Button(frame, text="Log in", command=self.log_in)
-        self.login_button.grid(row=2, column=1, sticky=tk.E, pady=(8, 0))
+        self.login_button.grid(row=4, column=1, sticky=tk.E, pady=(8, 0))
         self.password_entry.bind("<Return>", lambda _event: self.log_in())
 
     def build_main(self) -> None:
@@ -110,6 +368,8 @@ class AssetApp:
         self.page_label.pack(side=tk.LEFT, padx=8)
         self.next_button = ttk.Button(paging, text="Next >", command=lambda: self.change_page(1))
         self.next_button.pack(side=tk.LEFT)
+        self.server_label = ttk.Label(paging, text="")
+        self.server_label.pack(side=tk.RIGHT)
 
         # Form
         form = ttk.LabelFrame(frame, text="Asset details (every field is required)", padding=8)
@@ -133,33 +393,116 @@ class AssetApp:
         self.delete_button.pack(side=tk.LEFT, padx=2)
         ttk.Button(buttons, text="Clear form", command=self.clear_form).pack(side=tk.LEFT, padx=2)
 
-    # ---- Talking to the server ------------------------------------------------
+    # ---- Background work ------------------------------------------------------
+
+    def in_background(self, work, on_done) -> None:
+        """Run `work` on a background thread so the window never freezes; `on_done`
+        gets its result (or the exception) on the window's own thread. `work` must not
+        use the window."""
+        key = next(self.keys)
+        self.pending[key] = on_done
+        self.status_text.set("Working...")
+        threading.Thread(target=run_in_thread, args=(self.replies, key, work), daemon=True).start()
+
+    def check_replies(self) -> None:
+        """Hand finished work to its callback. Tk may only be used from its own thread."""
+        while not self.replies.empty():
+            key, result = self.replies.get()
+            self.pending.pop(key)(result)
+        self.root.after(50, self.check_replies)
+
+    # ---- Finding and checking servers -----------------------------------------
+
+    def read_addresses(self) -> list:
+        """The addresses typed in, checked for format. Raises ValueError."""
+        addresses = [parse_address(self.server_entry.get(), DEFAULT_PORTS["primary"])]
+        if self.backup_entry.get().strip():
+            addresses.append(parse_address(self.backup_entry.get(), DEFAULT_PORTS["backup"]))
+        return addresses
+
+    def find_servers(self) -> None:
+        def done(result) -> None:
+            if isinstance(result, Exception) or not result:
+                self.status_text.set("No servers found on this network. Enter the address by hand.")
+                return
+            for server in result:
+                entry = self.server_entry if server["role"] == "primary" else self.backup_entry
+                entry.delete(0, tk.END)
+                entry.insert(0, f"{server['host']}:{server['port']}")
+            found = ", ".join(f"{s['role']} at {s['host']}:{s['port']}" for s in result)
+            self.status_text.set(f"Found {found}.")
+
+        self.in_background(lambda: discover(list(DEFAULT_PORTS.values())), done)
+
+    def check_server(self) -> None:
+        try:
+            addresses = self.read_addresses()
+        except ValueError as exc:
+            self.status_text.set(str(exc))
+            return
+
+        trusted = dict(self.settings["trusted"])
+        self.in_background(lambda: check_addresses(addresses, trusted),
+                           lambda results: self.status_text.set("; ".join(results)))
+
+    def trust(self, address: tuple, print_: str) -> bool:
+        """Decide whether to trust a server's certificate (trust on first use).
+
+        A certificate already trusted, for this address or another, is accepted. A
+        different one at a trusted address is refused outright: it may be someone
+        pretending to be the server. Otherwise the user is asked, and shown the
+        fingerprint to compare with the one the administrator gave out.
+        """
+        key = show_address(address)
+        pinned = self.settings["trusted"].get(key)
+        if pinned == print_:
+            return True
+        if pinned is None and print_ in self.settings["trusted"].values():
+            # Same certificate as a server already trusted: the primary and backup share one.
+            self.settings["trusted"][key] = print_
+            save_settings(self.settings_file, self.settings)
+            return True
+        if pinned is not None:
+            messagebox.showerror(
+                "Certificate changed",
+                f"The server at {key} has a different certificate from last time, so it was not "
+                f"trusted. If your administrator replaced it, delete {self.settings_file} and connect again.",
+            )
+            return False
+        if not messagebox.askyesno(
+            "Trust this server?",
+            f"First connection to {key}.\n\nCertificate fingerprint:\n{print_}\n\n"
+            "Only trust it if this matches the fingerprint your administrator gave you.",
+        ):
+            return False
+        self.settings["trusted"][key] = print_
+        save_settings(self.settings_file, self.settings)
+        return True
+
+    # ---- Requests -------------------------------------------------------------
 
     def send(self, request: dict, on_reply) -> None:
-        """Send a request on a background thread; `on_reply` runs on the window's thread."""
+        """Send a request in the background; `on_reply` gets the server's reply."""
         if self.token is not None:
             request = {**request, "token": self.token}
 
-        def work() -> None:
-            try:
-                reply = send_request(request, self.config)
-            except (OSError, ValueError) as exc:
-                reply = {"status": "ERROR", "code": "NO_SERVER", "message": f"Could not reach the server: {exc}"}
-            self.replies.put((on_reply, reply))
-
-        self.status_text.set("Working...")
-        threading.Thread(target=work, daemon=True).start()
-
-    def check_replies(self) -> None:
-        """Hand finished replies to their callbacks. Tk may only be used from its own thread."""
-        while not self.replies.empty():
-            on_reply, reply = self.replies.get()
+        def done(result) -> None:
+            if isinstance(result, Exception):
+                message = str(result) if isinstance(result, UntrustedServer) else (
+                    f"Could not reach the server: {explain(result)}")
+                on_reply({"status": "ERROR", "code": "NO_SERVER", "message": message})
+                return
+            reply, address = result
+            backup = len(self.addresses) > 1 and address == self.addresses[1]
+            self.server_label.configure(text=f"Server: {show_address(address)}" + (" (backup)" if backup else ""))
             if reply.get("code") == "UNAUTHENTICATED" and self.token is not None:
                 self.status_text.set(reply["message"])
                 self.show_login()
-                continue
+                return
             on_reply(reply)
-        self.root.after(50, self.check_replies)
+
+        addresses, trusted = list(self.addresses), dict(self.settings["trusted"])
+        self.in_background(lambda: send_to_servers(addresses, trusted, request), done)
 
     def report_error(self, reply: dict) -> None:
         self.status_text.set(f"{reply.get('code')}: {reply.get('message')}")
@@ -167,13 +510,33 @@ class AssetApp:
     # ---- Logging in -----------------------------------------------------------
 
     def log_in(self) -> None:
+        """Check the servers and their certificates, then log in."""
+        try:
+            addresses = self.read_addresses()
+        except ValueError as exc:
+            self.status_text.set(str(exc))
+            return
         self.token = None
-        request = {
-            "action": "LOGIN",
-            "username": self.username_entry.get().strip(),
-            "password": self.password_entry.get(),
-        }
-        self.send(request, self.logged_in)
+
+        def checked(result) -> None:
+            if isinstance(result, Exception):
+                self.status_text.set(f"Could not connect: {explain(result)}")
+                return
+            for address, print_ in result:
+                if not self.trust(address, print_):
+                    self.status_text.set(f"Not connected: {show_address(address)} was not trusted.")
+                    return
+            self.addresses = addresses
+            self.settings["server"] = self.server_entry.get().strip()
+            self.settings["backup"] = self.backup_entry.get().strip()
+            save_settings(self.settings_file, self.settings)
+            self.send({
+                "action": "LOGIN",
+                "username": self.username_entry.get().strip(),
+                "password": self.password_entry.get(),
+            }, self.logged_in)
+
+        self.in_background(lambda: probe_addresses(addresses), checked)
 
     def logged_in(self, reply: dict) -> None:
         if reply["status"] != "OK":
@@ -292,7 +655,7 @@ class AssetApp:
 
     def register(self) -> None:
         values = self.form_values()
-        request = {"action": "REGISTER", "request_id": new_request_id(), "asset": values}
+        request = {"action": "REGISTER", "request_id": uuid.uuid4().hex, "asset": values}
         self.send(request, self.after_change(f"Registered {values['asset_id']}."))
 
     def save_changes(self) -> None:
@@ -307,7 +670,7 @@ class AssetApp:
             return
         request = {
             "action": "EDIT",
-            "request_id": new_request_id(),
+            "request_id": uuid.uuid4().hex,
             "asset_id": asset["asset_id"],
             "expected_version": asset["version"],
             "changes": changes,
@@ -323,7 +686,7 @@ class AssetApp:
             return
         request = {
             "action": "DELETE",
-            "request_id": new_request_id(),
+            "request_id": uuid.uuid4().hex,
             "asset_id": asset["asset_id"],
             "expected_version": asset["version"],
         }

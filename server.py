@@ -5,6 +5,7 @@ Asset Management System server.
     python server.py backup     (the backup server)
 
 Understands these actions:
+    {"action": "PING"}                                         -> says this is an asset server
     {"action": "LOGIN", "username": "...", "password": "..."}  -> a session token
     {"action": "REGISTER", "request_id": "...", "asset": {...}}
     {"action": "LIST", "query": "...", "filters": {"location": "..."}, "page": 1, "page_size": 20}
@@ -12,8 +13,8 @@ Understands these actions:
      "changes": {"description": "...", "category": "...", "location": "...", "status": "..."}}
     {"action": "DELETE", "request_id": "...", "asset_id": "...", "expected_version": 1}
 
-Every request must include "protocol_version", every request except LOGIN must
-include the session "token", and every change must include a unique "request_id".
+Every request must include "protocol_version", every request except PING and LOGIN
+must include the session "token", and every change must include a unique "request_id".
 Only users with the admin role may DELETE. Every reply has "status": "OK" or
 "status": "ERROR" with a stable "code", a "message" and a "context".
 
@@ -25,6 +26,10 @@ these actions between themselves, authenticated with a key derived from secret.k
     SYNC_STATUS -> the server's change number and a digest of its data
     STATE       -> all of the server's data
     REPLICATE   -> replace the server's data with the copy sent
+
+Discovery: each server also answers UDP broadcasts of DISCOVERY_REQUEST on the same
+port number as its TCP port, so gui.py can find servers on the local network without
+being told their addresses. Set "discoverable": false in config.json to turn it off.
 """
 
 import datetime     # creates the server's timestamps
@@ -77,6 +82,10 @@ MAX_REMEMBERED_REQUESTS = 1000
 
 # The most assets one page of a LIST reply may hold.
 MAX_PAGE_SIZE = 100
+
+# What a client broadcasts to find servers, and what identifies this service.
+DISCOVERY_REQUEST = b"ASSET_MANAGEMENT_DISCOVER"
+SERVICE_NAME = "asset-management"
 
 # Actions only the servers use with each other.
 SERVER_ACTIONS = ("SYNC_STATUS", "STATE", "REPLICATE")
@@ -176,6 +185,9 @@ class AssetServer:
         self.config = config
         self.role = role
         self.address = (config["servers"][role]["host"], config["servers"][role]["port"])
+        # Where to listen. 0.0.0.0 means every network connection, so clients on other
+        # machines can connect; 127.0.0.1 would mean this machine only.
+        self.listen_address = (config.get("listen_host", self.address[0]), self.address[1])
         self.max_bytes = config["max_message_bytes"]
         self.timeout = config["server_timeout_seconds"]
         self.data_file = common.config_path(config, config["data_files"][role])
@@ -297,9 +309,13 @@ class AssetServer:
             "DELETE": self.delete,
             "LIST": self.list_assets,
         }
-        if action not in handlers and action not in ("LOGIN",) + SERVER_ACTIONS:
+        if action not in handlers and action not in ("PING", "LOGIN") + SERVER_ACTIONS:
             return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
         try:
+            if action == "PING":
+                # Lets a client check an address really is one of these servers. It
+                # needs no login and reveals nothing about the data.
+                return {"status": "OK", "service": SERVICE_NAME, "role": self.role}
             if action == "LOGIN":
                 return self.login(request)
             if action in SERVER_ACTIONS:
@@ -704,7 +720,7 @@ class AssetServer:
     def open_socket(self) -> socket.socket:
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind(self.address)
+        server_sock.bind(self.listen_address)
         server_sock.listen()
         return server_sock
 
@@ -724,6 +740,10 @@ class AssetServer:
             sync_thread.start()
         else:
             sync_thread = None
+        discovery_thread = None
+        if self.config.get("discoverable", True):
+            discovery_thread = threading.Thread(target=self.answer_discovery, args=(stop,), daemon=True)
+            discovery_thread.start()
         try:
             self.accept_connections(stop)
         finally:
@@ -731,11 +751,48 @@ class AssetServer:
             if sync_thread is not None:
                 self.changed.set()  # wake it so it sees `stop` and finishes
                 sync_thread.join()
+            if discovery_thread is not None:
+                discovery_thread.join()
+
+    def answer_discovery(self, stop: threading.Event) -> None:
+        """Reply to clients looking for servers on the local network.
+
+        A client broadcasts DISCOVERY_REQUEST over UDP to the usual server ports. This
+        replies with the service name, this server's role and its TCP port; the client
+        takes the address from where the reply came from. The reply holds nothing
+        secret, and the client still checks the server's certificate before trusting it.
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(self.listen_address)
+            except OSError as exc:
+                logger.warning("Discovery is off: %s", exc)
+                return
+            sock.settimeout(0.2)  # wake up regularly to check `stop`
+            reply = json.dumps({
+                "service": SERVICE_NAME,
+                "role": self.role,
+                "port": self.address[1],
+                "protocol_version": PROTOCOL_VERSION,
+            }).encode("utf-8")
+            while not stop.is_set():
+                try:
+                    data, sender = sock.recvfrom(1024)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    continue
+                if data.strip() == DISCOVERY_REQUEST:
+                    try:
+                        sock.sendto(reply, sender)
+                    except OSError:
+                        pass
 
     def accept_connections(self, stop: threading.Event) -> None:
         with self.open_socket() as server_sock:
             server_sock.settimeout(0.2)  # wake up regularly to check `stop`
-            logger.info("Asset Management %s server listening on %s:%s", self.role, *self.address)
+            logger.info("Asset Management %s server listening on %s:%s", self.role, *self.listen_address)
             self.audit("server_started", address=f"{self.address[0]}:{self.address[1]}")
             while not stop.is_set():
                 try:

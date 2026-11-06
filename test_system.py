@@ -332,6 +332,44 @@ class AssetDataTest(ServerTestCase):
 
 
 
+class DiscoveryTest(ServerTestCase):
+    """Remote clients: listening on the network, PING and discovery."""
+
+    def discover(self, port: int) -> list:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(1)
+            sock.sendto(server.DISCOVERY_REQUEST, ("127.0.0.1", port))
+            try:
+                return [json.loads(sock.recvfrom(1024)[0])]
+            except socket.timeout:
+                return []
+
+    def test_the_server_listens_on_every_network_connection(self):
+        self.assertEqual(self.server.listen_address, ("0.0.0.0", self.server.address[1]))
+
+    def test_ping_identifies_the_server_without_a_login(self):
+        reply = common.send_request({"action": "PING"}, self.config)
+        self.assertEqual(reply, {"status": "OK", "service": "asset-management", "role": "primary"})
+
+    def test_the_server_answers_discovery_with_its_role_and_port(self):
+        port = self.server.address[1]
+        self.assertEqual(self.discover(port), [{
+            "service": "asset-management", "role": "primary", "port": port, "protocol_version": 1,
+        }])
+
+    def test_other_messages_get_no_discovery_reply(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.5)
+            sock.sendto(b"hello", ("127.0.0.1", self.server.address[1]))
+            with self.assertRaises(socket.timeout):
+                sock.recvfrom(1024)
+
+    def test_discovery_can_be_turned_off(self):
+        self.config["discoverable"] = False
+        backup = self.start_server("backup")
+        self.assertEqual(self.discover(backup.address[1]), [])
+
+
 class ConcurrencyTest(ServerTestCase):
     """NFR05, NFR07, NFR08, NFR20."""
 
