@@ -52,9 +52,13 @@ class ServerListTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, common.SERVERS_VARIABLE):
                     common.parse_servers(text)
 
-    def test_more_than_two_servers_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "at most two"):
-            common.parse_servers("a:1,b:2,c:3")
+    def test_more_than_two_servers_are_allowed(self):
+        self.assertEqual(common.parse_servers("a:1,b:2,c:3"), [("a", 1), ("b", 2), ("c", 3)])
+
+    def test_more_servers_than_there_are_id_letters_are_refused(self):
+        too_many = ",".join(f"host{number}:{1000 + number}" for number in range(common.MAX_SERVERS + 1))
+        with self.assertRaisesRegex(ValueError, f"at most {common.MAX_SERVERS}"):
+            common.parse_servers(too_many)
 
     def test_without_the_variable_everything_runs_on_this_machine(self):
         result = run_with({common.SERVERS_VARIABLE: None, "ASSET_CONFIG": os.path.join(FOLDER, "no-such-config.json")},
@@ -117,7 +121,7 @@ class ConfigFileTest(unittest.TestCase):
             "servers not a list": {"servers": "a:1"},
             "empty servers": {"servers": []},
             "bad server": {"servers": ["no-port"]},
-            "three servers": {"servers": ["a:1", "b:2", "c:3"]},
+            "too many servers": {"servers": [f"host{number}:{1000 + number}" for number in range(26)]},
             "bad web address": {"web_address": "localhost"},
             "zero timeout": {"timeout_seconds": 0},
             "text timeout": {"failover_wait_seconds": "15"},

@@ -476,8 +476,6 @@ def main(argv: list = None) -> None:
     if not 0 <= my_index < len(common.SERVERS):
         parser.error(f"--backup {my_index} isn't a position in the server list, "
                      f"which has {len(common.SERVERS)} server(s)")
-    if len(common.SERVERS) > len(ID_LETTERS):
-        parser.error(f"There can be at most {len(ID_LETTERS)} servers")
 
     node.ROLE = name_of(my_index)
     node.ID_PREFIX = f"AST-{ID_LETTERS[my_index]}"

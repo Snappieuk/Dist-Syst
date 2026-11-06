@@ -34,13 +34,17 @@ HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 # Checking the claim BEFORE reading the payload means no memory is used for it.
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 
-# The address of each server: the primary first, then the backup. Every program
-# must agree on this list. 127.0.0.1 means "this machine", so by default everything
+# The address of each server: the primary first, then each backup in the order they take
+# over. Every program must agree on this list. 127.0.0.1 means "this machine", so by default everything
 # runs on one computer.
 DEFAULT_SERVERS = [
     ("127.0.0.1", 65432),  # primary
     ("127.0.0.1", 65433),  # backup
 ]
+
+# The most servers the list can hold. Each server gives out asset IDs with its own letter,
+# and server.ID_LETTERS has this many.
+MAX_SERVERS = 25
 
 # Where web.py listens. 127.0.0.1 means only this machine can open the page.
 DEFAULT_WEB_ADDRESS = ("127.0.0.1", 8080)
@@ -75,11 +79,12 @@ def parse_address(text: str, setting: str) -> tuple:
 def parse_servers(text: str, setting: str = SERVERS_VARIABLE) -> list:
     """Turn "host:port,host:port" into a list of (host, port) addresses.
 
-    Raises ValueError, naming the bad entry, if the text is not one or two addresses.
+    Raises ValueError, naming the bad entry, if an address is wrong or there are more
+    than MAX_SERVERS.
     """
     servers = [parse_address(entry, setting) for entry in text.split(",")]
-    if len(servers) > 2:
-        raise ValueError(f"{setting} lists at most two servers: the primary, then the backup")
+    if len(servers) > MAX_SERVERS:
+        raise ValueError(f"{setting} lists {len(servers)} servers, but there can be at most {MAX_SERVERS}")
     return servers
 
 
@@ -195,7 +200,7 @@ UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"  # no protocol_version, or one the s
 PROTOCOL_VERSION = 1
 SUPPORTED_PROTOCOL_VERSIONS = (1,)
 
-# Error codes used only between the two servers.
+# Error codes used only between the servers.
 NOT_STANDBY = "NOT_STANDBY"  # the backup has taken over, so it cannot receive copies
 OUT_OF_SYNC = "OUT_OF_SYNC"  # the backup missed a change, so it needs all the data
 

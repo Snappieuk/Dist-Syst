@@ -306,7 +306,7 @@ the server logs visible.
 ## Encryption
 
 Every connection to a server is encrypted with TLS: from the GUI, the command-line
-clients, `web.py` and `demo.py`, and between the two servers. Someone watching the network
+clients, `web.py` and `demo.py`, and between the servers. Someone watching the network
 sees neither the shared secret nor any asset data. A test relays a real registration
 through a copy of everything sent, and finds none of it readable.
 

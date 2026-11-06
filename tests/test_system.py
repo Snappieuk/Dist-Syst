@@ -1369,6 +1369,7 @@ class ServerOptionTest(unittest.TestCase):
         self.assertEqual(files, ["assets.json", "assets_backup.json", "assets_backup2.json"])
         self.assertEqual(server.ID_LETTERS[:3], "PBC")
         self.assertEqual(len(set(server.ID_LETTERS)), len(server.ID_LETTERS))  # no letter twice
+        self.assertEqual(len(server.ID_LETTERS), common.MAX_SERVERS)  # one for every server allowed
 
     def test_there_is_no_backup_without_a_second_entry(self):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
