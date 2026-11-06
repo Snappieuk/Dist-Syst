@@ -116,8 +116,7 @@ namespace AssetApp
     {
         public static List<Addr> Servers = new List<Addr>();
         public static string Fingerprint;
-
-        // The marker is built in two pieces, so the finished program never contains it whole
+        public static string Url;   // https://host, for a copy downloaded through an HTTPS proxy is built in two pieces, so the finished program never contains it whole
         // by accident and can't mistake its own code for the settings.
         static readonly string Marker = "--ASSET-" + "SITE--";
 
@@ -140,6 +139,7 @@ namespace AssetApp
                         J.Serializer.Deserialize<Dictionary<string, object>>(text.Substring(at + Marker.Length));
                     Fingerprint = J.Text(settings, "fingerprint");
                     if (Fingerprint == "") Fingerprint = null;
+                    Url = WebNet.Address(J.Text(settings, "url"));   // null if absent or not a valid https address
                     foreach (string entry in J.Strings(settings, "servers"))
                     {
                         Addr address = Net.ParseAddress(entry);
@@ -151,6 +151,7 @@ namespace AssetApp
             {
                 Servers.Clear();      // settings that can't be read are ignored: the program
                 Fingerprint = null;   // then works like one that was not downloaded
+                Url = null;
             }
         }
     }

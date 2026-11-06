@@ -465,6 +465,12 @@ are never put in the file. If the servers' certificate is ever replaced (`data/t
 old downloads stop working and need downloading again. Anyone who can change the web page
 could hand out a different file, so serve the page only over a network you trust.
 
+**Behind an HTTPS reverse proxy** (`behind_https_proxy` is on in `config.json`), both
+downloads (`gui.py` and `AssetApp.exe`) are filled in differently: they hold the site's
+`https://` address, as the browser reached it (for example `https://assets.example.com`),
+and no server addresses or fingerprint, because they then use HTTPS mode (below) and the
+site's own certificate. With the setting off, the downloads are as described above.
+
 **Windows app (.exe), no Python needed.** `clients\app\` holds the same desktop app written
 in C# (Windows Forms): login, Assets, Loans, People, Calendar and Review tabs, add, edit,
 status, delete, history and check out / in, with the same search, failover and certificate

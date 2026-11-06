@@ -1289,6 +1289,77 @@ class AppDownloadTest(WebTestCase):
         self.assertIn(web.APP_DOWNLOAD_ADDRESS.encode(), body)
 
 
+class ProxyDownloadTest(WebTestCase):
+    """Behind an HTTPS reverse proxy the downloads hold the site's https address, as the
+    browser reached it, instead of server addresses and a fingerprint."""
+
+    def behind_proxy(self) -> None:
+        self.addCleanup(setattr, web, "BEHIND_HTTPS_PROXY", web.BEHIND_HTTPS_PROXY)
+        web.BEHIND_HTTPS_PROXY = True
+
+    @staticmethod
+    def settings_of(source: str) -> dict:
+        import ast
+        found = {}
+        for node_ in ast.parse(source).body:
+            if (isinstance(node_, ast.Assign) and isinstance(node_.targets[0], ast.Name)
+                    and node_.targets[0].id in ("SITE_SERVERS", "SITE_FINGERPRINT", "SITE_URL")):
+                found[node_.targets[0].id] = ast.literal_eval(node_.value)
+        return found
+
+    def test_the_address_comes_from_the_host_the_browser_used(self):
+        self.behind_proxy()
+        self.assertEqual(web.site_url("assets.example.com"), "https://assets.example.com")
+        self.assertEqual(web.site_url("Assets.Example.com:8443"), "https://assets.example.com:8443")
+        self.assertEqual(web.site_url("[::1]:8443"), "https://[::1]:8443")
+
+    def test_no_address_is_made_when_not_behind_a_proxy(self):
+        self.assertIsNone(web.site_url("assets.example.com"))
+
+    def test_an_unsafe_host_is_refused(self):
+        self.behind_proxy()
+        for host in ("x'; import os #", "", "host:", "a b"):
+            with self.subTest(host), self.assertRaises(ValueError):
+                web.site_url(host)
+
+    def test_gui_download_holds_the_address_and_no_servers_or_fingerprint(self):
+        self.behind_proxy()
+        status, _, body = self.fetch(web.GUI_DOWNLOAD_ADDRESS, extra_headers={"Host": "assets.example.com"})
+
+        self.assertEqual(status, 200)
+        settings = self.settings_of(body.decode("utf-8"))
+        self.assertEqual(settings["SITE_URL"], "https://assets.example.com")
+        self.assertEqual(settings["SITE_SERVERS"], [])
+        self.assertIsNone(settings["SITE_FINGERPRINT"])
+        self.assertNotIn(b"65432", body.split(b"SITE_URL = ")[1].split(b"\n")[0])
+
+    def test_gui_download_is_unchanged_when_not_behind_a_proxy(self):
+        _, _, body = self.fetch(web.GUI_DOWNLOAD_ADDRESS, extra_headers={"Host": "assets.example.com"})
+        settings = self.settings_of(body.decode("utf-8"))
+        self.assertIsNone(settings["SITE_URL"])
+        self.assertEqual(settings["SITE_SERVERS"], [("assets.example.com", self.asset_server[1])])
+        self.assertEqual(settings["SITE_FINGERPRINT"], web.certificate_fingerprint())
+
+    def test_the_gui_download_still_has_each_setting_line_exactly_once(self):
+        with open(web.GUI_FILE, "r", encoding="utf-8") as file:
+            source = file.read()
+        for line in ("SITE_SERVERS = []\n", "SITE_FINGERPRINT = None\n", "SITE_URL = None\n"):
+            self.assertEqual(source.count(line), 1, line)
+
+    def test_app_download_holds_only_the_address(self):
+        if web.find_csc() is None:
+            self.skipTest("the C# compiler is only on Windows")
+        self.behind_proxy()
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        with mock.patch.object(web, "APP_FILE", os.path.join(folder, "AssetApp.exe")):
+            status, _, body = self.fetch(web.APP_DOWNLOAD_ADDRESS, extra_headers={"Host": "assets.example.com"})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body[body.rindex(web.APP_MARKER) + len(web.APP_MARKER):]),
+                         {"url": "https://assets.example.com"})
+
+
 class PageTest(WebTestCase):
     def test_the_page_is_served(self):
         status, headers, body = self.fetch("/")

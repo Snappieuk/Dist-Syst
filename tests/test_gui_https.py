@@ -375,6 +375,11 @@ class HttpsGuiTest(test_web.WebTestCase):
         self.assertIn("certificate", screen.message.cget("text"))
         self.assertIsNone(gui.session.web_url)
 
+    def test_a_downloaded_copy_starts_with_the_site_address_filled_in(self):
+        with mock.patch.object(self.gui, "SITE_URL", "https://assets.example.com"):
+            _, screen, _ = self.make_window()
+            self.assertEqual(screen.server_box.get(), "https://assets.example.com")
+
     def test_a_local_network_address_leaves_https_mode(self):
         gui = self.gui
         root, screen, _ = self.make_window()

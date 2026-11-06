@@ -68,10 +68,12 @@ SERVICE_NAME = "asset-management"
 # servers") and the first certificate seen is trusted. The web page's "Download GUI"
 # button sends a copy of this file with these two lines filled in, so that the copy
 # already knows where the servers are and which certificate is the real one. Neither
-# value is secret. web.py finds these two lines by their exact text, so keep them as
-# they are.
+# value is secret. When the web page is reached through an HTTPS reverse proxy, SITE_URL
+# is filled in instead (for example "https://assets.example.com"), and the other two stay
+# empty. web.py finds these three lines by their exact text, so keep them as they are.
 SITE_SERVERS = []
 SITE_FINGERPRINT = None
+SITE_URL = None
 # ---------------------------------------------------------------------------------
 
 TIMEOUT_SECONDS = 5           # how long to wait on one server
@@ -1211,8 +1213,12 @@ class LoginWindow(ttk.Frame):
         self.message.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
         self.columnconfigure(1, weight=1)
 
-        if SITE_FINGERPRINT:
-            # A downloaded copy: the real certificate is already known, and so are the servers.
+        if SITE_URL:
+            # A copy downloaded through an HTTPS reverse proxy: the web address is already
+            # filled in, and nothing is pinned (the site's own certificate is checked).
+            self.server_box.set(SITE_URL)
+            self.message.configure(text="Enter your username and password.")
+        elif SITE_FINGERPRINT:
             session.trusted = SITE_FINGERPRINT
             shown = [f"{host}:{port}" for host, port in SITE_SERVERS]
             if shown:

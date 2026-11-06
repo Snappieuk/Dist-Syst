@@ -32,7 +32,8 @@ namespace AssetApp
             Row("", message);
 
             // A downloaded copy starts with its own server filled in.
-            if (SiteSettings.Servers.Count > 0) server.Text = SiteSettings.Servers[0].ToString();
+            if (SiteSettings.Url != null) server.Text = SiteSettings.Url;
+            else if (SiteSettings.Servers.Count > 0) server.Text = SiteSettings.Servers[0].ToString();
             else server.Text = "localhost";
 
             find.Click += delegate { FindServers(); };

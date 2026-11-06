@@ -650,6 +650,23 @@ def site_servers(web_host: str) -> list:
             for host, port in common.SERVERS]
 
 
+def site_url(host_header: str) -> Optional[str]:
+    """The https:// address of this site, for a download, when it sits behind an HTTPS
+    reverse proxy (behind_https_proxy is on); otherwise None. It is built from the host
+    (and port, if any) the browser used, which is the name the person reaches the site by."""
+    if not BEHIND_HTTPS_PROXY:
+        return None
+    parts = urlsplit("//" + (host_header or ""))
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if not SAFE_HOST.fullmatch(parts.hostname or "") or (port is None and ":" in (host_header or "").rsplit("]", 1)[-1]):
+        raise ValueError("The web page was reached by an address that can't be used")
+    shown = f"[{parts.hostname}]" if ":" in (parts.hostname or "") else parts.hostname
+    return f"https://{shown}" + (f":{port}" if port else "")
+
+
 APP_DOWNLOAD_ADDRESS = "/download/gui.exe"
 APP_SOURCE_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clients", "app")
 APP_FILE = os.path.join(common.DATA_FOLDER, "AssetApp.exe")  # the built program, reused until the source changes
@@ -688,28 +705,36 @@ def build_app() -> str:
         return APP_FILE
 
 
-def app_with_site_settings(web_host: str) -> bytes:
+def app_with_site_settings(web_host: str, url: Optional[str] = None) -> bytes:
     """The built app with the servers and certificate fingerprint added to the end of the
     file. A .exe ignores extra bytes at its end, and the app reads them when it starts.
-    As with gui.py, neither value is secret."""
-    servers = [f"{host}:{port}" for host, port in site_servers(web_host)]
-    settings = json.dumps({"servers": servers, "fingerprint": certificate_fingerprint()}).encode("utf-8")
+    As with gui.py, neither value is secret. Behind an HTTPS proxy (url is given), the web
+    address is added instead, and no server addresses or fingerprint."""
+    if url:
+        settings = json.dumps({"url": url}).encode("utf-8")
+    else:
+        servers = [f"{host}:{port}" for host, port in site_servers(web_host)]
+        settings = json.dumps({"servers": servers, "fingerprint": certificate_fingerprint()}).encode("utf-8")
     with open(build_app(), "rb") as file:
         return file.read() + b"\n" + APP_MARKER + settings
 
 
-def gui_with_site_settings(web_host: str) -> str:
-    """The text of gui.py with SITE_SERVERS and SITE_FINGERPRINT filled in.
+def gui_with_site_settings(web_host: str, url: Optional[str] = None) -> str:
+    """The text of gui.py with SITE_SERVERS and SITE_FINGERPRINT filled in, or, behind an
+    HTTPS proxy (url is given), with SITE_URL filled in instead.
 
-    Neither value is secret; the secret key and passwords are never put in the file.
+    None of these values is secret; the secret key and passwords are never put in the file.
     """
-    servers = site_servers(web_host)
+    if url:
+        changes = (("SITE_URL = None\n", f"SITE_URL = {url!r}\n"),)
+    else:
+        changes = (("SITE_SERVERS = []\n", f"SITE_SERVERS = {site_servers(web_host)!r}\n"),
+                   ("SITE_FINGERPRINT = None\n", f"SITE_FINGERPRINT = {certificate_fingerprint()!r}\n"))
 
     with open(GUI_FILE, "r", encoding="utf-8") as file:
         source = file.read()
     # Each setting line must be there exactly once, or the file isn't the one expected.
-    for old, new in (("SITE_SERVERS = []\n", f"SITE_SERVERS = {servers!r}\n"),
-                     ("SITE_FINGERPRINT = None\n", f"SITE_FINGERPRINT = {certificate_fingerprint()!r}\n")):
+    for old, new in changes:
         if source.count(old) != 1:
             raise ValueError(f"gui.py doesn't contain the line {old.strip()!r} exactly once")
         source = source.replace(old, new)
@@ -970,7 +995,7 @@ class WebHandler(BaseHTTPRequestHandler):
         # user, which is what "127.0.0.1" in the servers list has to be turned into.
         host = urlsplit("//" + self.headers.get("Host", "")).hostname or ""
         try:
-            source = gui_with_site_settings(host)
+            source = gui_with_site_settings(host, site_url(self.headers.get("Host", "")))
         except (OSError, ValueError) as exc:
             logger.error("Could not make the GUI download: %s", exc)
             self.send_json(500, {"error": "The GUI could not be prepared"})
@@ -986,7 +1011,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         host = urlsplit("//" + self.headers.get("Host", "")).hostname or ""
         try:
-            program = app_with_site_settings(host)
+            program = app_with_site_settings(host, site_url(self.headers.get("Host", "")))
         except ValueError as exc:
             logger.error("Could not make the app download: %s", exc)
             self.send_json(500, {"error": "The app could not be prepared"})
