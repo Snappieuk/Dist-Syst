@@ -936,6 +936,96 @@ class RoleTest(WebTestCase):
         self.assertIn(b'id="account-panel" class="panel add-panel" hidden', page)
 
 
+class ManageAccountsTest(WebTestCase):
+    """Admins can list accounts, change their roles and delete them, but never remove the
+    last admin or delete themselves."""
+
+    def setUp(self):
+        super().setUp()
+        web.add_account("worker", "worker password", role=web.USER)
+
+    def call(self, path: str, method: str = "GET", body: dict = None, **options) -> tuple:
+        status, _, reply = self.fetch(path, method, body, **options)
+        return status, json.loads(reply)
+
+    def log_in_as(self, username: str, password: str) -> str:
+        _, headers, _ = self.fetch("/api/login", "POST", {"username": username, "password": password}, cookie=None)
+        return headers["Set-Cookie"].split(";")[0]
+
+    def test_an_admin_sees_every_account_and_role_but_no_passwords(self):
+        status, body = self.call("/api/users")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["accounts"], [{"username": USERNAME, "role": "admin"},
+                                            {"username": "worker", "role": "user"}])
+        self.assertNotIn("hash", json.dumps(body))
+
+    def test_a_role_can_be_changed(self):
+        status, body = self.call("/api/users/worker", "PATCH", {"role": "admin"})
+
+        self.assertEqual((status, body), (200, {"username": "worker", "role": "admin"}))
+        self.assertEqual(web.role_of(web.read_users_file()["worker"]), web.ADMIN)
+
+    def test_an_account_can_be_deleted_and_is_logged_out(self):
+        worker = self.log_in_as("worker", "worker password")
+
+        status, _ = self.call("/api/users/worker", "DELETE")
+
+        self.assertEqual(status, 200)
+        self.assertNotIn("worker", web.read_users_file())
+        self.assertEqual(self.fetch("/api/assets", cookie=worker)[0], 401)
+
+    def test_nobody_can_delete_their_own_account(self):
+        status, body = self.call(f"/api/users/{USERNAME}", "DELETE")
+
+        self.assertEqual(status, 409)
+        self.assertIn("your own account", body["error"])
+        self.assertIn(USERNAME, web.read_users_file())
+
+    def test_the_last_admin_cannot_be_demoted(self):
+        status, body = self.call(f"/api/users/{USERNAME}", "PATCH", {"role": "user"})
+
+        self.assertEqual((status, body["error"]), (409, web.LAST_ADMIN))
+        self.assertTrue(web.is_admin(USERNAME))
+
+    def test_an_admin_can_step_down_once_there_is_another(self):
+        self.call("/api/users/worker", "PATCH", {"role": "admin"})
+
+        self.assertEqual(self.call(f"/api/users/{USERNAME}", "PATCH", {"role": "user"})[0], 200)
+        self.assertFalse(web.is_admin(USERNAME))
+
+    def test_unknown_accounts_and_roles_are_refused(self):
+        self.assertEqual(self.call("/api/users/nobody", "PATCH", {"role": "user"})[0], 404)
+        self.assertEqual(self.call("/api/users/nobody", "DELETE")[0], 404)
+        self.assertEqual(self.call("/api/users/worker", "PATCH", {"role": "owner"})[0], 400)
+
+    def test_usernames_in_the_address_ignore_capitals(self):
+        self.assertEqual(self.call("/api/users/WORKER", "DELETE")[0], 200)
+
+    def test_users_cannot_manage_accounts(self):
+        worker = self.log_in_as("worker", "worker password")
+        for path, method, body in (("/api/users", "GET", None), ("/api/users/worker", "PATCH", {"role": "admin"}),
+                                   (f"/api/users/{USERNAME}", "DELETE", None)):
+            with self.subTest(method=method, path=path):
+                self.assertEqual(self.call(path, method, body, cookie=worker)[0], 403)
+        self.assertEqual(web.role_of(web.read_users_file()["worker"]), web.USER)
+        self.assertIn(USERNAME, web.read_users_file())
+
+    def test_managing_accounts_needs_a_login_and_this_site(self):
+        self.assertEqual(self.call("/api/users", cookie=None)[0], 401)
+        status, _ = self.call("/api/users/worker", "DELETE", extra_headers={"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+        self.assertIn("worker", web.read_users_file())
+
+    def test_changes_are_audited(self):
+        with self.assertLogs(common.audit_logger, "INFO") as logs:
+            self.call("/api/users/worker", "PATCH", {"role": "admin"})
+            self.call("/api/users/worker", "DELETE")
+        records = [json.loads(record.getMessage()) for record in logs.records]
+        self.assertEqual([(r["action"], r["user"], r["account"]) for r in records],
+                         [("CHANGE_ROLE", USERNAME, "worker"), ("DELETE_ACCOUNT", USERNAME, "worker")])
+
+
 class AuditFileTest(WebTestCase):
     """The audit log records logins and every change, with the web user who made it."""
 

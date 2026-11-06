@@ -493,6 +493,64 @@ def create_account_reply(body: dict, created_by: str) -> tuple:
     return 201, {"username": username, "role": role}
 
 
+USERS_ADDRESS_PREFIX = "/api/users/"  # one account's address is this followed by its username
+LAST_ADMIN = "There must always be at least one admin"
+
+
+def list_accounts() -> list:
+    """Every account's username and role, in order. Password hashes are never sent."""
+    with users_lock:
+        return [{"username": name, "role": role_of(record)} for name, record in sorted(users.items())]
+
+
+def change_accounts(username: str, change) -> object:
+    """Apply `change` to the stored accounts, returning a problem message or None. The file
+    is read again first, in case it was changed from the command line, and an admin must
+    be left afterwards, so nobody can lock everyone out."""
+    with users_lock:
+        accounts = read_users_file()
+        if username not in accounts:
+            return "There is no account with that username"
+        change(accounts)
+        if not any(role_of(record) == ADMIN for record in accounts.values()):
+            return LAST_ADMIN
+        write_users_file(accounts)
+        users.clear()
+        users.update(accounts)
+    return None
+
+
+def set_role_reply(username: str, body: dict, changed_by: str) -> tuple:
+    """Change an account's role, returning an HTTP status and a JSON body."""
+    role = body.get("role")
+    if role not in ROLES:
+        return 400, {"error": f"A role must be one of: {', '.join(ROLES)}"}
+
+    problem = change_accounts(username, lambda accounts: accounts[username].update(role=role))
+    if problem:
+        return (409 if problem == LAST_ADMIN else 404), {"error": problem}
+    logger.info("%s made %s %s %s", changed_by, username, "an" if role == ADMIN else "a", role)
+    audit("CHANGE_ROLE", user=changed_by, account=username, role=role)
+    return 200, {"username": username, "role": role}
+
+
+def delete_account_reply(username: str, deleted_by: str) -> tuple:
+    """Delete an account and log it out everywhere, returning an HTTP status and a JSON body.
+    Nobody can delete their own account, so an admin can't remove themselves by mistake."""
+    if username == deleted_by:
+        return 409, {"error": "You can't delete your own account"}
+
+    problem = change_accounts(username, lambda accounts: accounts.pop(username))
+    if problem:
+        return (409 if problem == LAST_ADMIN else 404), {"error": problem}
+    with login_lock:
+        for token in [token for token, session in sessions.items() if session["username"] == username]:
+            del sessions[token]
+    logger.info("%s deleted the account %s", deleted_by, username)
+    audit("DELETE_ACCOUNT", user=deleted_by, account=username)
+    return 200, {"deleted": username}
+
+
 class WebHandler(BaseHTTPRequestHandler):
     """Answers one browser request. Each request runs on its own thread."""
 
@@ -511,6 +569,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 reply["username"] = username  # so the page can say who is logged in
                 reply["role"] = ADMIN if is_admin(username) else USER  # and what they can do
                 self.send_json(status, reply)
+        elif path == "/api/users":
+            username = self.admin_or_refuse()
+            if username is not None:
+                self.send_json(200, {"accounts": list_accounts()})
         elif path in STATIC_FILES:
             self.send_static_file(*STATIC_FILES[path])
         elif path == "/favicon.ico":
@@ -557,7 +619,11 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         address = urlsplit(self.path)
-        if not address.path.startswith(ASSET_ADDRESS_PREFIX) or address.path == ASSET_ADDRESS_PREFIX:
+        if self.account_address(address.path) is not None:
+            username = self.admin_or_refuse()
+            if username is not None:
+                self.send_json(*delete_account_reply(self.account_address(address.path), username))
+        elif not address.path.startswith(ASSET_ADDRESS_PREFIX) or address.path == ASSET_ADDRESS_PREFIX:
             self.send_json(404, {"error": "There is nothing at this address"})
         else:
             username = session_username(self.session_token())
@@ -577,6 +643,13 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         path = urlsplit(self.path).path
+        if self.account_address(path) is not None:
+            username = self.admin_or_refuse()
+            if username is not None:
+                body = self.read_json_body()
+                if body is not None:
+                    self.send_json(*set_role_reply(self.account_address(path), body, username))
+            return
         if not path.startswith(ASSET_ADDRESS_PREFIX) or path == ASSET_ADDRESS_PREFIX:
             self.send_json(404, {"error": "There is nothing at this address"})
             return
@@ -628,6 +701,25 @@ class WebHandler(BaseHTTPRequestHandler):
         except CookieError:
             return None
         return morsel.value if morsel else None
+
+    @staticmethod
+    def account_address(path: str) -> object:
+        """The username in an account's address, such as /api/users/alex, or None."""
+        if path.startswith(USERS_ADDRESS_PREFIX) and path != USERS_ADDRESS_PREFIX:
+            return normalise_username(unquote(path[len(USERS_ADDRESS_PREFIX):]))
+        return None
+
+    def admin_or_refuse(self) -> object:
+        """Return the logged-in admin's username, or reply 401 or 403 and return None."""
+        username = session_username(self.session_token())
+        if username is None:
+            self.send_json(401, {"error": "Please log in"})
+            return None
+        if not is_admin(username):
+            logger.warning("%s tried to manage accounts, but isn't an admin", username)
+            self.send_json(403, {"error": ADMIN_ONLY})
+            return None
+        return username
 
     def is_logged_in(self) -> bool:
         return session_username(self.session_token()) is not None
