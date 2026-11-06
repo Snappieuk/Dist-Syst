@@ -326,7 +326,10 @@ borrower's name, a start date (today) and a due date (a week later). An asset on
 Check in button instead, and its status says who has it and until when, in red once it is
 overdue. Checking out marks it In Use and checking in marks it Not In Use. An asset can't
 be lent twice at once, and the due date can't be before the start. Searching also finds
-assets by who has them.
+assets by who has them. In the GUI, select an asset and click Check Out / In: it opens the
+same form for an asset that is free, or asks before checking in one that is on loan. The
+Loans button lists every loan of the assets the table shows, oldest start first, with
+the return date, "On loan" or "Overdue".
 
 **History.** Every registration, status change, edit, approval, check-out and check-in is
 recorded with the asset: when, what, which web user asked and which server did it. The
@@ -781,7 +784,7 @@ Other limitations:
   edit made while the primary was offline isn't flagged, although its history shows which
   server made it.
 - The GUI's review area only lists flagged assets that the table is showing, so a search
-  can hide some. The GUI has no check-out form or calendar; those are on the web page.
+  can hide some. The GUI has a check-out form and a loans list, like the web page, but no calendar; that is only on the web page.
 - Loans are whole days, in each machine's local date, with no times or time zones. The
   calendar shows the browser's month.
 - Every change rewrites the whole file, changes happen one at a time and every asset is held
