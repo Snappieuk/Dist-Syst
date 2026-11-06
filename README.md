@@ -163,7 +163,7 @@ or `web.py`, needs the same server list, either as `servers` in its `config.json
 | Variable | Set on | Meaning |
 |---|---|---|
 | `ASSET_SERVERS` | Every machine, unless `config.json` has `servers` | Where the servers are: the primary first, then each backup, as `host:port,host:port`. Without it or the setting, both are on this machine, on ports 65432 and 65433. |
-| `ASSET_LISTEN_HOST` | Each server machine | The address the server listens on. Use `0.0.0.0` to accept connections on every network connection the machine has. Without it, the server listens on the name in its own `ASSET_SERVERS` entry. |
+| `ASSET_LISTEN_HOST` | Each server machine, only to restrict it | The address the server listens on. Without it, every server listens on every network connection the machine has (`0.0.0.0`), so other devices can connect. Set it to `127.0.0.1` to accept only this machine. |
 
 For example:
 
@@ -177,9 +177,10 @@ without anyone updating the list. Any name the machines can look up works, from 
 in each machine's hosts file to DNS, a container's name or a Kubernetes service. Names are
 looked up as IPv4 addresses, because that is what the servers listen on.
 
-`ASSET_LISTEN_HOST` is needed because the name others use may not belong to the server's
-own machine, for example when it is behind a router or in a container. The server then
-couldn't listen on that name and wouldn't start.
+The servers listen on every network connection by default, on the port in their own
+`ASSET_SERVERS` entry, whatever name that entry uses. The name is only how other programs
+reach the server, and it may not belong to the server's own machine, for example when it is
+behind a router or in a container. `ASSET_LISTEN_HOST` restricts that if you want it to.
 
 Then:
 

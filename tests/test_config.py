@@ -186,13 +186,14 @@ class HostnameTest(unittest.TestCase):
 
 
 class ListenAddressTest(unittest.TestCase):
-    def test_a_server_normally_listens_on_its_own_entry(self):
+    def test_a_server_normally_listens_on_every_network(self):
         with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": ""}):
-            self.assertEqual(node.listening_address(("assets-1", 65432)), ("assets-1", 65432))
+            self.assertEqual(node.listening_address(("assets-1", 65432)), ("0.0.0.0", 65432))
+            self.assertEqual(node.listening_address(("127.0.0.1", 65433)), ("0.0.0.0", 65433))
 
     def test_the_host_can_be_replaced_but_not_the_port(self):
-        with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": "0.0.0.0"}):
-            self.assertEqual(node.listening_address(("assets-1", 65432)), ("0.0.0.0", 65432))
+        with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": "127.0.0.1"}):
+            self.assertEqual(node.listening_address(("assets-1", 65432)), ("127.0.0.1", 65432))
 
     def test_a_server_known_by_a_name_it_cannot_listen_on_still_starts(self):
         # Other machines would know this server as assets-primary.invalid, a name that
