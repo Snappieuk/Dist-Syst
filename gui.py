@@ -31,7 +31,11 @@ SUCCESS_MESSAGES = {
     "set_status": "Asset status updated",
     "edit": "Asset details updated",
     "delete": "Asset deleted",
+    "review": "Review saved",
 }
+
+# How a ticked and an unticked row look in the review list.
+TICKED, UNTICKED = "\u2611", "\u2610"
 
 # The status filter's choice that shows every status.
 ALL_STATUSES = "All statuses"
@@ -89,6 +93,8 @@ class AssetManagementApp:
         self.refresh_button.grid(row=2, column=2, rowspan=2, padx=(12, 0), sticky=tk.N)
 
         listing = ttk.LabelFrame(self.root, text="Registered assets", padding=8)
+        self._build_review_area()
+        self.listing = listing
         listing.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
 
         # The search happens on the server, which only sends back the matching assets.
@@ -121,6 +127,8 @@ class AssetManagementApp:
         self.in_use_button.pack(side=tk.LEFT, padx=(8, 0))
         self.edit_button = ttk.Button(actions, text="Edit Details", command=self.edit_selected)
         self.edit_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.history_button = ttk.Button(actions, text="History", command=self.show_selected_history)
+        self.history_button.pack(side=tk.LEFT, padx=(8, 0))
         self.delete_button = ttk.Button(actions, text="Delete Asset", command=self.delete_selected)
         self.delete_button.pack(side=tk.RIGHT)
 
@@ -161,8 +169,113 @@ class AssetManagementApp:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Double-clicking an asset shows its history.
+        self.tree.bind("<Double-1>", lambda event: self.show_selected_history())
+
         self.status_label = ttk.Label(self.root, text="Ready", anchor=tk.W)
         self.status_label.pack(fill=tk.X, padx=14, pady=(0, 10))
+
+    def _build_review_area(self) -> None:
+        """The "Flagged for review" area: assets added while the primary server was offline,
+        each with a tick box, and buttons to approve or deny the ticked ones or all of them.
+        It is only shown while there is something to review."""
+        self.review_frame = ttk.LabelFrame(self.root, text="Flagged for review", padding=8)
+        self.review_label = ttk.Label(self.review_frame, anchor=tk.W)
+        self.review_label.pack(fill=tk.X)
+
+        self.review_tree = ttk.Treeview(self.review_frame, columns=("tick", "asset_id", "description", "location"),
+                                        show="headings", height=4, selectmode="none")
+        for column, heading, width in (("tick", "", 40), ("asset_id", "Asset ID", 150),
+                                       ("description", "Description", 260), ("location", "Location", 200)):
+            self.review_tree.heading(column, text=heading)
+            self.review_tree.column(column, width=width, minwidth=40, anchor=tk.W, stretch=column != "tick")
+        self.review_tree.pack(fill=tk.X, pady=6)
+        # Clicking a row ticks or unticks it, like a tick box.
+        self.review_tree.bind("<Button-1>", self._toggle_review_row)
+        self.review_ticked = set()
+
+        buttons = ttk.Frame(self.review_frame)
+        buttons.pack(fill=tk.X)
+        self.review_all = tk.BooleanVar()
+        ttk.Checkbutton(buttons, text="Select all", variable=self.review_all,
+                        command=self._tick_all_reviews).pack(side=tk.LEFT)
+        for text, decision, everything in (("Approve selected", "approve", False), ("Approve all", "approve", True),
+                                           ("Deny selected", "deny", False), ("Deny all", "deny", True)):
+            ttk.Button(buttons, text=text,
+                       command=lambda d=decision, e=everything: self.review(d, e)).pack(side=tk.LEFT, padx=(8, 0))
+
+    def _flagged_assets(self) -> list:
+        return sorted((asset for asset in self.assets_by_id.values() if asset.get("flagged")),
+                      key=lambda asset: asset["asset_id"])
+
+    def _show_review(self) -> None:
+        """Fill the review area from the assets the table shows, and hide it if none are flagged."""
+        flagged = self._flagged_assets()
+        self.review_ticked &= {asset["asset_id"] for asset in flagged}  # forget ones no longer flagged
+        self.review_tree.delete(*self.review_tree.get_children())
+        for asset in flagged:
+            tick = TICKED if asset["asset_id"] in self.review_ticked else UNTICKED
+            self.review_tree.insert("", tk.END, iid=asset["asset_id"],
+                                    values=(tick, asset["asset_id"], asset.get("description", ""),
+                                            asset.get("location", "")))
+        self.review_label.configure(text=(
+            "This asset was added while the primary server was offline." if len(flagged) == 1 else
+            f"These {len(flagged)} assets were added while the primary server was offline."
+        ) + " Check them, then approve or deny them.")
+        self.review_all.set(bool(flagged) and len(self.review_ticked) == len(flagged))
+        if flagged:
+            self.review_frame.pack(fill=tk.X, padx=12, pady=(0, 4), before=self.listing)
+        else:
+            self.review_frame.pack_forget()
+
+    def _toggle_review_row(self, event) -> str:
+        asset_id = self.review_tree.identify_row(event.y)
+        if asset_id:
+            self.review_ticked ^= {asset_id}  # add it if missing, remove it if there
+            self._show_review()
+        return "break"  # stop the tree treating the click as anything else
+
+    def _tick_all_reviews(self) -> None:
+        self.review_ticked = {asset["asset_id"] for asset in self._flagged_assets()} if self.review_all.get() else set()
+        self._show_review()
+
+    def review(self, decision: str, everything: bool) -> None:
+        """Approve or deny the ticked flagged assets, or all of them. Denying deletes, so it
+        asks first."""
+        flagged = [asset["asset_id"] for asset in self._flagged_assets()]
+        chosen = flagged if everything else [asset_id for asset_id in flagged if asset_id in self.review_ticked]
+        if not chosen:
+            messagebox.showinfo("Nothing selected", "Tick the assets to review first.", parent=self.root)
+            return
+        if decision == "deny" and not messagebox.askyesno(
+                "Deny assets", f"Deny {len(chosen)} asset(s)? Denied assets are deleted for good.",
+                icon=messagebox.WARNING, parent=self.root):
+            return
+        action = "APPROVE" if decision == "approve" else "DELETE"
+        self.review_ticked -= set(chosen)
+        self._start_request("review", [{"action": action, "asset_id": asset_id,
+                                        "expected_version": self.versions.get(asset_id)} for asset_id in chosen])
+
+    def show_selected_history(self) -> None:
+        """Show everything that has happened to the selected asset, newest first."""
+        asset_id = self._selected_asset_id()
+        if asset_id is None:
+            return
+        asset = self.assets_by_id.get(asset_id, {})
+        window = tk.Toplevel(self.root)
+        window.title(f"History of {asset_id}")
+        window.transient(self.root)
+        text = tk.Text(window, width=80, height=20, wrap=tk.WORD)
+        text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        lines = [f"{asset.get('description', '')}, {asset.get('location', '')}", ""]
+        for entry in reversed(asset.get("history") or []):
+            who = f"by {entry['user']}, " if entry.get("user") else ""
+            lines.append(f"{entry.get('at', '')}  {entry.get('detail', '')} ({who}on the {entry.get('server')} server)")
+        if not asset.get("history"):
+            lines.append("Nothing has been recorded for this asset yet.")
+        text.insert(tk.END, "\n".join(lines))
+        text.configure(state=tk.DISABLED)  # read-only
+        ttk.Button(window, text="Close", command=window.destroy).pack(pady=(0, 10))
 
     def _set_busy(self, busy: bool) -> None:
         """Disable the buttons during a request, so it cannot be sent twice."""
@@ -205,7 +318,17 @@ class AssetManagementApp:
             # This runs on the background thread, so it must not touch any
             # widgets. It only puts its result on the queue.
             try:
-                response = send_request(request)
+                # A review sends one request per asset. Any that fail are reported together,
+                # and the rest still go ahead.
+                if operation == "review":
+                    failures = []
+                    for one in request:
+                        reply = send_request(one)
+                        if reply.get("status") != "OK":
+                            failures.append(f"{one['asset_id']}: {reply.get('detail')}")
+                    response = dict(reply, status="ERROR" if failures else "OK", detail="\n".join(failures))
+                else:
+                    response = send_request(request)
                 assets = None
                 error = None
 
@@ -389,7 +512,7 @@ class AssetManagementApp:
 
                     # The table may be out of date, for example if someone else
                     # changed the asset, so show the user what is there now.
-                    if operation in ("set_status", "edit", "delete"):
+                    if operation in ("set_status", "edit", "delete", "review"):
                         self.refresh_assets()
                     continue
 
@@ -422,6 +545,8 @@ class AssetManagementApp:
             self.tree.delete(item)
         self.versions = {asset.get("asset_id"): asset.get("version", 0) for asset in assets}
         self.assets_by_id = {asset.get("asset_id"): asset for asset in assets}
+
+        self._show_review()
 
         # Assets saved before tagging was added have no tags, so those are
         # worked out here for display.

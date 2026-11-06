@@ -227,3 +227,40 @@ class WebPageStatusTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GuiReviewTest(unittest.TestCase):
+    """The GUI's "Flagged for review" area and history window."""
+
+    ASSETS = [
+        {"asset_id": "AST-B000001", "description": "iPad", "category": "IT", "location": "Site B",
+         "status": common.IN_USE, "version": 3, "flagged": True,
+         "history": [{"at": "2026-11-06T10:00:00Z", "detail": "Registered", "server": "backup", "user": None}]},
+        {"asset_id": "AST-P000001", "description": "Laptop", "category": "IT", "location": "Site A",
+         "status": common.IN_USE, "version": 1},
+    ]
+
+    def setUp(self):
+        self.root, self.app = make_gui()
+        self.addCleanup(self.root.destroy)
+        self.app._show_assets(self.ASSETS)
+
+    def test_only_flagged_assets_are_listed_and_the_area_hides_when_there_are_none(self):
+        self.assertEqual(self.app.review_tree.get_children(), ("AST-B000001",))
+        self.assertEqual(self.app.review_frame.winfo_manager(), "pack")
+        self.app._show_assets(self.ASSETS[1:])
+        self.assertEqual(self.app.review_frame.winfo_manager(), "")
+
+    def test_approving_the_ticked_assets_sends_one_request_each(self):
+        self.app.review_all.set(True)
+        self.app._tick_all_reviews()
+        with mock.patch.object(self.app, "_start_request") as start:
+            self.app.review("approve", everything=False)
+        start.assert_called_once_with(
+            "review", [{"action": "APPROVE", "asset_id": "AST-B000001", "expected_version": 3}])
+
+    def test_denying_asks_first(self):
+        with mock.patch("gui.messagebox.askyesno", return_value=False), \
+                mock.patch.object(self.app, "_start_request") as start:
+            self.app.review("deny", everything=True)
+        start.assert_not_called()
