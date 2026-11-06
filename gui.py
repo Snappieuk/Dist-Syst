@@ -11,11 +11,12 @@ fails, the GUI moves to the backup by itself. Log in with the account the server
 administrator gave you (the same accounts as the web page). The server checks every
 request against your account, and only admins can delete assets or approve flagged ones.
 
-Certificates: you never have to deal with them. The first certificate the GUI sees is
-trusted automatically, and after that only that exact certificate is accepted until the
-window is closed (so the connection is encrypted, and a different server appearing
-mid-session is refused). The weak spot: someone already intercepting the very first
-connection would not be noticed.
+Certificates: you never have to deal with them. A copy downloaded from the web page
+("Download GUI") already holds the servers' addresses and the real certificate's
+fingerprint, so it only ever talks to the genuine servers. A copy of this file from
+anywhere else trusts the first certificate it sees, and after that only that exact
+certificate until the window is closed. That is encrypted and refuses a different
+server mid-session, but cannot notice someone intercepting the very first connection.
 
 WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
@@ -50,6 +51,17 @@ DEFAULT_PORTS = (65432, 65433)  # the primary's and the backup's, searched for b
 DISCOVERY_REQUEST = b"ASSET_MANAGEMENT_DISCOVER"
 SERVICE_NAME = "asset-management"
 # --------------------------------------------------------------------------------
+
+# ---- Site settings -------------------------------------------------------------
+# Left empty, this file works anywhere: the user types an address (or presses "Find
+# servers") and the first certificate seen is trusted. The web page's "Download GUI"
+# button sends a copy of this file with these two lines filled in, so that the copy
+# already knows where the servers are and which certificate is the real one. Neither
+# value is secret. web.py finds these two lines by their exact text, so keep them as
+# they are.
+SITE_SERVERS = []
+SITE_FINGERPRINT = None
+# ---------------------------------------------------------------------------------
 
 TIMEOUT_SECONDS = 5           # how long to wait on one server
 DISCOVERY_SECONDS = 1.5       # how long "Find servers" listens for answers
@@ -961,9 +973,10 @@ class LoginWindow(ttk.Frame):
     """The first screen: which server, and who is logging in.
 
     "Find servers" looks for servers on the local network, "Check" tests an address, and
-    "Log in" does both and then logs in. The first certificate a server shows is trusted
-    automatically, and after that only that exact certificate is accepted, so a different
-    server at the same address is refused.
+    "Log in" does both and then logs in. With the site settings filled in (a downloaded
+    copy), only the certificate in SITE_FINGERPRINT is accepted, and the server box starts
+    with the site's addresses. Without them, the first certificate a server shows is
+    trusted automatically, and after that only that exact certificate is accepted.
     Network work runs on a background thread, with results handed back through a queue,
     for the reason given at the top of this file.
     """
@@ -998,6 +1011,15 @@ class LoginWindow(ttk.Frame):
         self.message = ttk.Label(self, text="Enter the server's address, or press Find servers.", wraplength=520)
         self.message.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
         self.columnconfigure(1, weight=1)
+
+        if SITE_FINGERPRINT:
+            # A downloaded copy: the real certificate is already known, and so are the servers.
+            session.trusted = SITE_FINGERPRINT
+            shown = [f"{host}:{port}" for host, port in SITE_SERVERS]
+            if shown:
+                self.server_box.configure(values=shown)
+                self.server_box.set(shown[0])
+                self.message.configure(text="Enter your username and password.")
 
         self.root.after(100, self._process_results)
 
@@ -1070,7 +1092,24 @@ class LoginWindow(ttk.Frame):
             self._say(str(exc))
             return
         self._say("Connecting...")
-        self._run(lambda: probe(address), lambda result, error: self._trust(address, result, error, then))
+        answered = [address]  # the server that replied, which may not be the typed one
+
+        def work() -> tuple:
+            # A downloaded copy knows the other servers too, so if the typed one is down
+            # (say the primary), try the rest. A plain copy only has the typed address.
+            others = [s for s in SITE_SERVERS if s != address] if SITE_FINGERPRINT else []
+            error = None
+            for candidate in [address] + others:
+                try:
+                    result = probe(candidate)
+                except OSError as exc:
+                    error = error or exc
+                    continue
+                answered[0] = candidate
+                return result
+            raise error
+
+        self._run(work, lambda result, error: self._trust(answered[0], result, error, then))
 
     def _trust(self, address: tuple, result: object, error: object, then) -> None:
         if error:
@@ -1078,6 +1117,10 @@ class LoginWindow(ttk.Frame):
             return
         found, reply = result
         if session.trusted != found:
+            if SITE_FINGERPRINT:
+                self._say("This is not the server this copy of the program was made for, so it was not used. "
+                          "Download a fresh copy from the web page if the server was reinstalled.")
+                return
             if session.trusted is not None:
                 self._say("This server's certificate is different from the one you trusted, so it was not used.")
                 return
