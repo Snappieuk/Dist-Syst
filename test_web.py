@@ -933,7 +933,8 @@ class RoleTest(WebTestCase):
 
     def test_the_page_hides_admin_controls_until_it_knows_the_role(self):
         _, _, page = self.fetch("/", cookie=None)
-        self.assertIn(b'id="account-panel" class="panel add-panel" hidden', page)
+        self.assertIn(b'id="manage-accounts" type="button" class="menu-item" hidden', page)
+        self.assertIn(b'id="account" class="account-menu" hidden', page)
 
 
 class ManageAccountsTest(WebTestCase):

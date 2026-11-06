@@ -8,14 +8,71 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <main>
-    <header class="page-header">
-      <h1>Asset Browser</h1>
-      <div id="account" class="account" hidden>
-        <span>Logged in as <strong id="current-user"></strong> <span id="current-role" class="role"></span></span>
-        <button id="logout" type="button" class="secondary">Log out</button>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1 class="brand">Asset Browser</h1>
+      <div id="account" class="account-menu" hidden>
+        <button id="account-toggle" class="account-toggle" type="button"
+                aria-haspopup="true" aria-expanded="false" aria-controls="account-popover">
+          <span id="account-avatar" class="avatar" aria-hidden="true"></span>
+          <span class="account-name">
+            <strong id="current-user"></strong>
+            <span id="current-role" class="role-chip"></span>
+          </span>
+          <span class="chevron" aria-hidden="true"></span>
+        </button>
+        <div id="account-popover" class="popover" hidden>
+          <div class="popover-head">
+            <span id="popover-avatar" class="avatar avatar-large" aria-hidden="true"></span>
+            <div>
+              <strong id="popover-user"></strong>
+              <p id="popover-role" class="popover-role"></p>
+            </div>
+          </div>
+          <button id="manage-accounts" type="button" class="menu-item" hidden>Manage accounts</button>
+          <button id="logout" type="button" class="menu-item">Log out</button>
+        </div>
       </div>
-    </header>
+    </div>
+  </header>
+
+  <dialog id="accounts-dialog" class="dialog" aria-labelledby="accounts-title">
+    <div class="dialog-head">
+      <h2 id="accounts-title">Accounts</h2>
+      <button id="accounts-close" type="button" class="icon-button" aria-label="Close">&times;</button>
+    </div>
+    <p id="accounts-message" class="dialog-message" role="status"></p>
+    <ul id="account-list" class="account-list"></ul>
+    <h3 class="dialog-subhead">Create an account</h3>
+    <form id="account-form" class="dialog-form">
+      <label>
+        Username
+        <input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\-]+"
+               title="Letters, numbers, dots, dashes or underscores"
+               autocomplete="off" autocapitalize="none" spellcheck="false">
+      </label>
+      <label>
+        Role
+        <select name="role">
+          <option value="user">User: view, add and edit</option>
+          <option value="admin">Admin: also delete and manage accounts</option>
+        </select>
+      </label>
+      <label>
+        Password
+        <input name="password" type="password" required minlength="8" autocomplete="new-password">
+      </label>
+      <label>
+        Type it again
+        <input name="confirm" type="password" required autocomplete="new-password">
+      </label>
+      <div class="dialog-actions">
+        <button id="account-button" type="submit">Create account</button>
+      </div>
+    </form>
+  </dialog>
+
+  <main>
 
     <section id="login-section" hidden>
       <form id="login-form" class="panel login-form">
@@ -63,33 +120,6 @@
             </select>
           </label>
           <button id="add-button" type="submit">Add asset</button>
-        </form>
-      </details>
-      <details id="account-panel" class="panel add-panel" hidden>
-        <summary>Create an account</summary>
-        <form id="account-form" class="add-form">
-          <label>
-            Username
-            <input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\-]+"
-                   title="Letters, numbers, dots, dashes or underscores"
-                   autocomplete="off" autocapitalize="none" spellcheck="false">
-          </label>
-          <label>
-            Password
-            <input name="password" type="password" required minlength="8" autocomplete="new-password">
-          </label>
-          <label>
-            Type it again
-            <input name="confirm" type="password" required autocomplete="new-password">
-          </label>
-          <label>
-            Role
-            <select name="role">
-              <option value="user">User: view, add and edit</option>
-              <option value="admin">Admin: also delete and create accounts</option>
-            </select>
-          </label>
-          <button id="account-button" type="submit">Create account</button>
         </form>
       </details>
       <section id="edit-panel" class="panel edit-panel" hidden>

@@ -38,8 +38,19 @@ const editForm = document.getElementById("edit-form");
 const editButton = document.getElementById("edit-button");
 const editCancel = document.getElementById("edit-cancel");
 
-const accountPanel = document.getElementById("account-panel");
 const currentRole = document.getElementById("current-role");
+const accountToggle = document.getElementById("account-toggle");
+const accountPopover = document.getElementById("account-popover");
+const manageAccountsButton = document.getElementById("manage-accounts");
+const accountsDialog = document.getElementById("accounts-dialog");
+const accountsClose = document.getElementById("accounts-close");
+const accountsMessage = document.getElementById("accounts-message");
+const accountList = document.getElementById("account-list");
+
+const ROLE_DESCRIPTIONS = {
+  admin: "Admin: can also delete assets and manage accounts",
+  user: "User: can view, add and edit assets",
+};
 
 const EDITABLE_FIELDS = ["description", "category", "location", "status"];
 
@@ -105,33 +116,172 @@ function makeHeadingsSortable() {
   showSortOrder();
 }
 
+// ---- The account menu, at the top right ----
+
+function initialOf(name) {
+  return (name || "?").charAt(0).toUpperCase();
+}
+
+function showAccount(username, accountRole) {
+  role = accountRole;
+  currentUser.textContent = username;
+  currentRole.textContent = accountRole;
+  currentRole.classList.toggle("admin", accountRole === "admin");
+  document.getElementById("account-avatar").textContent = initialOf(username);
+  document.getElementById("popover-avatar").textContent = initialOf(username);
+  document.getElementById("popover-user").textContent = username;
+  document.getElementById("popover-role").textContent = ROLE_DESCRIPTIONS[accountRole] || accountRole;
+  manageAccountsButton.hidden = accountRole !== "admin";
+}
+
+function setMenuOpen(open) {
+  accountPopover.hidden = !open;
+  accountToggle.setAttribute("aria-expanded", String(open));
+}
+
+// A click anywhere else, or Escape, closes the menu, as menus usually behave.
+document.addEventListener("click", (event) => {
+  if (!accountPopover.hidden && !event.target.closest(".account-menu")) {
+    setMenuOpen(false);
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !accountPopover.hidden) {
+    setMenuOpen(false);
+    accountToggle.focus();
+  }
+});
+
+// ---- Managing accounts, in a window of its own ----
+
+function showAccountsMessage(text, isProblem = false) {
+  accountsMessage.textContent = text;
+  accountsMessage.classList.toggle("problem", isProblem);
+}
+
+// Sends one change to the accounts, returning the reply's body, or throwing with the
+// server's explanation. A lost login goes back to the login form.
+async function accountsRequest(path, method, body) {
+  const options = { method };
+  if (body) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  if (response.status === 401) {
+    showLogin();
+    throw new Error("Please log in again");
+  }
+  const reply = await response.json();
+  if (!response.ok) {
+    throw new Error(reply.error);
+  }
+  return reply;
+}
+
+function accountRow(account) {
+  const isMe = account.username === currentUser.textContent;
+  const row = document.createElement("li");
+  row.className = "account-row";
+
+  const avatar = document.createElement("span");
+  avatar.className = "avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.textContent = initialOf(account.username);
+
+  const name = document.createElement("span");
+  name.className = "account-row-name";
+  name.textContent = account.username;
+  if (isMe) {
+    const you = document.createElement("span");
+    you.className = "you";
+    you.textContent = "you";
+    name.append(" ", you);
+  }
+
+  const choice = document.createElement("select");
+  choice.setAttribute("aria-label", `Role of ${account.username}`);
+  for (const value of ["user", "admin"]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value === "admin" ? "Admin" : "User";
+    choice.append(option);
+  }
+  choice.value = account.role;
+  choice.addEventListener("change", () => changeRole(account.username, choice.value));
+
+  row.append(avatar, name, choice);
+  if (!isMe) {
+    row.append(actionButton("Delete", "delete", `Delete the account ${account.username}`,
+      () => deleteAccount(account.username)));
+  }
+  return row;
+}
+
+async function loadAccounts() {
+  try {
+    const body = await accountsRequest("/api/users", "GET");
+    accountList.replaceChildren(...body.accounts.map(accountRow));
+  } catch (error) {
+    showAccountsMessage(`Could not load the accounts: ${error.message}`, true);
+  }
+}
+
+async function openAccounts() {
+  setMenuOpen(false);
+  showAccountsMessage("");
+  accountForm.reset();
+  accountsDialog.showModal();
+  await loadAccounts();
+}
+
+// Changing your own role to user takes away the right to manage accounts, so the window
+// closes and the page is redrawn for a user.
+async function changeRole(username, newRole) {
+  try {
+    await accountsRequest(`/api/users/${encodeURIComponent(username)}`, "PATCH", { role: newRole });
+    showAccountsMessage(`${username} is now ${newRole === "admin" ? "an admin" : "a user"}`);
+    if (username === currentUser.textContent && newRole !== "admin") {
+      accountsDialog.close();
+      await loadAssets();
+      return;
+    }
+  } catch (error) {
+    showAccountsMessage(`Could not change ${username}'s role: ${error.message}`, true);
+  }
+  await loadAccounts();
+}
+
+async function deleteAccount(username) {
+  if (!confirm(`Delete the account ${username}? They will be logged out straight away.`)) {
+    return;
+  }
+  try {
+    await accountsRequest(`/api/users/${encodeURIComponent(username)}`, "DELETE");
+    showAccountsMessage(`Deleted the account ${username}`);
+  } catch (error) {
+    showAccountsMessage(`Could not delete ${username}: ${error.message}`, true);
+  }
+  await loadAccounts();
+}
+
 async function createAccount(event) {
   event.preventDefault();
   const details = Object.fromEntries(new FormData(accountForm));
   if (details.password !== details.confirm) {
-    showActionResult("Could not create the account: the two passwords don't match", true);
+    showAccountsMessage("Could not create the account: the two passwords don't match", true);
     return;
   }
 
   accountButton.disabled = true;
   try {
-    const response = await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: details.username, password: details.password, role: details.role }),
-    });
-    if (response.status === 401) {
-      showLogin();
-      return;
-    }
-    const body = await response.json();
-    if (!response.ok) {
-      throw new Error(body.error);
-    }
+    const body = await accountsRequest("/api/users", "POST",
+      { username: details.username, password: details.password, role: details.role });
     accountForm.reset();
-    showActionResult(`Created the account ${body.username}, as ${body.role === "admin" ? "an admin" : "a user"}`);
+    showAccountsMessage(`Created the account ${body.username}, as ${body.role === "admin" ? "an admin" : "a user"}`);
+    await loadAccounts();
   } catch (error) {
-    showActionResult(`Could not create the account: ${error.message}`, true);
+    showAccountsMessage(`Could not create the account: ${error.message}`, true);
   } finally {
     accountButton.disabled = false;
   }
@@ -337,10 +487,11 @@ function showLogin() {
   tableBody.replaceChildren();
   appSection.hidden = true;
   account.hidden = true;
-  currentUser.textContent = "";
-  currentRole.textContent = "";
-  role = "";
-  accountPanel.hidden = true;
+  setMenuOpen(false);
+  if (accountsDialog.open) {
+    accountsDialog.close();
+  }
+  showAccount("", "");
   loginSection.hidden = false;
   username.focus();
 }
@@ -436,10 +587,7 @@ async function loadAssets() {
     }
     showApp();
     const body = await response.json();
-    currentUser.textContent = body.username;
-    role = body.role;
-    currentRole.textContent = `(${role})`;
-    accountPanel.hidden = role !== "admin";
+    showAccount(body.username, body.role);
     if (!response.ok) {
       throw new Error(body.error);
     }
@@ -473,6 +621,9 @@ loginForm.addEventListener("submit", logIn);
 logoutButton.addEventListener("click", logOut);
 addForm.addEventListener("submit", addAsset);
 accountForm.addEventListener("submit", createAccount);
+accountToggle.addEventListener("click", () => setMenuOpen(accountPopover.hidden));
+manageAccountsButton.addEventListener("click", openAccounts);
+accountsClose.addEventListener("click", () => accountsDialog.close());
 editForm.addEventListener("submit", saveEdit);
 editCancel.addEventListener("click", stopEdit);
 
