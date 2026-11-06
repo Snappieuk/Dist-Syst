@@ -49,7 +49,8 @@ def server_state(address: tuple) -> str:
 
 
 def show_servers() -> None:
-    for name, address in zip(("Primary", "Backup"), common.SERVERS):
+    for index, address in enumerate(common.SERVERS):
+        name = "Primary" if index == 0 else f"Backup {index}"
         print(f"  {name} at {address[0]}:{address[1]}: {server_state(address)}")
 
 
@@ -76,7 +77,7 @@ def held_by(address: tuple) -> set:
 
 def primary_is_back() -> bool:
     """The primary is accepting changes again, and the backup has gone back to standby."""
-    primary, backup = common.SERVERS
+    primary, backup = common.SERVERS[:2]  # the demo uses the first two servers
     return server_state(primary) == "accepting changes" and server_state(backup) != "accepting changes"
 
 
@@ -94,7 +95,7 @@ def run_demo() -> bool:
     if len(common.SERVERS) < 2:
         print("Only one server is configured, so there is nothing to fail over to.")
         return False
-    primary, backup = common.SERVERS
+    primary, backup = common.SERVERS[:2]  # the demo uses the first two servers
 
     heading(1, "The system is running normally")
     show_servers()

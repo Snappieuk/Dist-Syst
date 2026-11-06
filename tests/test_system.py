@@ -1315,28 +1315,41 @@ class TimestampTest(NodeTestCase):
 
 
 class StartSyncTest(unittest.TestCase):
-    """The primary keeps trying to sync with the backup for a short time as it starts."""
+    """The primary keeps trying to sync with the later servers for a short time as it starts."""
 
     def setUp(self):
         self.addCleanup(setattr, server, "START_SYNC_RETRY_SECONDS", server.START_SYNC_RETRY_SECONDS)
         server.START_SYNC_RETRY_SECONDS = 0
+        self.addCleanup(server.followers_in_sync.clear)
+        server.followers_in_sync.update({1: False, 2: False})
 
-    def test_it_retries_until_the_backup_answers(self):
-        with mock.patch.object(server, "catch_up_backup", side_effect=[False, False, True]) as catch_up:
+    def fake_catch_up(self, *results):
+        """A stand-in for server.catch_up() that gives these results in turn, recording
+        each one as the real one does."""
+        results = iter(results)
+
+        def catch_up(index):
+            server.followers_in_sync[index] = next(results)
+            return server.followers_in_sync[index]
+        return catch_up
+
+    def test_it_retries_until_every_later_server_answers(self):
+        # Server 1 answers at once. Server 2 answers on its third try.
+        with mock.patch.object(server, "catch_up", side_effect=self.fake_catch_up(True, False, False, True)) as catch_up:
             self.assertTrue(server.sync_at_start())
-        self.assertEqual(catch_up.call_count, 3)
+        self.assertEqual([call.args[0] for call in catch_up.call_args_list], [1, 2, 2, 2])
 
-    def test_it_gives_up_and_starts_alone_if_the_backup_never_answers(self):
+    def test_it_gives_up_and_starts_without_them_if_one_never_answers(self):
         self.addCleanup(setattr, server, "START_SYNC_SECONDS", server.START_SYNC_SECONDS)
         server.START_SYNC_SECONDS = 0.2
 
-        with mock.patch.object(server, "catch_up_backup", return_value=False), \
+        with mock.patch.object(server, "catch_up", side_effect=lambda index: False), \
                 self.assertLogs(node.logger, "INFO") as logs:
             started = time.monotonic()
             self.assertFalse(server.sync_at_start())
 
         self.assertLess(time.monotonic() - started, 2)
-        self.assertIn("starting alone", logs.output[-1])
+        self.assertIn("starting without them", logs.output[-1])
 
 
 class ServerOptionTest(unittest.TestCase):
@@ -1349,6 +1362,14 @@ class ServerOptionTest(unittest.TestCase):
             with self.subTest(options), self.assertRaises(SystemExit),                     contextlib.redirect_stderr(io.StringIO()):
                 server.main(options)
 
+    def test_each_server_has_its_own_name_data_file_and_id_letter(self):
+        names = [server.name_of(index) for index in range(4)]
+        self.assertEqual(names, ["primary", "backup", "backup2", "backup3"])
+        files = [os.path.basename(server.data_file(index)) for index in range(3)]
+        self.assertEqual(files, ["assets.json", "assets_backup.json", "assets_backup2.json"])
+        self.assertEqual(server.ID_LETTERS[:3], "PBC")
+        self.assertEqual(len(set(server.ID_LETTERS)), len(server.ID_LETTERS))  # no letter twice
+
     def test_there_is_no_backup_without_a_second_entry(self):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = [unused_address()]
@@ -1356,8 +1377,8 @@ class ServerOptionTest(unittest.TestCase):
             server.main(["--backup", "1"])
 
 
-class DistributedTest(unittest.TestCase):
-    """Runs the primary and backup as real, separate programs, and stops them."""
+class DistributedTestCase(unittest.TestCase):
+    """Helpers for running servers as real, separate programs, and stopping them."""
 
     def setUp(self):
         temp_dir = tempfile.TemporaryDirectory()
@@ -1436,6 +1457,9 @@ class DistributedTest(unittest.TestCase):
             lambda: common.request_from(self.backup, {"action": "PING"})["accepts_writes"],
             "saw the backup take over",
         )
+
+class DistributedTest(DistributedTestCase):
+    """Runs the primary and backup as real, separate programs, and stops them."""
 
     def test_a_backup_that_starts_just_after_the_primary_gets_every_change(self):
         # The primary's first attempt to sync finds nothing listening. It keeps trying,
@@ -1584,6 +1608,53 @@ class DistributedTest(unittest.TestCase):
 
         self.assertEqual(self.descriptions_on(self.primary), ["Kept"])
         self.assertEqual(self.descriptions_on(self.backup), ["Kept"])
+
+
+class ThreeServerTest(DistributedTestCase):
+    """The same rules with three servers: the order of the list is the order of succession."""
+
+    def setUp(self):
+        super().setUp()
+        self.backup2 = unused_address()
+        common.SERVERS = [self.primary, self.backup, self.backup2]
+
+    def accepts_writes(self, address: tuple) -> bool:
+        return common.request_from(address, {"action": "PING"})["accepts_writes"]
+
+    def wait_until_all_hold(self, addresses: list, descriptions: list) -> None:
+        self.wait_until(lambda: all(self.descriptions_on(address) == descriptions for address in addresses),
+                        f"saw {descriptions} on every server")
+
+    def test_each_server_takes_over_in_turn_and_all_catch_up_when_they_return(self):
+        primary = self.start_program(0)
+        backup = self.start_program(1)
+        self.start_program(2)
+        servers = [self.primary, self.backup, self.backup2]
+        self.wait_until(lambda: all(not self.accepts_writes(address) for address in servers[1:]),
+                        "saw both backups on standby")
+        self.assertEqual(register(make_asset("First"))["served_by"], "primary")
+        self.wait_until_all_hold(servers, ["First"])
+
+        # The primary fails. The first backup takes over, and the second stays on standby,
+        # because a server before it (the first backup) is still answering.
+        self.stop(primary)
+        self.wait_until(lambda: self.accepts_writes(self.backup), "saw the first backup take over")
+        self.assertFalse(self.accepts_writes(self.backup2))
+        self.assertEqual(register(make_asset("Second"))["served_by"], "backup")
+        self.wait_until_all_hold(servers[1:], ["First", "Second"])
+
+        # The first backup fails too. Now no server before the second backup answers.
+        self.stop(backup)
+        self.wait_until(lambda: self.accepts_writes(self.backup2), "saw the second backup take over")
+        self.assertEqual(register(make_asset("Third"))["served_by"], "backup2")
+
+        # Both come back. The primary takes control again, and every server ends up with
+        # every change, with only the primary accepting changes.
+        self.start_program(0)
+        self.start_program(1)
+        self.wait_until_all_hold(servers, ["First", "Second", "Third"])
+        self.wait_until(lambda: [self.accepts_writes(address) for address in servers] == [True, False, False],
+                        "saw the primary back in charge")
 
 
 if __name__ == "__main__":

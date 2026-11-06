@@ -426,7 +426,8 @@ function showStats() {
   const server = document.getElementById("stat-server");
   server.textContent = loadError || !servedBy ? "No server" : servedBy;
   server.classList.toggle("server-primary", !loadError && servedBy === "primary");
-  server.classList.toggle("server-backup", !loadError && servedBy === "backup");
+  // Any backup answering (backup, backup2 and so on) means the primary is down.
+  server.classList.toggle("server-backup", !loadError && servedBy.startsWith("backup"));
   server.classList.toggle("server-none", loadError !== "" || !servedBy);
 }
 

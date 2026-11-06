@@ -86,7 +86,8 @@ def generated_files() -> list:
     so that it can never remove anything else."""
     data_and_accounts = servers_data_files() + [web.USERS_FILE, web.PASSWORD_FILE]
     logs = []
-    for name in common.LOG_NAMES:
+    log_names = [server.name_of(index) for index in range(len(common.SERVERS))] + ["web", "start"]
+    for name in log_names:
         for current in (common.log_path(name), common.audit_log_path(name)):
             logs += [current] + [f"{current}.{number}" for number in range(1, common.LOG_FILE_COPIES + 1)]
     return (data_and_accounts + [common.SECRET_FILE, common.TLS_FILE]
@@ -104,8 +105,8 @@ def is_running(address: tuple) -> bool:
 def running_programs() -> list:
     """Return the name of each part of the system that is currently running."""
     addresses = {"server.py": common.SERVERS[0], "web.py": web.WEB_ADDRESS}
-    if len(common.SERVERS) > 1:
-        addresses["server.py --backup 1"] = common.SERVERS[1]
+    for index in range(1, len(common.SERVERS)):
+        addresses[f"server.py --backup {index}"] = common.SERVERS[index]
     return [name for name, address in addresses.items() if is_running(address)]
 
 

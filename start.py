@@ -5,7 +5,7 @@ Starts the whole system with one command, and opens the web page.
 
 The first time, this runs setup, which asks you to create your web account.
 
-The primary, the backup and the web interface still run as separate processes, exactly as if
+Every server in the server list and the web interface still run as separate processes, exactly as if
 each had been started in its own terminal. They share this window, so each log line
 says which one wrote it. Press Ctrl+C to stop them all.
 
@@ -24,14 +24,15 @@ import time        # waits between checks
 import webbrowser  # opens the web page
 
 import setup
-from common import configure_logging
+from common import SERVERS, configure_logging
 from web import WEB_ADDRESS
 
 logger = logging.getLogger("start")
 
-# Each program, with any options it is started with. The backup is server.py too, told
-# by --backup 1 that it is the second server in the list.
-PROGRAMS = ("server.py", "server.py --backup 1", "web.py")
+# Each program, with any options it is started with: one server for each address in the
+# server list, then the web interface. Every server is server.py, told by --backup which
+# entry in the list it is.
+PROGRAMS = ("server.py", *(f"server.py --backup {index}" for index in range(1, len(SERVERS))), "web.py")
 
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 

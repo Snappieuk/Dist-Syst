@@ -156,11 +156,10 @@ TLS_CERTIFICATE_DAYS = 3650  # about 10 years, after which setup --reset makes a
 
 _tls_contexts = {}  # the client and server settings, once loaded, by side
 
-# Where each program keeps its log file, named after it: primary.log, backup.log, web.log
-# and start.log. A file that reaches LOG_FILE_BYTES is renamed to name.log.1, the older
+# Where each program keeps its log file, named after it: primary.log, backup.log (and
+# backup2.log and so on, if there are more servers), web.log and start.log. A file that reaches LOG_FILE_BYTES is renamed to name.log.1, the older
 # ones move up to name.log.2 and so on, and only LOG_FILE_COPIES old files are kept.
 LOG_FOLDER = os.path.join(DATA_FOLDER, "logs")
-LOG_NAMES = ("primary", "backup", "web", "start")
 LOG_FILE_BYTES = 1024 * 1024
 LOG_FILE_COPIES = 5
 
