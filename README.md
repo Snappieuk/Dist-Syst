@@ -142,13 +142,16 @@ Everything works without any settings. To change them, copy `config.example.json
 |---|---|---|
 | `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | Where the servers are: the primary first, then each backup in the order they take over |
 | `web_address` | `"0.0.0.0:8080"` | Where `web.py` listens. `0.0.0.0` is every network; `127.0.0.1` is only this machine |
+| `behind_https_proxy` | `false` | Set to `true` when `web.py` sits behind an HTTPS reverse proxy such as Nginx Proxy Manager: the session cookie is then marked `Secure` and the real visitor address is logged |
+| `trusted_proxy` | `"127.0.0.1"` | The one address the proxy connects from. The `X-Forwarded-For` header is believed only on requests from here, and only when `behind_https_proxy` is `true` |
 | `timeout_seconds` | `5` | How long a program waits on each network step before giving up |
 | `heartbeat_timeout_seconds` | `1` | How long the servers wait for each other's heartbeats |
 | `failover_wait_seconds` | `15` | How long a client keeps trying while the backup takes over |
 
 A misspelt setting or a wrong value stops the program with a message naming `config.json`,
 rather than being ignored. Environment variables override the file: `ASSET_SERVERS` for the
-servers and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form.
+servers and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form;
+`ASSET_BEHIND_HTTPS_PROXY` (`true` or `false`) and `ASSET_TRUSTED_PROXY` for the two proxy settings.
 `ASSET_CONFIG` can name a different settings file. `config.json` is ignored by git,
 because each machine has its own, and a reset leaves it alone.
 
@@ -439,7 +442,8 @@ underscores. Passwords must be at least 8 characters. Only a salted PBKDF2 hash 
 in `web_users.json`. Logging in gives the browser a random session token that lasts 8 hours,
 in a cookie that scripts can't read and other websites can't send. A wrong username gets the
 same reply as a wrong password, so neither reveals which accounts exist. After 5 failed
-logins in a row, on any usernames, logins are refused for a minute.
+logins in a row for one username, logins for that username are refused for a minute. The
+count is per username, so someone guessing one account's password can't lock the others out.
 
 `secret.key`, `tls.pem` and `web_users.json` are kept in `data/`, which git ignores. They
 should never be shared publicly.

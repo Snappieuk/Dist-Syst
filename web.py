@@ -17,6 +17,7 @@ passwords should not cross a network you don't trust.
 import getpass    # asks for a new password without showing it on screen
 import hashlib    # hashes passwords, so that the passwords themselves are never stored
 import hmac       # compares password hashes safely
+import ipaddress  # checks that a forwarded client address is a real address
 import json       # the data sent to the browser is JSON
 import logging    # records what happens, including errors, without stopping
 import os         # os.path finds the page's files
@@ -102,10 +103,22 @@ ADMIN_ONLY = "Only an admin can do that"
 # How long a login lasts.
 SESSION_SECONDS = 8 * 60 * 60
 
-# Failed logins in a row before logins are refused for a while, to stop someone trying
-# passwords quickly. It applies to everyone, so trying other usernames can't get around it.
+# Failed logins in a row, for one username, before logins for that username are refused for
+# a while, to stop someone trying passwords quickly. It is counted per username, so someone
+# on the internet guessing one name can't lock everybody else out.
 FAILED_LOGIN_LIMIT = 5
 LOCKOUT_SECONDS = 60
+
+# Set these when this program sits behind an HTTPS reverse proxy such as Nginx Proxy
+# Manager (config.json "behind_https_proxy" / "trusted_proxy", or ASSET_BEHIND_HTTPS_PROXY /
+# ASSET_TRUSTED_PROXY). The session cookie is then marked Secure, and the browser's real
+# address is read from X-Forwarded-For, but only when the request came from the proxy.
+BEHIND_HTTPS_PROXY = common.BEHIND_HTTPS_PROXY
+TRUSTED_PROXY = common.TRUSTED_PROXY
+
+# Usernames that have been tried and failed, so that guessing different made-up names
+# can't fill the memory: when the table is full, entries no longer locked are dropped.
+MAX_TRACKED_USERNAMES = 1000
 
 # The largest request body accepted. Everything sent here is small.
 MAX_BODY_BYTES = 64 * 1024
@@ -130,8 +143,8 @@ MAX_LOGGED_USERNAME = 32
 # Who is logged in: a random token for each browser, with its username and when its login
 # expires. These are only held in memory, so restarting this program logs everyone out.
 sessions = {}
-failed_logins = 0
-locked_until = 0
+failed_logins = {}  # failed attempts in a row, by (normalised) username
+locked_until = {}   # when each locked username may try again, by username
 login_lock = threading.Lock()  # protects the three values above
 
 users = {}  # each account's password hash, by username
@@ -313,16 +326,18 @@ def try_login(username: str, guess: str) -> tuple:
     session token, if there is one. The slow hash runs outside the lock, so it holds up
     nobody else.
 
+    Failed attempts are counted for each username separately, so guessing one account's
+    password locks only that account's logins, never everyone's.
+
     An unknown username gets the same message and does the same slow work as a wrong
     password, so neither the reply nor its timing reveals which usernames exist.
     """
-    global failed_logins, locked_until
+    username = normalise_username(username)
 
     with login_lock:
-        if time.monotonic() < locked_until:
+        if time.monotonic() < locked_until.get(username, 0):
             return 429, {"error": "Too many failed logins. Please wait a minute and try again."}, None
 
-    username = normalise_username(username)
     with users_lock:
         record = users.get(username)
 
@@ -334,15 +349,22 @@ def try_login(username: str, guess: str) -> tuple:
 
     if matched:
         with login_lock:
-            failed_logins = 0
+            failed_logins.pop(username, None)
         return 200, {"username": username}, create_session(username)
 
     with login_lock:
-        failed_logins += 1
-        if failed_logins >= FAILED_LOGIN_LIMIT:
-            failed_logins = 0
-            locked_until = time.monotonic() + LOCKOUT_SECONDS
-            logger.warning("Too many failed logins. Refusing logins for %s seconds.", LOCKOUT_SECONDS)
+        now = time.monotonic()
+        if len(failed_logins) >= MAX_TRACKED_USERNAMES and username not in failed_logins:
+            for name in [name for name in failed_logins if locked_until.get(name, 0) <= now]:
+                del failed_logins[name]
+            for name in [name for name in locked_until if locked_until[name] <= now]:
+                del locked_until[name]
+        failed_logins[username] = failed_logins.get(username, 0) + 1
+        if failed_logins[username] >= FAILED_LOGIN_LIMIT:
+            failed_logins[username] = 0
+            locked_until[username] = now + LOCKOUT_SECONDS
+            logger.warning("Too many failed logins for %r. Refusing its logins for %s seconds.",
+                           username[:MAX_LOGGED_USERNAME], LOCKOUT_SECONDS)
     return 401, {"error": "That username or password is not correct"}, None
 
 
@@ -393,9 +415,11 @@ def session_cookie(token: str, max_age: int) -> str:
     """Build the header that gives a browser its login.
 
     HttpOnly stops scripts reading it, and SameSite=Strict stops other websites sending
-    it. It isn't marked Secure, because this program serves plain HTTP.
+    it. It is only marked Secure behind an HTTPS proxy, because otherwise this program
+    serves plain HTTP, and a browser would not send a Secure cookie back over it.
     """
-    return f"session={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict"
+    secure = "; Secure" if BEHIND_HTTPS_PROXY else ""
+    return f"session={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{secure}"
 
 
 def change_reply(request: dict, success_status: int) -> tuple:
@@ -823,7 +847,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         status, reply, token = try_login(username, guess)
-        browser = self.client_address[0]
+        browser = self.browser_address()
         if token is None:
             # The password is never logged. The username is shown with %r, and shortened,
             # because it is whatever was typed, which may not be a real username.
@@ -857,6 +881,24 @@ class WebHandler(BaseHTTPRequestHandler):
             logger.info("%s logged out", username)
             audit("LOGOUT", user=username)
         self.send_json(200, {}, session_cookie("", 0))
+
+    def browser_address(self) -> str:
+        """The address to record for whoever is making this request.
+
+        Behind a proxy every request comes from the proxy, so its X-Forwarded-For header
+        says who really asked. Anyone can send that header, so it is believed only when
+        the request really came from the trusted proxy, and only the last entry, which
+        is the one the proxy added, is used. It must be a valid address, so it can't
+        put anything else into the log.
+        """
+        direct = self.client_address[0]
+        if not BEHIND_HTTPS_PROXY or direct != TRUSTED_PROXY:
+            return direct
+        forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            return direct
 
     def session_token(self) -> Optional[str]:
         """Return the token in the browser's cookie, or None if it has none."""

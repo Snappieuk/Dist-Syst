@@ -62,11 +62,17 @@ DEFAULT_WEB_ADDRESS = ("0.0.0.0", 8080)
 CONFIG_FILE = os.environ.get("ASSET_CONFIG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 SERVERS_VARIABLE = "ASSET_SERVERS"
 WEB_ADDRESS_VARIABLE = "ASSET_WEB_ADDRESS"
+BEHIND_HTTPS_PROXY_VARIABLE = "ASSET_BEHIND_HTTPS_PROXY"
+TRUSTED_PROXY_VARIABLE = "ASSET_TRUSTED_PROXY"
+
+# Used when web.py sits behind an HTTPS reverse proxy (such as Nginx Proxy Manager):
+# whether it is, and the one address the proxy connects from.
+DEFAULT_TRUSTED_PROXY = "127.0.0.1"
 
 # What config.json may contain. Anything else is rejected, so a misspelt setting is
 # noticed instead of silently ignored.
 CONFIG_TIMEOUTS = ("timeout_seconds", "heartbeat_timeout_seconds", "failover_wait_seconds")
-CONFIG_KEYS = ("servers", "web_address") + CONFIG_TIMEOUTS
+CONFIG_KEYS = ("servers", "web_address", "behind_https_proxy", "trusted_proxy") + CONFIG_TIMEOUTS
 
 
 def parse_address(text: str, setting: str) -> tuple:
@@ -120,6 +126,14 @@ def load_config(path: str) -> dict:
         if not isinstance(raw["web_address"], str):
             raise ValueError(f'{path}: "web_address" must be text such as "127.0.0.1:8080"')
         settings["web_address"] = parse_address(raw["web_address"], f"{path} web_address")
+    if "behind_https_proxy" in raw:
+        if not isinstance(raw["behind_https_proxy"], bool):
+            raise ValueError(f'{path}: "behind_https_proxy" must be true or false')
+        settings["behind_https_proxy"] = raw["behind_https_proxy"]
+    if "trusted_proxy" in raw:
+        if not isinstance(raw["trusted_proxy"], str) or not raw["trusted_proxy"].strip():
+            raise ValueError(f'{path}: "trusted_proxy" must be an address such as "127.0.0.1"')
+        settings["trusted_proxy"] = raw["trusted_proxy"].strip()
     for name in CONFIG_TIMEOUTS:
         if name in raw:
             value = raw[name]
@@ -135,6 +149,10 @@ SERVERS = (parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS
            else _config.get("servers", DEFAULT_SERVERS))
 WEB_ADDRESS = (parse_address(os.environ[WEB_ADDRESS_VARIABLE], WEB_ADDRESS_VARIABLE)
                if os.environ.get(WEB_ADDRESS_VARIABLE) else _config.get("web_address", DEFAULT_WEB_ADDRESS))
+BEHIND_HTTPS_PROXY = (os.environ[BEHIND_HTTPS_PROXY_VARIABLE].strip().lower() in ("1", "true", "yes", "on")
+                      if os.environ.get(BEHIND_HTTPS_PROXY_VARIABLE) else _config.get("behind_https_proxy", False))
+TRUSTED_PROXY = (os.environ[TRUSTED_PROXY_VARIABLE].strip() if os.environ.get(TRUSTED_PROXY_VARIABLE)
+                 else _config.get("trusted_proxy", DEFAULT_TRUSTED_PROXY))
 
 
 def address_to_connect_to(address: tuple) -> tuple:

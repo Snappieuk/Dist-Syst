@@ -93,8 +93,8 @@ class WebTestCase(unittest.TestCase):
         web.users.clear()
         web.add_account(USERNAME, PASSWORD)
         web.sessions.clear()
-        web.failed_logins = 0
-        web.locked_until = 0
+        web.failed_logins.clear()
+        web.locked_until.clear()
 
         # Tests start logged in, unless they set this to None.
         status, headers, _ = self.fetch("/api/login", "POST", {"username": USERNAME, "password": PASSWORD}, cookie=None)
@@ -705,11 +705,34 @@ class LoginTest(WebTestCase):
             self.login(username="nobody")
         hashing.assert_called_once()
 
-    def test_failed_logins_with_different_usernames_all_count(self):
-        for number in range(web.FAILED_LOGIN_LIMIT):
-            self.login("wrong", username=f"user{number}")
+    def test_failed_logins_for_different_usernames_do_not_lock_each_other(self):
+        for number in range(web.FAILED_LOGIN_LIMIT * 2):
+            self.assertEqual(self.login("wrong", username=f"user{number}")[0], 401)
+
+        # None of those names reached the limit, so a real user can still log in.
+        self.assertEqual(self.login()[0], 200)
+
+    def test_locking_one_username_leaves_the_others_able_to_log_in(self):
+        web.add_account("second.user", PASSWORD)
+        for _ in range(web.FAILED_LOGIN_LIMIT):
+            self.login("wrong", username="second.user")
+
+        self.assertEqual(self.login(username="second.user")[0], 429)
+        self.assertEqual(self.login()[0], 200)
+
+    def test_capitals_do_not_get_around_the_lockout(self):
+        for _ in range(web.FAILED_LOGIN_LIMIT):
+            self.login("wrong", username=USERNAME.upper())
 
         self.assertEqual(self.login()[0], 429)
+
+    def test_the_table_of_failed_usernames_cannot_grow_without_limit(self):
+        self.addCleanup(setattr, web, "MAX_TRACKED_USERNAMES", web.MAX_TRACKED_USERNAMES)
+        web.MAX_TRACKED_USERNAMES = 5
+        for number in range(30):
+            self.login("wrong", username=f"nobody{number}")
+
+        self.assertLessEqual(len(web.failed_logins), 6)
 
     def test_invalid_login_requests_are_refused(self):
         self.assertEqual(self.login(7)[0], 400)
@@ -754,7 +777,7 @@ class LoginTest(WebTestCase):
         self.assertEqual(self.login()[0], 429)
         self.assertEqual(self.fetch("/api/assets")[0], 200)
 
-        web.locked_until = 0
+        web.locked_until.clear()
         self.assertEqual(self.login()[0], 200)
 
     def test_a_correct_login_resets_the_wrong_password_count(self):
@@ -822,6 +845,61 @@ class AuditLogTest(WebTestCase):
         text = self.logged(lambda: self.fetch("/api/assets", "POST", body))
 
         self.assertIn(f"{USERNAME} could not add an asset", text)
+
+
+class ProxyTest(WebTestCase):
+    """Behind an HTTPS reverse proxy: a Secure cookie, and the real address in the log."""
+
+    def behind_proxy(self, trusted: str = "127.0.0.1") -> None:
+        for name, value in (("BEHIND_HTTPS_PROXY", True), ("TRUSTED_PROXY", trusted)):
+            self.addCleanup(setattr, web, name, getattr(web, name))
+            setattr(web, name, value)
+
+    def login_logged(self, headers: dict) -> tuple:
+        body = {"username": USERNAME, "password": PASSWORD}
+        with self.assertLogs("asset_web", "INFO") as logs:
+            _, response, _ = self.fetch("/api/login", "POST", body, extra_headers=headers, cookie=None)
+        return response, "\n".join(logs.output)
+
+    def test_the_cookie_is_not_secure_by_default(self):
+        _, headers, _ = self.fetch("/api/login", "POST", {"username": USERNAME, "password": PASSWORD}, cookie=None)
+        self.assertNotIn("Secure", headers["Set-Cookie"])
+
+    def test_the_cookie_is_secure_behind_a_proxy(self):
+        self.behind_proxy()
+        headers, _ = self.login_logged({})
+        self.assertIn("; Secure", headers["Set-Cookie"])
+        self.assertIn("HttpOnly", headers["Set-Cookie"])
+
+    def test_logging_out_also_sends_a_secure_cookie_behind_a_proxy(self):
+        self.behind_proxy()
+        _, headers, _ = self.fetch("/api/logout", "POST")
+        self.assertIn("; Secure", headers["Set-Cookie"])
+
+    def test_the_forwarded_address_is_logged_when_the_proxy_is_trusted(self):
+        self.behind_proxy()
+        _, text = self.login_logged({"X-Forwarded-For": "203.0.113.9"})
+        self.assertIn(f"{USERNAME} logged in from 203.0.113.9", text)
+
+    def test_only_the_address_the_proxy_added_is_believed(self):
+        self.behind_proxy()
+        _, text = self.login_logged({"X-Forwarded-For": "6.6.6.6, 203.0.113.9"})
+        self.assertIn("logged in from 203.0.113.9", text)
+
+    def test_the_header_is_ignored_when_the_request_is_not_from_the_proxy(self):
+        self.behind_proxy(trusted="10.9.9.9")
+        _, text = self.login_logged({"X-Forwarded-For": "203.0.113.9"})
+        self.assertIn(f"{USERNAME} logged in from 127.0.0.1", text)
+
+    def test_the_header_is_ignored_when_not_behind_a_proxy(self):
+        _, text = self.login_logged({"X-Forwarded-For": "203.0.113.9"})
+        self.assertIn(f"{USERNAME} logged in from 127.0.0.1", text)
+
+    def test_a_forwarded_value_that_is_not_an_address_is_never_logged(self):
+        self.behind_proxy()
+        _, text = self.login_logged({"X-Forwarded-For": "fake log line"})
+        self.assertNotIn("fake log line", text)
+        self.assertIn("127.0.0.1", text)
 
 
 class RoleTest(WebTestCase):
