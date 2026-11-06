@@ -6,11 +6,16 @@ Tests for what the client programs offer the user.
 These don't need a server. The GUI tests are skipped if no window can be opened.
 """
 
+import ast
 import contextlib
 import datetime
 import io
+import json
 import os
 import re
+import socket
+import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -341,3 +346,112 @@ class GuiLoanTest(unittest.TestCase):
         rows = self.app.loan_rows()
         self.assertEqual([row[1] for row in rows], ["Ann", "Cy", "Bob"])
         self.assertEqual([row[4] for row in rows], ["2026-01-07", "2026-02-05", "Overdue"])
+
+
+class GuiStandaloneTest(unittest.TestCase):
+    """gui.py is one file that needs nothing from the project, finds servers from one
+    address, and logs in with an account."""
+
+    def test_it_imports_nothing_from_the_project(self):
+        with open(os.path.join(FOLDER, "gui.py"), encoding="utf-8") as file:
+            tree = ast.parse(file.read())
+        modules = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
+                   for alias in node.names}
+        modules |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        project = {name[:-3] for name in os.listdir(FOLDER) if name.endswith(".py")}
+        self.assertEqual(modules & project, set())
+
+    def test_addresses_are_checked(self):
+        import gui
+        self.assertEqual(gui.parse_address("10.0.0.5"), ("10.0.0.5", 65432))
+        self.assertEqual(gui.parse_address(" assets.example.com:7000 "), ("assets.example.com", 7000))
+        for bad in ("", "999.1.1", "bad_name", "host:0", "host:99999", "host:abc", "a:1:2"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                gui.parse_address(bad)
+
+    def test_the_servers_come_from_the_reply_primary_first(self):
+        import gui
+        reply = {"servers": [["127.0.0.1", 65432], ["10.0.0.9", 65433], ["junk"]]}
+        # The user typed the backup's address, but the primary is still tried first.
+        self.assertEqual(gui.servers_from_ping(("10.0.0.9", 65433), reply),
+                         [("10.0.0.9", 65432), ("10.0.0.9", 65433)])
+        self.assertEqual(gui.servers_from_ping(("10.0.0.9", 1), {}), [("10.0.0.9", 1)])
+
+
+class GuiLoginTest(unittest.TestCase):
+    """The GUI's connection code against a real server."""
+
+    @classmethod
+    def setUpClass(cls):
+        import gui
+        import node
+        cls.gui = gui
+        cls.listener = node.create_listening_socket("127.0.0.1", 0)
+        cls.address = cls.listener.getsockname()
+        threading.Thread(target=node.run_server, args=(cls.listener,), daemon=True).start()
+
+    def setUp(self):
+        import accounts
+        gui = self.gui
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        salt = "cd" * 16
+        record = {"salt": salt, "iterations": 1000, "role": "user",
+                  "hash": accounts.hash_password("pass word", salt, 1000)}
+        path = os.path.join(temp.name, "users.json")
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump({"sam": record}, file)
+        patcher = mock.patch.object(accounts, "USERS_FILE", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Each test starts with nobody logged in and nothing trusted.
+        self.addCleanup(lambda: vars(gui.session).clear())
+        gui.session.servers, gui.session.trusted, gui.session.token = [self.address], None, None
+
+    def test_a_server_whose_certificate_was_not_trusted_is_not_sent_anything(self):
+        gui = self.gui
+        gui.session.trusted = "AA:BB"
+        with self.assertRaisesRegex(ConnectionError, "different certificate"):
+            gui.send_request({"action": "LOGIN", "username": "sam", "password": "pass word"})
+
+    def test_logging_in_then_using_the_token(self):
+        gui = self.gui
+        gui.session.trusted = gui.probe(self.address)[0]
+        wrong = gui.send_request({"action": "LOGIN", "username": "sam", "password": "nope"})
+        self.assertEqual(wrong["code"], common.UNAUTHORIZED)
+        self.assertEqual(gui.send_request({"action": "LIST"})["code"], common.UNAUTHORIZED)  # no token yet
+
+        reply = gui.send_request({"action": "LOGIN", "username": "sam", "password": "pass word"})
+        self.assertEqual((reply["status"], reply["role"]), ("OK", "user"))
+        gui.session.token = reply["token"]
+        self.assertEqual(gui.send_request({"action": "LIST"})["status"], "OK")
+        # A user may not delete, and the GUI sees the server's refusal.
+        self.assertEqual(gui.send_request({"action": "DELETE", "asset_id": "AST-P000001"})["code"], common.FORBIDDEN)
+
+    def test_a_dead_server_is_skipped_for_the_next(self):
+        gui = self.gui
+        gui.session.trusted = gui.probe(self.address)[0]
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            dead = spare.getsockname()
+        gui.session.servers = [dead, self.address]
+        self.assertEqual(gui.send_request({"action": "PING"})["status"], "OK")
+
+    def test_declining_to_trust_a_server_sends_nothing(self):
+        import tkinter as tk
+        gui = self.gui
+        try:
+            root = tk.Tk()
+        except Exception as exc:
+            raise unittest.SkipTest(f"No window can be opened here: {exc}")
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        screen = gui.LoginWindow(root, lambda: None)
+        then = mock.Mock()
+        with mock.patch("gui.messagebox.askyesno", return_value=False) as ask, \
+                mock.patch.object(screen, "_run") as run:
+            screen._trust(self.address, ("AA:BB", {"status": "OK"}), None, then)
+        ask.assert_called_once()
+        run.assert_not_called()  # no login
+        self.assertIsNone(gui.session.trusted)
+        then.assert_not_called()

@@ -1,5 +1,20 @@
 """
-Tkinter interface for the Asset Management System.
+Tkinter client for the Asset Management System. A single file: copy it to any computer
+with Python 3.8+ and run it. It needs nothing else from the project, and saves nothing.
+
+    python gui.py
+
+On the login screen, enter the server's IP address or host name (add :port if it isn't
+the usual one), or press "Find servers" to look for one on the local network. Only one
+address is needed: the server tells the GUI where every server is, and if the primary
+fails, the GUI moves to the backup by itself. Log in with the account the server's
+administrator gave you (the same accounts as the web page). The server checks every
+request against your account, and only admins can delete assets or approve flagged ones.
+
+Certificates: the first time you connect to a server, the GUI shows its certificate's
+fingerprint and asks whether to trust it. Compare it with the one the server's
+administrator gives you. After that, only that exact certificate is accepted until the
+window is closed. Nothing is remembered, so you are asked each time the GUI starts.
 
 WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
@@ -10,21 +25,260 @@ the queue regularly and updates the window itself.
 """
 
 import datetime   # today's date, and checking the dates typed into the check-out form
+import hashlib    # fingerprints a server's certificate
+import ipaddress  # checks a typed server address
+import json       # requests and replies are JSON
 import queue      # carries results from background threads to the main thread
+import re         # checks a typed host name
+import socket     # talks to the servers, and finds them by UDP broadcast
+import ssl        # encrypts every connection
 import threading  # runs network requests without freezing the window
+import time       # waits for a backup to take over
 import tkinter as tk
+import uuid       # gives each registration its own ID, so a retry can't register twice
 from tkinter import messagebox, ttk
 
-from common import (
-    IN_USE,
-    NOT_IN_USE,
-    STATUSES,
-    format_asset_tags,
-    generate_asset_tags,
-    include_asset,
-    new_register_request,
-    send_request,
+# ---- Must match the server (common.py and node.py) ----------------------------
+# This file imports nothing from the rest of the project, so it can be copied on its
+# own to any computer with Python 3.8+. These few values are the ones it shares.
+PROTOCOL_VERSION = 1
+MAX_MESSAGE_BYTES = 10 * 1024 * 1024
+IN_USE, NOT_IN_USE = "In Use", "Not In Use"
+STATUSES = (IN_USE, NOT_IN_USE)
+DEFAULT_PORTS = (65432, 65433)  # the primary's and the backup's, searched for by "Find servers"
+DISCOVERY_REQUEST = b"ASSET_MANAGEMENT_DISCOVER"
+SERVICE_NAME = "asset-management"
+# --------------------------------------------------------------------------------
+
+TIMEOUT_SECONDS = 5           # how long to wait on one server
+DISCOVERY_SECONDS = 1.5       # how long "Find servers" listens for answers
+FAILOVER_WAIT_SECONDS = 15    # how long to wait for a backup that is taking over
+LOOPBACK_NAMES = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+HOST_NAME = re.compile(
+    r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
 )
+
+
+class UntrustedServer(ConnectionError):
+    """A server's certificate is not the one the user chose to trust."""
+
+
+class Session:
+    """Who is logged in, and which servers to talk to. Nothing is saved to disk: it all
+    lasts until the window is closed, so this file is all a computer needs."""
+
+    servers = []     # addresses to try in order, the primary first
+    trusted = None   # the certificate fingerprint the user accepted
+    token = None     # proves the login to the servers
+    username = None
+    role = None
+
+
+session = Session()
+
+
+# ---- Addresses --------------------------------------------------------------------
+
+def parse_address(text: str, default_port: int = DEFAULT_PORTS[0]) -> tuple:
+    """Turn "host" or "host:port" into (host, port), or raise ValueError saying what's wrong."""
+    text = text.strip()
+    if not text:
+        raise ValueError("Enter the server's IP address or host name.")
+    has_port = text.count(":") == 1
+    host, port_text = text.split(":") if has_port else (text, "")
+    if has_port and not (port_text.isdigit() and 1 <= int(port_text) <= 65535):
+        raise ValueError(f"'{port_text}' is not a port. Use a number from 1 to 65535.")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        # Something like 999.1.1 looks like an IP address but isn't one, and isn't a name either.
+        if re.fullmatch(r"[\d.]+", host) or not HOST_NAME.fullmatch(host):
+            raise ValueError(f"'{host}' is not a valid IP address or host name.") from None
+    return host, int(port_text) if has_port else default_port
+
+
+def servers_from_ping(typed: tuple, reply: dict) -> list:
+    """The addresses to use, from the one the user typed and the list in a PING reply.
+
+    The servers list their own addresses as their config.json gives them, and "127.0.0.1"
+    means nothing to a GUI on another computer, so those are replaced by the typed host.
+    The order is the servers' own, primary first, so the GUI starts with the primary even
+    if the user typed the backup's address.
+    """
+    servers = []
+    for entry in reply.get("servers") or []:
+        try:
+            host, port = str(entry[0]), int(entry[1])
+        except (TypeError, ValueError, IndexError):
+            continue  # skip an entry that isn't an address
+        address = (typed[0] if host in LOOPBACK_NAMES else host, port)
+        if address not in servers:
+            servers.append(address)
+    if typed not in servers:
+        servers.insert(0, typed)
+    return servers
+
+
+# ---- Talking to a server ------------------------------------------------------------
+
+def fingerprint(certificate: bytes) -> str:
+    """The SHA-256 fingerprint of a certificate, as people compare it: AB:CD:..."""
+    digest = hashlib.sha256(certificate).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def receive_exact(sock: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise ConnectionError("The server closed the connection")
+        data += chunk
+    return data
+
+
+def ask(address: tuple, request: dict, trusted: object = None) -> tuple:
+    """Send one request to one server and return (reply, certificate fingerprint).
+
+    The server uses its own certificate, which Python can't check against a known
+    authority, so the usual check is switched off. Instead the fingerprint is compared
+    with the one the user trusted, BEFORE anything is sent, so a password is never sent
+    to a server the user hasn't accepted. With no `trusted` fingerprint the request is
+    sent anyway, so it must hold nothing private: only probe()'s PING does that.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    raw = socket.create_connection(address, timeout=TIMEOUT_SECONDS)
+    try:
+        sock = context.wrap_socket(raw)
+    except Exception:
+        raw.close()
+        raise
+    with sock:
+        found = fingerprint(sock.getpeercert(binary_form=True))
+        if trusted is not None and found != trusted:
+            raise UntrustedServer(
+                f"The server at {address[0]}:{address[1]} has a different certificate from the "
+                "one you trusted, so it was not used."
+            )
+        # Messages are length-prefixed JSON, the same as the servers use.
+        payload = json.dumps({**request, "protocol_version": PROTOCOL_VERSION}).encode("utf-8")
+        if len(payload) > MAX_MESSAGE_BYTES:
+            raise ValueError("The request is too large")
+        sock.sendall(len(payload).to_bytes(4, "big") + payload)
+        length = int.from_bytes(receive_exact(sock, 4), "big")
+        if length > MAX_MESSAGE_BYTES:
+            raise ValueError("The reply is too large")
+        reply = json.loads(receive_exact(sock, length).decode("utf-8"))
+        if not isinstance(reply, dict):
+            raise ValueError("The reply is not valid")
+        return reply, found
+
+
+def probe(address: tuple) -> tuple:
+    """PING a server we know nothing about, returning (certificate fingerprint, reply). A
+    PING needs no login and carries nothing private, so it is safe to send before the user
+    has decided whether to trust the server. Its reply is not used until they have."""
+    reply, found = ask(address, {"action": "PING"}, trusted=None)
+    return found, reply
+
+
+def discover() -> list:
+    """Look for servers on the local network, returning their (host, port) addresses.
+
+    A broadcast is sent to each usual port. Every server answers, naming the port it
+    really uses. This machine is asked directly too, as a broadcast doesn't always reach
+    a server on the same computer.
+    """
+    found = []
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.3)
+        for target in ("255.255.255.255", "127.0.0.1"):
+            for port in DEFAULT_PORTS:
+                try:
+                    sock.sendto(DISCOVERY_REQUEST, (target, port))
+                except OSError:
+                    pass  # no network to broadcast on; the other target may still work
+        end = time.monotonic() + DISCOVERY_SECONDS
+        while time.monotonic() < end:
+            try:
+                data, (host, _) = sock.recvfrom(1024)
+                info = json.loads(data.decode("utf-8"))
+                address = (host, int(info["port"]))
+            except socket.timeout:
+                continue
+            except (OSError, ValueError, KeyError, TypeError):
+                continue  # not an answer from one of our servers
+            if info.get("service") == SERVICE_NAME and address not in found:
+                found.append(address)
+    return found
+
+
+def send_request(request: dict) -> dict:
+    """Send a request to the first server that answers, adding the login token.
+
+    This is failover: if the primary is down, the next server is tried without the user
+    doing anything. Retrying on another server is safe, because a repeated registration
+    is recognised by its request ID. The next server is also tried after an INTERNAL or
+    NOT_FOUND reply (this one may not have the asset yet), and if every server says
+    NOT_PRIMARY, a backup is taking over, so it waits up to FAILOVER_WAIT_SECONDS.
+
+    Raises ConnectionError if no server can be reached, and ValueError for an invalid reply.
+    """
+    if session.token:
+        request = {**request, "token": session.token}
+    deadline = time.monotonic() + FAILOVER_WAIT_SECONDS
+
+    while True:
+        last_error = retryable = not_primary = None
+        for address in session.servers:
+            try:
+                reply, _ = ask(address, request, trusted=session.trusted)
+            except OSError as exc:  # refused, timed out, dropped, or an untrusted certificate
+                last_error = exc
+                continue
+            if reply.get("code") in ("INTERNAL", "NOT_FOUND"):
+                retryable = reply
+            elif reply.get("code") == "NOT_PRIMARY":
+                not_primary = reply
+            else:
+                return reply
+
+        if retryable is not None:
+            return retryable
+        if not_primary is None:
+            break  # nothing could be reached, so there is nothing to wait for
+        if time.monotonic() >= deadline:
+            return not_primary
+        time.sleep(1)
+
+    raise ConnectionError(f"Could not reach any asset server ({last_error}).\nCheck that the server is running, then try again.")
+
+
+# ---- Small helpers the main window uses ------------------------------------------------
+
+def format_asset_tags(tags: list) -> str:
+    """Join tags into one comma-separated string for the table."""
+    return ", ".join(str(tag) for tag in tags or [])
+
+
+def new_register_request(asset: dict) -> dict:
+    """Build a REGISTER request with a new random request ID. The server stores the ID
+    with the asset, so sending the same request again can't register a second copy."""
+    return {"action": "REGISTER", "request_id": uuid.uuid4().hex, "asset": asset}
+
+
+def include_asset(assets: list, stored: object) -> list:
+    """Return `assets`, adding the just-registered `stored` asset if the list lacks it. A
+    server that has not synced yet may answer the list without an asset another one stored."""
+    if not isinstance(stored, dict):
+        return assets
+    if any(asset.get("asset_id") == stored.get("asset_id") for asset in assets):
+        return assets
+    return assets + [stored]
 
 # What the status line says when each kind of change succeeds.
 SUCCESS_MESSAGES = {
@@ -684,8 +938,7 @@ class AssetManagementApp:
 
         self._show_review()
 
-        # Assets saved before tagging was added have no tags, so those are
-        # worked out here for display.
+        # The server works out each asset's tags, so they are shown as stored.
         for asset in assets:
             self.tree.insert(
                 "",
@@ -697,15 +950,179 @@ class AssetManagementApp:
                     asset.get("category", ""),
                     asset.get("location", ""),
                     asset.get("status", ""),
-                    format_asset_tags(asset.get("tags") or generate_asset_tags(asset)),
+                    format_asset_tags(asset.get("tags")),
                     asset.get("date_registered", ""),
                 ),
             )
 
 
+class LoginWindow(ttk.Frame):
+    """The first screen: which server, and who is logging in.
+
+    "Find servers" looks for servers on the local network, "Check" tests an address, and
+    "Log in" does both and then logs in. The first time a server is used, its certificate's
+    fingerprint is shown and the user chooses whether to trust it. After that only that
+    exact certificate is accepted, so a different server at the same address is refused.
+    Network work runs on a background thread, with results handed back through a queue,
+    for the reason given at the top of this file.
+    """
+
+    def __init__(self, root: tk.Tk, on_login) -> None:
+        super().__init__(root, padding=16)
+        self.root = root
+        self.on_login = on_login  # called, with no arguments, once logged in
+        self.results = queue.Queue()  # (function to call, result, error) from background threads
+        root.title("Asset Management - Log in")
+        self.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(self, text="Server").grid(row=0, column=0, sticky=tk.W, pady=3)
+        # Editable, with the addresses "Find servers" found as choices.
+        self.server_box = ttk.Combobox(self, width=34)
+        self.server_box.grid(row=0, column=1, sticky=tk.EW, pady=3, padx=(8, 0))
+        self.find_button = ttk.Button(self, text="Find servers", command=self.find)
+        self.find_button.grid(row=0, column=2, padx=(8, 0))
+        self.check_button = ttk.Button(self, text="Check", command=self.check)
+        self.check_button.grid(row=0, column=3, padx=(8, 0))
+
+        ttk.Label(self, text="Username").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.username_box = ttk.Entry(self)
+        self.username_box.grid(row=1, column=1, sticky=tk.EW, pady=3, padx=(8, 0))
+        ttk.Label(self, text="Password").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.password_box = ttk.Entry(self, show="*")
+        self.password_box.grid(row=2, column=1, sticky=tk.EW, pady=3, padx=(8, 0))
+        self.password_box.bind("<Return>", lambda event: self.log_in())
+
+        self.login_button = ttk.Button(self, text="Log in", command=self.log_in)
+        self.login_button.grid(row=3, column=1, sticky=tk.E, pady=(10, 0))
+        self.message = ttk.Label(self, text="Enter the server's address, or press Find servers.", wraplength=520)
+        self.message.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
+        self.columnconfigure(1, weight=1)
+
+        self.root.after(100, self._process_results)
+
+    # ---- Background work ----
+
+    def _run(self, work, done) -> None:
+        """Run work() on a thread, then call done(result, error) on the main thread."""
+        self._set_busy(True)
+
+        def target() -> None:
+            try:
+                self.results.put((done, work(), None))
+            except (OSError, ValueError) as exc:
+                self.results.put((done, None, exc))
+
+        threading.Thread(target=target, daemon=True).start()
+
+    def _process_results(self) -> None:
+        try:
+            while True:
+                done, result, error = self.results.get_nowait()
+                self._set_busy(False)
+                done(result, error)
+        except queue.Empty:
+            pass
+        if self.winfo_exists():  # stop checking once logged in and this screen is gone
+            self.root.after(100, self._process_results)
+
+    def _set_busy(self, busy: bool) -> None:
+        state = tk.DISABLED if busy else tk.NORMAL
+        for button in (self.find_button, self.check_button, self.login_button):
+            button.configure(state=state)
+
+    def _say(self, text: str) -> None:
+        self.message.configure(text=text)
+
+    # ---- The buttons ----
+
+    def find(self) -> None:
+        self._say("Looking for servers...")
+        self._run(discover, self._found)
+
+    def _found(self, addresses: list, error: object) -> None:
+        if error or not addresses:
+            self._say("No servers were found. Type the address of the server instead.")
+            return
+        shown = [f"{host}:{port}" for host, port in addresses]
+        self.server_box.configure(values=shown)
+        self.server_box.set(shown[0])
+        self._say(f"Found {len(shown)} server(s). Check the address, then log in.")
+
+    def check(self) -> None:
+        """Test the address, without logging in."""
+        self._connect(lambda: self._say(
+            f"The server answered. It knows of {len(session.servers)} server(s); you can log in."))
+
+    def log_in(self) -> None:
+        username, password = self.username_box.get().strip(), self.password_box.get()
+        if not username or not password:
+            self._say("Enter your username and password.")
+            return
+        self._connect(lambda: self._send_login(username, password))
+
+    def _connect(self, then) -> None:
+        """Check the typed address, get the user's trust in its certificate, and learn where
+        every server is, then call then()."""
+        try:
+            address = parse_address(self.server_box.get())
+        except ValueError as exc:
+            self._say(str(exc))
+            return
+        self._say("Connecting...")
+        self._run(lambda: probe(address), lambda result, error: self._trust(address, result, error, then))
+
+    def _trust(self, address: tuple, result: object, error: object, then) -> None:
+        if error:
+            self._say(f"Could not connect to {address[0]}:{address[1]}: {error}")
+            return
+        found, reply = result
+        if session.trusted != found:
+            if session.trusted is not None:
+                self._say("This server's certificate is different from the one you trusted, so it was not used.")
+                return
+            if not messagebox.askyesno(
+                "Trust this server?",
+                f"This is the first time this program has connected to {address[0]}:{address[1]}.\n\n"
+                f"Certificate fingerprint (SHA-256):\n{found}\n\n"
+                "Ask whoever runs the server to confirm this matches theirs. Trust it?",
+                icon=messagebox.WARNING, parent=self.root,
+            ):
+                self._say("Not trusted, so nothing more was sent.")
+                return
+            session.trusted = found
+        if reply.get("status") != "OK":
+            self._say(f"The server did not answer properly: {reply.get('detail')}")
+            return
+        # It is trusted, so use the reply: it says where every server is, so one address is enough.
+        session.servers = servers_from_ping(address, reply)
+        then()
+
+    def _send_login(self, username: str, password: str) -> None:
+        self._say("Logging in...")
+        self._run(lambda: send_request({"action": "LOGIN", "username": username, "password": password}),
+                  self._logged_in)
+
+    def _logged_in(self, reply: object, error: object) -> None:
+        self.password_box.delete(0, tk.END)  # don't leave the password in the window
+        if error:
+            self._say(str(error))
+        elif reply.get("status") != "OK":
+            self._say(reply.get("detail", "The login failed."))
+        else:
+            session.token = reply["token"]
+            session.username, session.role = reply["username"], reply["role"]
+            self.destroy()
+            self.on_login()
+
+
 def main() -> None:
     root = tk.Tk()
-    AssetManagementApp(root)
+
+    def start() -> None:
+        root.title(f"Asset Management - {session.username} ({session.role})")
+        AssetManagementApp(root)
+
+    LoginWindow(root, start)
     root.mainloop()
 
 
