@@ -38,6 +38,7 @@ import threading  # runs network requests without freezing the window
 import time       # waits for a backup to take over
 import tkinter as tk
 import uuid       # gives each registration its own ID, so a retry can't register twice
+from typing import Any, Optional, Union  # type hints only
 from tkinter import messagebox, ttk
 
 # ---- Must match the server (common.py and node.py) ----------------------------
@@ -170,7 +171,10 @@ def ask(address: tuple, request: dict, trusted: object = None) -> tuple:
         raw.close()
         raise
     with sock:
-        found = fingerprint(sock.getpeercert(binary_form=True))
+        certificate = sock.getpeercert(binary_form=True)
+        if certificate is None:  # a TLS server always sends one, but the type allows for none
+            raise OSError("The server did not present a certificate")
+        found = fingerprint(certificate)
         if trusted is not None and found != trusted:
             raise UntrustedServer(
                 f"The server at {address[0]}:{address[1]} has a different certificate from the "
@@ -552,7 +556,7 @@ class AssetManagementApp:
         ttk.Button(window, text="Close", command=window.destroy).pack(pady=(0, 10))
 
     @staticmethod
-    def current_loan(asset: dict) -> object:
+    def current_loan(asset: dict) -> Optional[dict]:
         """The asset's current loan, or None. The last loan is current only if it has
         not been returned."""
         loans = asset.get("loans") or []
@@ -710,7 +714,7 @@ class AssetManagementApp:
         self.status_filter.set(ALL_STATUSES)
         self.refresh_assets()
 
-    def _start_request(self, operation: str, request: dict) -> None:
+    def _start_request(self, operation: str, request: Union[dict, list]) -> None:
         """Send a request on a background thread, keeping the window responsive."""
         self._set_busy(True)
         self.status_label.configure(text="Connecting to asset server...")
@@ -723,7 +727,7 @@ class AssetManagementApp:
             try:
                 # A review sends one request per asset. Any that fail are reported together,
                 # and the rest still go ahead.
-                if operation == "review":
+                if isinstance(request, list):  # a review: one request per asset
                     failures = []
                     for one in request:
                         reply = send_request(one)
@@ -783,7 +787,7 @@ class AssetManagementApp:
         """Ask the server for the assets matching the search, or all of them."""
         self._start_request("list", self.list_request())
 
-    def _selected_asset_id(self) -> object:
+    def _selected_asset_id(self) -> Optional[str]:
         """Return the ID of the asset selected in the table, or None after asking
         the user to select one."""
         selection = self.tree.selection()
@@ -1107,11 +1111,13 @@ class LoginWindow(ttk.Frame):
                     continue
                 answered[0] = candidate
                 return result
+            if error is None:
+                raise OSError("No server could be reached")
             raise error
 
         self._run(work, lambda result, error: self._trust(answered[0], result, error, then))
 
-    def _trust(self, address: tuple, result: object, error: object, then) -> None:
+    def _trust(self, address: tuple, result: Any, error: Any, then) -> None:
         if error:
             self._say(f"Could not connect to {address[0]}:{address[1]}: {error}")
             return
@@ -1139,7 +1145,7 @@ class LoginWindow(ttk.Frame):
         self._run(lambda: send_request({"action": "LOGIN", "username": username, "password": password}),
                   self._logged_in)
 
-    def _logged_in(self, reply: object, error: object) -> None:
+    def _logged_in(self, reply: Any, error: Any) -> None:
         self.password_box.delete(0, tk.END)  # don't leave the password in the window
         if error:
             self._say(str(error))
