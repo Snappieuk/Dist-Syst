@@ -39,6 +39,7 @@ namespace AssetApp
             tabs.BringToFront();   // so the status bar keeps its place at the bottom
 
             BuildAssetsTab();
+            BuildAssetButtons();
             BuildLoansTab();
             BuildReviewTab();
 
@@ -149,13 +150,14 @@ namespace AssetApp
         // (Named with a trailing underscore because Form already has a Refresh method.)
         void Refresh_()
         {
-            Perform(null, null);
+            Perform(null, null, null);
         }
 
         // Send `request` (if any), then fetch the list. `success` is shown in the status bar
-        // when the request worked. A failed request shows a message box and still refreshes,
-        // because "someone else changed it" is the usual reason and the list is then stale.
-        void Perform(Dictionary<string, object> request, string success)
+        // when the request worked, and `onSuccess` (if given) runs then too. A failed request
+        // shows a message box and still refreshes, because "someone else changed it" is the
+        // usual reason and the list is then stale.
+        void Perform(Dictionary<string, object> request, string success, Action onSuccess)
         {
             if (busy) return;
             SetBusy(true, "Connecting to the asset server...");
@@ -190,7 +192,11 @@ namespace AssetApp
 
                 if (reply != null)
                 {
-                    if (J.Text(reply, "status") == "OK") statusText.Text = success + "  (" + statusText.Text + ")";
+                    if (J.Text(reply, "status") == "OK")
+                    {
+                        statusText.Text = success + "  (" + statusText.Text + ")";
+                        if (onSuccess != null) onSuccess();
+                    }
                     else MessageBox.Show(this, J.Text(reply, "detail"), "Not done", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             });

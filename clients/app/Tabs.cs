@@ -6,6 +6,7 @@ namespace AssetApp
 {
     partial class MainForm
     {
+        void BuildMoreAssetButtons() { }
         void BuildLoansTab() { }
         void FillLoans() { }
         void BuildReviewTab() { }
