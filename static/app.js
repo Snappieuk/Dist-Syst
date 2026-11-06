@@ -158,7 +158,6 @@ async function saveCheckOut(event) {
   button.disabled = true;
   try {
     await assetAction(checkoutAsset, "check-out", details);
-    addPerson(details.borrower);
     checkoutDialog.close();
     showActionResult(`Checked out ${checkoutAsset.asset_id} to ${details.borrower} until ${details.due}`);
     await loadAssets();
@@ -405,95 +404,106 @@ function showLoans() {
 
 // ---------- The People page ----------
 
-// The names are kept in this browser, so they survive a reload. Names are compared
-// ignoring capitals and extra spaces, so "sam lee" and "Sam  Lee" are the same person.
-const PEOPLE_KEY = "asset-people";
-
+// The page lists everyone who has something on loan right now, worked out from the loans
+// themselves, so it fills by itself (including from fill.py) and a person disappears when
+// their last item is checked in, wherever that happens. Names are compared ignoring
+// capitals and extra spaces, so "sam lee" and "Sam  Lee" are the same person, and a second
+// item lent to them is added to the same row instead of making a new one.
 function nameKey(name) {
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function loadPeople() {
-  try {
-    const names = JSON.parse(localStorage.getItem(PEOPLE_KEY));
-    return Array.isArray(names) ? names.filter((name) => typeof name === "string") : [];
-  } catch (error) {
-    return []; // nothing saved yet, or storage is blocked
-  }
-}
-
-function savePeople(names) {
-  try {
-    localStorage.setItem(PEOPLE_KEY, JSON.stringify(names));
-  } catch (error) {
-    // Storage may be full or blocked; the list just won't be remembered.
-  }
-}
-
-// Called after a successful check-out, so the borrower appears on the People page.
-function addPerson(name) {
-  const people = loadPeople();
-  const clean = name.trim().replace(/\s+/g, " ");
-  if (clean && !people.some((known) => nameKey(known) === nameKey(clean))) {
-    people.push(clean);
-    savePeople(people);
-  }
-}
-
-function removePerson(name) {
-  savePeople(loadPeople().filter((known) => nameKey(known) !== nameKey(name)));
-  showPeople();
-}
-
-// The assets each person has out right now, by name.
+// The assets each person has out right now, by name key. `name` is the spelling first seen.
 function openLoansByPerson() {
   const out = new Map();
   for (const asset of allAssets) {
     const loan = currentLoan(asset);
     if (loan) {
       const key = nameKey(loan.borrower);
-      out.set(key, [...(out.get(key) || []), asset.asset_id]);
+      const person = out.get(key) || { name: loan.borrower.trim().replace(/\s+/g, " "), assets: [] };
+      person.assets.push(asset);
+      out.set(key, person);
     }
   }
   return out;
 }
 
-function showPeople() {
-  const out = openLoansByPerson();
+// Removing someone shows what they still have out, and checks all of it back in. (There is
+// no way to delete a loan itself: a loan is a record, and checking the item in closes it.)
+let personToRemove = null;
 
-  // Someone with nothing left out is removed. This is what removes a person when their
-  // item comes back, wherever it was checked in. Skipped if no assets have loaded, so a
-  // failed load can't empty the list.
-  let people = loadPeople();
-  if (allAssets.length > 0) {
-    const stillOut = people.filter((name) => out.has(nameKey(name)));
-    if (stillOut.length !== people.length) {
-      savePeople(stillOut);
-      people = stillOut;
+function removePerson(person) {
+  personToRemove = person;
+  document.getElementById("person-heading").textContent = `Remove ${person.name}`;
+  document.getElementById("person-summary").textContent =
+    `${person.name} still has ${person.assets.length} item(s) on loan. Removing them from this page ` +
+    "means checking every one of these back in:";
+  document.getElementById("person-items").replaceChildren(...person.assets.map((asset) => {
+    const item = document.createElement("li");
+    const loan = currentLoan(asset);
+    item.textContent = `${asset.asset_id} ${asset.description}, due ${loan.due}${isOverdue(loan) ? " (overdue)" : ""}`;
+    return item;
+  }));
+  document.getElementById("person-message").textContent = "";
+  document.getElementById("person-dialog").showModal();
+}
+
+async function confirmRemovePerson() {
+  const person = personToRemove;
+  // A second, plain question, because this changes the assets and can't be undone.
+  if (!confirm(`Really check in ${person.assets.length} item(s) from ${person.name}?`)) {
+    return;
+  }
+  const button = document.getElementById("person-button");
+  button.disabled = true;
+  const failures = [];
+  for (const asset of person.assets) {
+    try {
+      await assetAction(asset, "check-in");
+    } catch (error) {
+      failures.push(`${asset.asset_id}: ${error.message}`);
     }
   }
-  people.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  button.disabled = false;
+  if (failures.length) {
+    document.getElementById("person-message").textContent = `Not all could be checked in. ${failures.join("; ")}`;
+  } else {
+    document.getElementById("person-dialog").close();
+    showActionResult(`Checked in ${person.assets.length} item(s) from ${person.name}`);
+  }
+  await loadAssets();
+}
 
-  // The check-out form offers these names as the borrower is typed.
-  document.getElementById("people-list").replaceChildren(...people.map((name) => {
+function showPeople() {
+  const people = [...openLoansByPerson().values()]
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+  // The check-out form offers every name ever lent to, as the borrower is typed.
+  const known = new Map();
+  for (const asset of allAssets) {
+    for (const loan of asset.loans) {
+      known.set(nameKey(loan.borrower), loan.borrower.trim().replace(/\s+/g, " "));
+    }
+  }
+  document.getElementById("people-list").replaceChildren(...[...known.values()].sort().map((name) => {
     const option = document.createElement("option");
     option.value = name;
     return option;
   }));
 
-  const rows = people.map((name) => {
+  const rows = people.map((person) => {
     const row = document.createElement("tr");
     const nameCell = document.createElement("td");
-    nameCell.textContent = name;
+    nameCell.textContent = person.name;
     const itemsCell = document.createElement("td");
-    itemsCell.textContent = (out.get(nameKey(name)) || []).join(", ");
+    itemsCell.textContent = person.assets.map((asset) => asset.asset_id).join(", ");
     const actionCell = document.createElement("td");
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "secondary";
     remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove ${name}`);
-    remove.addEventListener("click", () => removePerson(name));
+    remove.setAttribute("aria-label", `Remove ${person.name}`);
+    remove.addEventListener("click", () => removePerson(person));
     actionCell.append(remove);
     row.append(nameCell, itemsCell, actionCell);
     return row;
@@ -1290,6 +1300,7 @@ async function refreshRepeatedly() {
 search.addEventListener("input", showAssets);
 statusFilter.addEventListener("change", showAssets);
 document.getElementById("loan-filter").addEventListener("change", showLoans);
+document.getElementById("person-button").addEventListener("click", confirmRemovePerson);
 
 // There is nothing to submit, so pressing Enter must not reload the page.
 filters.addEventListener("submit", (event) => event.preventDefault());

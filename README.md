@@ -354,16 +354,18 @@ recorded with the asset: when, what, which web user asked and which server did i
 history travels with the asset, so every server has it. Click an asset on the web page,
 or double-click it (or use History) in the GUI, to see it.
 
-**People.** The People tab lists everyone who has been lent something. A name is added when
-you check something out to them, and the Borrower box offers these names as you type. A
-name is removed once everything they had is back (whoever checked it in), or when you press
-Remove. The list is kept in the browser you use, so another browser or device has its own.
+**People.** The People tab lists everyone who has something on loan right now. It is worked
+out from the loans themselves, so it fills by itself (including with demo data), the same
+person lent two items is one row listing both, and they drop off once everything is back,
+whoever checked it in. The Borrower box offers every name ever lent to as you type. Remove
+on someone who still has items out first lists those items, then asks again before
+checking them all back in. (A loan can't be deleted, only closed by checking the item in.)
 
 **Loans and calendar.** The Loans tab lists every loan, newest first, with a filter for
-on loan, overdue or returned. The Calendar tab shows a month at a time as a real calendar,
+on loan, overdue or returned, and a Check in button on loans still out. The Calendar tab shows a month at a time as a real calendar,
 weeks starting on Monday. Each loan is a bar across its days: green while out, red when
 overdue (running up to today) and grey once returned. A day with more loans than fit shows
-"+N more". Both cover all assets, and clicking a loan or bar shows that asset's history.
+"+N more", which you can click to list that day's loans. Both cover all assets, and clicking a loan or bar shows that asset's history.
 Every loan an asset has had is kept, so past months show too. The Review tab is always
 there, and says so when nothing is waiting.
 

@@ -179,6 +179,21 @@
     <ol id="history-list" class="history-list"></ol>
   </dialog>
 
+  <!-- Shown before someone with items on loan is removed from the People tab. -->
+  <dialog id="person-dialog" class="dialog" aria-labelledby="person-heading">
+    <div class="dialog-head">
+      <h2 id="person-heading">Remove person</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close">&times;</button>
+    </div>
+    <p id="person-summary" class="dialog-note"></p>
+    <ul id="person-items" class="person-items"></ul>
+    <p id="person-message" class="dialog-message problem" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="person-button" class="delete">Check all in and remove</button>
+      <button type="button" class="secondary" data-close>Cancel</button>
+    </div>
+  </dialog>
+
   <!-- Every loan on one calendar day, opened by clicking "+n more". -->
   <dialog id="day-dialog" class="dialog" aria-labelledby="day-heading">
     <div class="dialog-head">
