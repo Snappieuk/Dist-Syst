@@ -475,8 +475,8 @@ def set_asset_status(asset_id: str, status: str, expected_version: object = None
         if conflict:
             return conflict
 
-        updated = with_history(previous, "SET_STATUS", f"Status changed from {previous['status']} to {status}")
-        updated = dict(updated, status=status, version=previous.get("version", 0) + 1, updated_at=utc_timestamp())
+        changed = with_history(previous, "SET_STATUS", f"Status changed from {previous['status']} to {status}")
+        updated: dict = dict(changed, status=status, version=previous.get("version", 0) + 1, updated_at=utc_timestamp())
         updated["tags"] = generate_asset_tags(updated)
 
         assets[index] = updated
