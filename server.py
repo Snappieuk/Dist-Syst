@@ -746,28 +746,50 @@ class AssetServer:
                 threading.Thread(target=self.handle_connection, args=(conn, addr), daemon=True).start()
 
 
+def wait_before_closing() -> None:
+    """Keep the window open after a failure until Enter is pressed.
+
+    Started by double-clicking, Windows closes the console the moment the program
+    ends, so the reason it couldn't start would vanish before anyone could read it.
+    """
+    try:
+        input("\nPress Enter to close...")
+    except EOFError:
+        pass  # no keyboard, e.g. started by another program
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    role = sys.argv[1] if len(sys.argv) > 1 else "primary"
+    if role not in ("primary", "backup"):
+        print("Usage: python server.py [primary|backup]")
+        wait_before_closing()
+        return
     try:
-        role = sys.argv[1] if len(sys.argv) > 1 else "primary"
-        if role not in ("primary", "backup"):
-            print("Usage: python server.py [primary|backup]")
-            return
         server = AssetServer(common.load_config(), role)
     except FileNotFoundError as exc:
-        logger.error(
-            "Could not start the server: %s. First run: python certificate.py, then "
-            "python users.py add admin admin",
-            exc,
+        logger.error("Could not start the server: %s", exc)
+        print(
+            "\nThe one-time setup hasn't been done yet. In this folder, run:\n"
+            "    pip install -r requirements.txt\n"
+            "    python certificate.py\n"
+            "    python users.py add admin admin\n"
+            "then start the server again."
         )
+        wait_before_closing()
         return
     except (OSError, ValueError) as exc:
         logger.error("Could not start the server: %s", exc)
+        wait_before_closing()
         return
     try:
         server.serve()
     except KeyboardInterrupt:
         print("Server stopped.")
+    except OSError as exc:
+        # Most often the port is already in use, e.g. this server is already running.
+        logger.error("The %s server stopped: %s", role, exc)
+        wait_before_closing()
 
 
 if __name__ == "__main__":
