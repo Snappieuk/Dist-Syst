@@ -1,0 +1,7 @@
+{
+  // Hide Python's automatically created bytecode folders from VS Code's file explorer
+  // and searches. They are regenerated whenever a program runs, so are never edited.
+  "files.exclude": {
+    "**/__pycache__": true
+  }
+}
