@@ -33,6 +33,8 @@ SUCCESS_MESSAGES = {
     "edit": "Asset details updated",
     "delete": "Asset deleted",
     "review": "Review saved",
+    "check_out": "Asset checked out",
+    "check_in": "Asset checked in",
 }
 
 # How a ticked and an unticked row look in the review list.
@@ -610,7 +612,7 @@ class AssetManagementApp:
 
                     # The table may be out of date, for example if someone else
                     # changed the asset, so show the user what is there now.
-                    if operation in ("set_status", "edit", "delete", "review"):
+                    if operation in ("set_status", "edit", "delete", "review", "check_out", "check_in"):
                         self.refresh_assets()
                     continue
 
