@@ -16,9 +16,7 @@
   --problem: #b3261e;
   --problem-soft: #fdecea;
   --good: #11804a;
-  --good-background: #def5e8;
   --warning: #9a5b00;
-  --warning-background: #fcf0d6;
   --neutral-background: #ebe9e4;
   /* Boxes on the page are flat, edged by their border. Only things that float over the
      page (the menu, windows and notices) cast a shadow, and it is a hard offset one
@@ -44,9 +42,7 @@
     --problem: #ff9d94;
     --problem-soft: #3a1d1b;
     --good: #86e0ad;
-    --good-background: #163428;
     --warning: #f5c77a;
-    --warning-background: #3a2c12;
     --neutral-background: #2a2b2e;
     --shadow: none;
     --shadow-large: 4px 4px 0 rgba(0, 0, 0, 0.5);
@@ -502,42 +498,42 @@ button.primary-action {
   letter-spacing: -0.02em;
 }
 
-/* Which server answered, as a coloured pill. The backup answering means the primary is
-   down, so it stands out. */
+/* Which server answered. */
 .stat strong.server-pill {
-  align-self: flex-start;
-  margin-top: 4px;
-  padding: 3px 12px 3px 10px;
-  border-radius: var(--radius);
-  background: var(--neutral-background);
-  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.4rem;
   text-transform: capitalize;
 }
 
+/* A small square in the server's colour: green for the primary, amber for the backup
+   (the primary must be down), and red when neither answered. */
 .server-pill::before {
   content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 7px;
-  border-radius: var(--radius);
-  background: currentColor;
-  vertical-align: 1px;
+  width: 10px;
+  height: 10px;
+  background: var(--muted);
 }
 
-.server-pill.server-primary {
-  background: var(--good-background);
-  color: var(--good);
+.server-pill.server-primary::before {
+  background: var(--good);
 }
 
 .server-pill.server-backup {
-  background: var(--warning-background);
   color: var(--warning);
 }
 
+.server-pill.server-backup::before {
+  background: var(--warning);
+}
+
 .server-pill.server-none {
-  background: var(--problem-soft);
   color: var(--problem);
+}
+
+.server-pill.server-none::before {
+  background: var(--problem);
 }
 
 /* ---- Search and filter ---- */
@@ -595,8 +591,9 @@ td {
   vertical-align: middle;
 }
 
+/* A solid rule under the column headings, rather than a shaded band. */
 th {
-  background: var(--surface-raised);
+  border-bottom: 2px solid var(--text);
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 700;
@@ -676,12 +673,13 @@ td.tags {
   max-width: 260px;
 }
 
+/* Each tag in a thin outline. */
 .tag {
   display: inline-block;
   margin: 2px 4px 2px 0;
-  padding: 1px 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--neutral-background);
   color: var(--muted);
   font-size: 0.75rem;
 }
@@ -700,33 +698,28 @@ td.actions button + button {
   margin-left: 6px;
 }
 
+/* A status is plain text after a small coloured square, rather than a tinted badge. */
 .status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: var(--radius);
-  background: var(--neutral-background);
-  font-size: 0.8rem;
+  gap: 7px;
+  font-size: 0.88rem;
   font-weight: 600;
 }
 
 .status-badge::before {
   content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius);
-  background: currentColor;
+  width: 8px;
+  height: 8px;
+  background: var(--muted);
 }
 
-.status-badge.in-use {
-  background: var(--good-background);
-  color: var(--good);
+.status-badge.in-use::before {
+  background: var(--good);
 }
 
-.status-badge.not-in-use {
-  background: var(--warning-background);
-  color: var(--warning);
+.status-badge.not-in-use::before {
+  background: var(--warning);
 }
 
 /* ---- Windows that open over the page ---- */
