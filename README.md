@@ -33,12 +33,13 @@ met and which tests prove it.
 | `common.py` | Code shared by every program: the message format, protocol version, error codes, loading `config.json`, TLS settings and client failover. |
 | `users.py` | Accounts, password hashing and session tokens. Run it to add accounts. |
 | `certificate.py` | Creates the TLS certificate and private key. |
+| `reset.py` | Deletes everything the system has created, back to a fresh install, then offers to set up again. |
 | `send.py` | Command-line registration client. |
 | `receive.py` | Command-line query client, with optional search. |
 | `gui.py` | Tkinter GUI: log in, register, view, search, page through, edit and delete. |
 | `config.json` | Hosts, ports, timeouts, size limits and file names. |
 | `requirements.txt` | The one third-party package: `cryptography`, used only by `certificate.py`. |
-| `test_system.py`, `test_gui.py` | Automated tests. |
+| `test_system.py`, `test_gui.py`, `test_reset.py` | Automated tests. |
 
 ## Setting up and running
 
@@ -62,6 +63,26 @@ python receive.py           # list every asset
 python receive.py laptop    # search every field
 python receive.py location=site a     # search one field
 ```
+
+### Resetting
+
+To start again from nothing, stop both servers and run:
+
+```
+python reset.py
+```
+
+It lists what it will delete and asks you to type `RESET`. It deletes:
+- both servers' assets
+- the audit logs
+- every account
+- `secret.key`
+- the certificate and its key
+
+It doesn't touch the code or any other file, and it refuses while a server is still
+running. It then offers to create a new certificate and admin account straight away.
+`python reset.py --yes` skips the confirmation. If you run the servers on two
+machines, reset each of them.
 
 ### Running on several machines
 
@@ -134,7 +155,7 @@ The context names the field, asset or limit concerned.
 ## Tests
 
 ```
-python -m unittest -v test_system test_gui
+python -m unittest -v test_system test_gui test_reset
 ```
 
 The tests start real servers on spare ports, with their own certificate, accounts and
