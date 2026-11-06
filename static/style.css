@@ -1161,50 +1161,68 @@ tbody tr.clickable:focus-visible {
   background: var(--muted);
 }
 
-/* A wide month scrolls inside this box, so the page itself doesn't scroll sideways. */
-.calendar-wrap {
-  overflow-x: auto;
+/* The month: a row of weekday names, then one grid per week with seven columns. */
+.calendar-weekdays,
+.calendar-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
-/* Each row is a grid: a column for the asset and borrower, then one for each day. */
-.calendar-row {
-  display: grid;
-  grid-template-columns: 220px repeat(var(--days), minmax(24px, 1fr));
-  align-items: center;
-  min-width: calc(220px + var(--days) * 24px);
-  min-height: 30px;
+.calendar-weekdays {
+  border-bottom: 2px solid var(--text);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.calendar-weekdays span {
+  padding: 6px 8px;
+}
+
+/* Each week has a row for the day numbers, then up to three rows of loan bars and one for "+N more". */
+.calendar-week {
+  grid-template-rows: auto repeat(3, 22px) 18px;
   border-bottom: 1px solid var(--border);
 }
 
-.calendar-days {
-  border-bottom: 2px solid var(--text);
-  color: var(--muted);
-  font-size: 0.75rem;
-  text-align: center;
+/* The day cell fills the whole week's height and sits behind the bars, so it draws the lines. */
+.calendar-day {
+  min-height: 110px;
+  padding: 4px 8px;
+  border-left: 1px solid var(--border);
+  font-size: 0.82rem;
 }
 
-.calendar-days .weekend {
+.calendar-day:first-child {
+  border-left: 0;
+}
+
+.calendar-day.other-month {
+  color: var(--muted);
   background: var(--surface-raised);
 }
 
-.calendar-days .today {
+.calendar-day.today span {
+  display: inline-block;
+  min-width: 1.6em;
+  border-radius: 50%;
   background: var(--text);
   color: var(--background);
   font-weight: 700;
+  text-align: center;
 }
 
-.calendar-label {
-  overflow: hidden;
-  padding-right: 8px;
-  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
-  font-size: 0.8rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.calendar-more {
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
-/* The loan itself, from its first to its last day in the month. */
+/* The loan itself, across the days it covers in that week. */
 button.calendar-bar {
   height: 20px;
+  margin: 1px 3px;
   overflow: hidden;
   padding: 0 6px;
   border: 0;

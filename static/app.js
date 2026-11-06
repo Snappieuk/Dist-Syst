@@ -384,7 +384,7 @@ let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 
 // Each loan that overlaps the month, with the asset it belongs to. A loan still out ends
 // on its due date, or today if it is overdue. A returned one ends when it came back.
-function loansInMonth(assets, first, last) {
+function loansBetween(assets, first, last) {
   const found = [];
   for (const asset of assets) {
     for (const loan of asset.loans) {
@@ -400,53 +400,104 @@ function loansInMonth(assets, first, last) {
 function showCalendar(assets) {
   const year = calendarMonth.getFullYear();
   const month = calendarMonth.getMonth();
-  const days = new Date(year, month + 1, 0).getDate();
-  const first = isoDate(new Date(year, month, 1));
-  const last = isoDate(new Date(year, month, days));
   document.getElementById("calendar-month").textContent =
     calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
-  // One column for the names, then one for each day of the month.
-  const calendar = document.getElementById("calendar");
-  calendar.style.setProperty("--days", days);
+  // The grid starts on the Monday on or before the 1st and ends on the Sunday on or after
+  // the last day, so it is always whole weeks.
+  const offset = (calendarMonth.getDay() + 6) % 7;
+  const weekCount = Math.ceil((offset + new Date(year, month + 1, 0).getDate()) / 7);
+  const gridStart = new Date(year, month, 1 - offset);
+  const gridEnd = new Date(year, month, 1 - offset + weekCount * 7 - 1);
+  const loans = loansBetween(assets, isoDate(gridStart), isoDate(gridEnd));
 
-  const header = document.createElement("div");
-  header.className = "calendar-row calendar-days";
-  header.append(document.createElement("span"));
-  for (let day = 1; day <= days; day += 1) {
-    const date = new Date(year, month, day);
+  const pieces = [];
+  const names = document.createElement("div");
+  names.className = "calendar-weekdays";
+  for (const name of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) {
     const cell = document.createElement("span");
-    cell.textContent = day;
-    cell.classList.toggle("weekend", date.getDay() === 0 || date.getDay() === 6);
-    cell.classList.toggle("today", isoDate(date) === today());
-    header.append(cell);
+    cell.textContent = name;
+    names.append(cell);
   }
+  pieces.push(names);
 
-  const rows = loansInMonth(assets, first, last).map(({ asset, loan, end }) => {
+  for (let week = 0; week < weekCount; week += 1) {
+    const weekStart = new Date(year, month, 1 - offset + week * 7);
+    const days = [];
+    for (let i = 0; i < 7; i += 1) {
+      days.push(isoDate(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i)));
+    }
+
+    // The loans touching this week, each with the columns (1 to 7) it covers. Each goes
+    // in the first lane where it doesn't overlap an earlier loan.
+    const lanes = [];
+    const hidden = [0, 0, 0, 0, 0, 0, 0];
+    for (const { asset, loan, end } of loans) {
+      if (loan.start > days[6] || end < days[0]) {
+        continue;
+      }
+      const from = loan.start < days[0] ? 0 : days.indexOf(loan.start);
+      const to = end > days[6] ? 6 : days.indexOf(end);
+      let lane = lanes.findIndex((used) => used.every(([a, b]) => to < a || from > b));
+      if (lane === -1) {
+        lane = lanes.length;
+        lanes.push([]);
+      }
+      lanes[lane].push([from, to, asset, loan]);
+    }
+
+    // Row 1 holds the day numbers; each lane after that is another row, at most MAX_LANES.
+    const MAX_LANES = 3;
     const row = document.createElement("div");
-    row.className = "calendar-row";
-    const label = document.createElement("span");
-    label.className = "calendar-label";
-    label.textContent = `${asset.asset_id} · ${loan.borrower}`;
-    label.title = asset.description;
-
-    // The bar runs from the first to the last of its days that fall in this month.
-    const startDay = loan.start < first ? 1 : Number(loan.start.slice(8));
-    const endDay = end > last ? days : Number(end.slice(8));
-    const bar = document.createElement("button");
-    bar.type = "button";
-    bar.className = "calendar-bar";
-    bar.classList.add(loan.returned ? "returned" : isOverdue(loan) ? "overdue" : "on-loan");
-    bar.style.gridColumn = `${startDay + 1} / ${endDay + 2}`;
-    bar.textContent = asset.description;
-    bar.title = `${asset.asset_id} ${asset.description}: ${loan.borrower}, ${loan.start} to ${loan.due}` +
-      (loan.returned ? `, returned ${loan.returned}` : isOverdue(loan) ? ", overdue" : "");
-    bar.addEventListener("click", () => showHistory(asset));
-    row.append(label, bar);
-    return row;
-  });
-  calendar.replaceChildren(header, ...rows);
-  document.getElementById("calendar-empty").hidden = rows.length > 0;
+    row.className = "calendar-week";
+    days.forEach((date, i) => {
+      const cell = document.createElement("div");
+      cell.className = "calendar-day";
+      cell.style.gridColumn = i + 1;
+      cell.style.gridRow = `1 / span ${MAX_LANES + 2}`;
+      cell.classList.toggle("other-month", Number(date.slice(5, 7)) !== month + 1);
+      cell.classList.toggle("today", date === today());
+      const number = document.createElement("span");
+      number.textContent = Number(date.slice(8));
+      cell.append(number);
+      row.append(cell);
+    });
+    lanes.forEach((used, lane) => {
+      for (const [from, to, asset, loan] of used) {
+        if (lane >= MAX_LANES) {
+          for (let i = from; i <= to; i += 1) {
+            hidden[i] += 1;
+          }
+          continue;
+        }
+        const bar = document.createElement("button");
+        bar.type = "button";
+        bar.className = "calendar-bar";
+        bar.classList.add(loan.returned ? "returned" : isOverdue(loan) ? "overdue" : "on-loan");
+        bar.style.gridColumn = `${from + 1} / ${to + 2}`;
+        bar.style.gridRow = lane + 2;
+        bar.textContent = `${asset.asset_id} ${loan.borrower}`;
+        bar.title = `${asset.asset_id} ${asset.description}: ${loan.borrower}, ${loan.start} to ${loan.due}` +
+          (loan.returned ? `, returned ${loan.returned}` : isOverdue(loan) ? ", overdue" : "");
+        bar.addEventListener("click", () => showHistory(asset));
+        row.append(bar);
+      }
+    });
+    // Loans that didn't fit are counted on the days they cover.
+    hidden.forEach((count, i) => {
+      if (count > 0) {
+        const more = document.createElement("span");
+        more.className = "calendar-more";
+        more.style.gridColumn = i + 1;
+        more.style.gridRow = MAX_LANES + 2;
+        more.textContent = `+${count} more`;
+        row.append(more);
+      }
+    });
+    pieces.push(row);
+  }
+  document.getElementById("calendar").replaceChildren(...pieces);
+  document.getElementById("calendar-empty").hidden = loans.length > 0;
 }
 
 function moveCalendar(months) {
