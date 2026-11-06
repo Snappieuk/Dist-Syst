@@ -349,7 +349,9 @@ class DiscoveryTest(ServerTestCase):
 
     def test_ping_identifies_the_server_without_a_login(self):
         reply = common.send_request({"action": "PING"}, self.config)
-        self.assertEqual(reply, {"status": "OK", "service": "asset-management", "role": "primary"})
+        self.assertEqual(reply, {
+            "status": "OK", "service": "asset-management", "role": "primary", "servers": self.config["servers"],
+        })
 
     def test_the_server_answers_discovery_with_its_role_and_port(self):
         port = self.server.address[1]

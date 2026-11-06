@@ -5,10 +5,10 @@ computer with Python 3.8+ and run it.
     python gui.py
 
 On the login screen, enter the server's IP address or host name (add :port if it
-isn't the usual one), or press "Find servers" to look for them on the local
-network. "Check" tests an address before you log in. The backup address is
-optional; if it's given, the GUI moves to the backup when the primary can't be
-reached.
+isn't the usual one), or press "Find servers" to look for it on the local network.
+"Check" tests an address before you log in. Only one address is needed: the server
+tells the GUI where both the primary and the backup are, and if the primary fails,
+the GUI moves to the backup by itself.
 
 Certificates: the first time you connect to a server, the GUI shows the
 fingerprint of its certificate and asks whether to trust it (trust on first use).
@@ -142,14 +142,38 @@ def exchange(sock: socket.socket, request: dict) -> dict:
 
 
 def probe(address: tuple) -> tuple:
-    """Check that an address is an Asset Management server. Returns (role, fingerprint).
-    Only PING is sent, which needs no login, so nothing secret goes to an untrusted server."""
+    """Check that an address is an Asset Management server.
+
+    Returns (role, fingerprint, servers), where servers is the addresses of the
+    primary and backup, primary first, as the server reports them. Only PING is sent,
+    which needs no login, so nothing secret goes to an untrusted server.
+    """
     sock, print_ = connect(address)
     with sock:
         reply = exchange(sock, {"action": "PING"})
     if reply.get("service") != SERVICE_NAME:
         raise ValueError(f"{show_address(address)} answered, but it isn't an Asset Management server.")
-    return reply.get("role", "server"), print_
+    return reply.get("role", "server"), print_, server_addresses(reply.get("servers"), address)
+
+
+def server_addresses(servers: object, reached: tuple) -> list:
+    """The primary and backup addresses from a PING reply, primary first.
+
+    A server set up as 127.0.0.1 (or 0.0.0.0) runs on the same machine as the one
+    that replied, so the address used to reach that one is used instead; that way it
+    still works from other computers. Falls back to just the address used.
+    """
+    addresses = []
+    if isinstance(servers, dict):
+        for role in ("primary", "backup"):
+            server = servers.get(role)
+            if not isinstance(server, dict) or not isinstance(server.get("port"), int):
+                continue
+            host = str(server.get("host", ""))
+            if host in ("", "localhost", "0.0.0.0", "::1") or host.startswith("127."):
+                host = reached[0]
+            addresses.append((host, server["port"]))
+    return addresses or [reached]
 
 
 def explain(exc: Exception) -> str:
@@ -186,30 +210,31 @@ def send_to_servers(addresses: list, trusted: dict, request: dict) -> tuple:
     raise last_error
 
 
-def check_addresses(addresses: list, trusted: dict) -> list:
-    """What "Check" reports for each address."""
-    results = []
+def check_address(address: tuple, trusted: dict) -> str:
+    """What "Check" reports for an address."""
+    try:
+        role, print_, servers = probe(address)
+    except (OSError, ValueError) as exc:
+        return f"{show_address(address)}: {explain(exc)}"
+    known = trusted.get(show_address(address)) == print_
+    others = [show_address(a) for a in servers if a != address]
+    return (f"{show_address(address)}: {role} server found"
+            + ("" if known else " (certificate not yet trusted)")
+            + (f"; it reports the other server at {', '.join(others)}" if others else ""))
+
+
+def first_answer(addresses: list) -> tuple:
+    """Probe each address in turn and return (address, fingerprint, servers) for the
+    first that answers. The remembered addresses come after the typed one, so the GUI
+    can still log in to the backup when the primary is already down."""
+    last_error = ConnectionError("no server answered at that address")
     for address in addresses:
         try:
-            role, print_ = probe(address)
-            known = trusted.get(show_address(address)) == print_
-            results.append(f"{show_address(address)}: {role} server found" + ("" if known else " (certificate not yet trusted)"))
+            _role, print_, servers = probe(address)
+            return address, print_, servers
         except (OSError, ValueError) as exc:
-            results.append(f"{show_address(address)}: {explain(exc)}")
-    return results
-
-
-def probe_addresses(addresses: list) -> list:
-    """[(address, fingerprint)] for each address that is an Asset Management server now."""
-    found = []
-    for address in addresses:
-        try:
-            found.append((address, probe(address)[1]))
-        except (OSError, ValueError):
-            pass  # a backup that's down now is checked again when it's needed
-    if not found:
-        raise ConnectionError("no server answered at that address")
-    return found
+            last_error = exc
+    raise last_error
 
 
 def run_in_thread(replies: queue.Queue, key: int, work) -> None:
@@ -261,9 +286,10 @@ def load_settings(path: str) -> dict:
         with open(path, encoding="utf-8") as file:
             settings = json.load(file)
     except (OSError, ValueError):
-        return {"server": "", "backup": "", "trusted": {}}
+        return {"server": "", "servers": [], "trusted": {}}
     if not isinstance(settings, dict) or not isinstance(settings.get("trusted"), dict):
-        return {"server": "", "backup": "", "trusted": {}}
+        return {"server": "", "servers": [], "trusted": {}}
+    settings.setdefault("servers", [])
     return settings
 
 
@@ -282,7 +308,7 @@ class AssetApp:
         self.root = root
         self.settings_file = settings_file
         self.settings = load_settings(settings_file)
-        self.addresses = []   # [primary, backup?] as (host, port)
+        self.addresses = []   # [primary, backup] as (host, port), as the server reported them
         self.token = None
         self.role = None
         self.page = 1
@@ -312,10 +338,6 @@ class AssetApp:
         self.server_entry.grid(row=0, column=1, pady=3)
         ttk.Button(frame, text="Check", command=self.check_server).grid(row=0, column=2, padx=4)
         ttk.Button(frame, text="Find servers", command=self.find_servers).grid(row=0, column=3)
-        ttk.Label(frame, text="Backup (optional)").grid(row=1, column=0, sticky=tk.W, pady=3)
-        self.backup_entry = ttk.Entry(frame, width=30)
-        self.backup_entry.insert(0, self.settings.get("backup", ""))
-        self.backup_entry.grid(row=1, column=1, pady=3)
         ttk.Label(frame, text="Username").grid(row=2, column=0, sticky=tk.W, pady=(12, 3))
         self.username_entry = ttk.Entry(frame, width=30)
         self.username_entry.grid(row=2, column=1, pady=(12, 3))
@@ -413,22 +435,18 @@ class AssetApp:
 
     # ---- Finding and checking servers -----------------------------------------
 
-    def read_addresses(self) -> list:
-        """The addresses typed in, checked for format. Raises ValueError."""
-        addresses = [parse_address(self.server_entry.get(), DEFAULT_PORTS["primary"])]
-        if self.backup_entry.get().strip():
-            addresses.append(parse_address(self.backup_entry.get(), DEFAULT_PORTS["backup"]))
-        return addresses
+    def read_address(self) -> tuple:
+        """The address typed in, checked for format. Raises ValueError."""
+        return parse_address(self.server_entry.get(), DEFAULT_PORTS["primary"])
 
     def find_servers(self) -> None:
         def done(result) -> None:
             if isinstance(result, Exception) or not result:
                 self.status_text.set("No servers found on this network. Enter the address by hand.")
                 return
-            for server in result:
-                entry = self.server_entry if server["role"] == "primary" else self.backup_entry
-                entry.delete(0, tk.END)
-                entry.insert(0, f"{server['host']}:{server['port']}")
+            server = result[0]  # the primary if it answered, otherwise the backup
+            self.server_entry.delete(0, tk.END)
+            self.server_entry.insert(0, f"{server['host']}:{server['port']}")
             found = ", ".join(f"{s['role']} at {s['host']}:{s['port']}" for s in result)
             self.status_text.set(f"Found {found}.")
 
@@ -436,14 +454,13 @@ class AssetApp:
 
     def check_server(self) -> None:
         try:
-            addresses = self.read_addresses()
+            address = self.read_address()
         except ValueError as exc:
             self.status_text.set(str(exc))
             return
 
         trusted = dict(self.settings["trusted"])
-        self.in_background(lambda: check_addresses(addresses, trusted),
-                           lambda results: self.status_text.set("; ".join(results)))
+        self.in_background(lambda: check_address(address, trusted), self.status_text.set)
 
     def trust(self, address: tuple, print_: str) -> bool:
         """Decide whether to trust a server's certificate (trust on first use).
@@ -510,25 +527,34 @@ class AssetApp:
     # ---- Logging in -----------------------------------------------------------
 
     def log_in(self) -> None:
-        """Check the servers and their certificates, then log in."""
+        """Check the server and its certificate, learn where both servers are, then log in."""
         try:
-            addresses = self.read_addresses()
+            typed = self.read_address()
         except ValueError as exc:
             self.status_text.set(str(exc))
             return
         self.token = None
+        remembered = []
+        for text in self.settings["servers"]:
+            try:
+                remembered.append(parse_address(text, DEFAULT_PORTS["primary"]))
+            except ValueError:
+                pass
+        candidates = [typed] + [a for a in remembered if a != typed]
 
         def checked(result) -> None:
             if isinstance(result, Exception):
                 self.status_text.set(f"Could not connect: {explain(result)}")
                 return
-            for address, print_ in result:
-                if not self.trust(address, print_):
-                    self.status_text.set(f"Not connected: {show_address(address)} was not trusted.")
-                    return
-            self.addresses = addresses
+            address, print_, servers = result
+            if not self.trust(address, print_):
+                self.status_text.set(f"Not connected: {show_address(address)} was not trusted.")
+                return
+            # From now on every request goes to the primary, or the backup if the
+            # primary can't be reached, whichever address was typed.
+            self.addresses = servers
             self.settings["server"] = self.server_entry.get().strip()
-            self.settings["backup"] = self.backup_entry.get().strip()
+            self.settings["servers"] = [show_address(a) for a in servers]
             save_settings(self.settings_file, self.settings)
             self.send({
                 "action": "LOGIN",
@@ -536,7 +562,7 @@ class AssetApp:
                 "password": self.password_entry.get(),
             }, self.logged_in)
 
-        self.in_background(lambda: probe_addresses(addresses), checked)
+        self.in_background(lambda: first_answer(candidates), checked)
 
     def logged_in(self, reply: dict) -> None:
         if reply["status"] != "OK":

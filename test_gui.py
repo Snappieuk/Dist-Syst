@@ -8,6 +8,7 @@ Linux machine without a screen, run them with: xvfb-run python -m unittest test_
 """
 
 import ast
+import gc
 import os
 import time
 import unittest
@@ -61,6 +62,12 @@ class StandaloneTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 gui.parse_address(bad, 65432)
 
+    @unittest.skipUnless(GUI_AVAILABLE, "Tkinter is not available")
+    def test_servers_set_up_as_this_machine_are_reached_at_the_address_used(self):
+        servers = {"primary": {"host": "127.0.0.1", "port": 1}, "backup": {"host": "10.0.0.9", "port": 2}}
+        self.assertEqual(gui.server_addresses(servers, ("192.168.1.20", 1)), [("192.168.1.20", 1), ("10.0.0.9", 2)])
+        self.assertEqual(gui.server_addresses(None, ("192.168.1.20", 1)), [("192.168.1.20", 1)])
+
 
 @unittest.skipUnless(GUI_AVAILABLE, "Tkinter or a display is not available")
 class GuiTest(ServerTestCase):
@@ -70,9 +77,17 @@ class GuiTest(ServerTestCase):
         self.settings_file = os.path.join(self.folder, "gui-settings.json")
         self.root = tk.Tk()
         self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        self.addCleanup(self.close_windows)
         self.app = self.open_app()
         self.yes = mock.patch("gui.messagebox.askyesno", return_value=True)
+
+    def close_windows(self) -> None:
+        """Destroy the windows and clean them up here, on the main thread. Left to
+        Python's garbage collector, they could be cleaned up from a background thread,
+        which Tk does not allow."""
+        self.root.destroy()
+        self.app = self.apps = self.root = None
+        gc.collect()
 
     def open_app(self) -> "gui.AssetApp":
         app = gui.AssetApp(self.root, self.settings_file)
@@ -94,17 +109,14 @@ class GuiTest(ServerTestCase):
             time.sleep(0.02)
         self.fail(f"Never {explanation}; status: {self.app.status_text.get()}")
 
-    def type_login(self, username: str = "admin", password: str = ADMIN_PASSWORD, backup: bool = False) -> None:
+    def type_login(self, username: str = "admin", password: str = ADMIN_PASSWORD, role: str = "primary") -> None:
         self.app.server_entry.delete(0, tk.END)
-        self.app.server_entry.insert(0, self.address("primary"))
-        self.app.backup_entry.delete(0, tk.END)
-        if backup:
-            self.app.backup_entry.insert(0, self.address("backup"))
+        self.app.server_entry.insert(0, self.address(role))
         self.app.username_entry.insert(0, username)
         self.app.password_entry.insert(0, password)
 
-    def log_in_to_window(self, username: str = "admin", password: str = ADMIN_PASSWORD, backup: bool = False) -> None:
-        self.type_login(username, password, backup)
+    def log_in_to_window(self, username: str = "admin", password: str = ADMIN_PASSWORD, role: str = "primary") -> None:
+        self.type_login(username, password, role)
         with self.yes:
             self.app.log_in()
             self.wait_until(lambda: self.app.token is not None and (
@@ -169,34 +181,58 @@ class GuiTest(ServerTestCase):
         self.app.check_server()
         self.wait_until(lambda: "primary server found" in self.app.status_text.get(), "found the server")
         self.assertIn("not yet trusted", self.app.status_text.get())
+        self.assertIn(f"other server at {self.address('backup')}", self.app.status_text.get())
 
         self.app.server_entry.delete(0, tk.END)
         self.app.server_entry.insert(0, self.address("backup"))  # nothing is running there
         self.app.check_server()
         self.wait_until(lambda: "nothing answered" in self.app.status_text.get(), "reported nothing there")
 
-    def test_find_servers_fills_in_the_primary_and_backup(self):
+    def test_find_servers_fills_in_the_primary(self):
         self.start_server("backup")
         ports = {role: s["port"] for role, s in self.config["servers"].items()}
         with mock.patch.dict(gui.DEFAULT_PORTS, ports):
             self.app.find_servers()
             self.wait_until(lambda: self.app.status_text.get().startswith("Found"), "found the servers")
         self.assertTrue(self.app.server_entry.get().endswith(f":{ports['primary']}"))
-        self.assertTrue(self.app.backup_entry.get().endswith(f":{ports['backup']}"))
+        self.assertIn("backup at", self.app.status_text.get())
 
     def test_find_servers_says_when_there_are_none(self):
         with mock.patch.dict(gui.DEFAULT_PORTS, {"primary": self.config["servers"]["backup"]["port"]}, clear=True):
             self.app.find_servers()
             self.wait_until(lambda: "No servers found" in self.app.status_text.get(), "reported none found")
 
-    def test_it_asks_once_for_a_primary_and_backup_sharing_a_certificate(self):
+    def server_pair(self) -> list:
+        return [(s["host"], s["port"]) for s in (self.config["servers"]["primary"], self.config["servers"]["backup"])]
+
+    def test_one_address_is_enough_the_server_says_where_the_backup_is(self):
         self.start_server("backup")
-        self.type_login(backup=True)
+        self.type_login()
         with mock.patch("gui.messagebox.askyesno", return_value=True) as ask:
             self.app.log_in()
             self.wait_until(lambda: self.app.token is not None, "logged in")
-        self.assertEqual(ask.call_count, 1)
-        self.assertEqual(len(self.app.settings["trusted"]), 2)
+        self.assertEqual(ask.call_count, 1)  # the backup shares the certificate
+        self.assertEqual(self.app.addresses, self.server_pair())
+        self.assertEqual(self.app.settings["servers"], [self.address("primary"), self.address("backup")])
+
+    def test_typing_the_backup_address_still_puts_the_primary_first(self):
+        self.start_server("backup")
+        self.log_in_to_window(role="backup")
+        self.assertEqual(self.app.addresses, self.server_pair())
+        self.assertNotIn("(backup)", self.app.server_label.cget("text"))
+
+    def test_it_logs_in_through_the_backup_when_the_primary_is_already_down(self):
+        self.start_server("backup")
+        self.log_in_to_window()           # learns where both servers are
+        self.stop_server("primary")
+        self.app = self.open_app()        # next time, with the primary down
+        self.app.username_entry.insert(0, "admin")
+        self.app.password_entry.insert(0, ADMIN_PASSWORD)
+        with mock.patch("gui.messagebox.askyesno") as ask:
+            self.app.log_in()
+            self.wait_until(lambda: self.app.token is not None, "logged in through the backup")
+        ask.assert_not_called()
+        self.assertIn("(backup)", self.app.server_label.cget("text"))
 
     def test_the_fingerprint_shown_matches_the_one_certificate_py_prints(self):
         import certificate
@@ -210,7 +246,7 @@ class GuiTest(ServerTestCase):
         backup = self.start_server("backup")
         self.register(make_asset("AST-0001"))
         self.wait_until(lambda: backup.seq == 1, "copied the asset")
-        self.log_in_to_window(backup=True)
+        self.log_in_to_window()  # only the primary's address is typed
         self.stop_server("primary")
         self.app.refresh()
         self.wait_until(lambda: "(backup)" in self.app.server_label.cget("text"), "used the backup")

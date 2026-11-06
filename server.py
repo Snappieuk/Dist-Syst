@@ -5,7 +5,7 @@ Asset Management System server.
     python server.py backup     (the backup server)
 
 Understands these actions:
-    {"action": "PING"}                                         -> says this is an asset server
+    {"action": "PING"}                                         -> this server's role, and both servers' addresses
     {"action": "LOGIN", "username": "...", "password": "..."}  -> a session token
     {"action": "REGISTER", "request_id": "...", "asset": {...}}
     {"action": "LIST", "query": "...", "filters": {"location": "..."}, "page": 1, "page_size": 20}
@@ -313,9 +313,15 @@ class AssetServer:
             return error_reply(UNKNOWN_ACTION, f"Unknown action: {action!r}", action=action)
         try:
             if action == "PING":
-                # Lets a client check an address really is one of these servers. It
-                # needs no login and reveals nothing about the data.
-                return {"status": "OK", "service": SERVICE_NAME, "role": self.role}
+                # Lets a client check an address really is one of these servers, and
+                # tells it where both servers are, so it can move to the backup by
+                # itself if the primary fails. Needs no login; reveals no data.
+                return {
+                    "status": "OK",
+                    "service": SERVICE_NAME,
+                    "role": self.role,
+                    "servers": self.config["servers"],
+                }
             if action == "LOGIN":
                 return self.login(request)
             if action in SERVER_ACTIONS:
