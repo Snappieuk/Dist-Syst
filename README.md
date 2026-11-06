@@ -427,6 +427,19 @@ should never be shared publicly.
 any computer with Python 3.8 or later. It has no `secret.key`, `tls.pem` or settings
 file, and saves nothing.
 
+**Easiest: download it from the web page.** Log in to the web page, open the account
+menu and choose **Download desktop app**. The file you get is `gui.py` with two lines
+filled in: the servers' addresses (the address you used for the web page replaces
+`127.0.0.1`) and the fingerprint of the real certificate. Run it, type your username and
+password, and that's all: the address is already there and nothing is asked about
+certificates. It only ever talks to a server presenting that exact certificate, which
+closes the gap described below. Neither value is secret, and the secret key and passwords
+are never put in the file. If the servers' certificate is ever replaced (`data/tls.pem`),
+old downloads stop working and need downloading again. Anyone who can change the web page
+could hand out a different file, so serve the page only over a network you trust.
+
+**Without the download**, a plain copy of `gui.py` works on its own:
+
 1. Run `python gui.py`. On the login screen, type the server's IP address or host name
    (add `:port` if it isn't 65432), or press **Find servers**. Find servers broadcasts on
    the local network to the usual ports, 65432 and 65433, and lists the servers that
@@ -799,9 +812,10 @@ Other limitations:
 - The web page uses plain HTTP, so it is only safe while `web.py` listens on 127.0.0.1.
 - There are only two roles.
 - The roles apply to the web page and the GUI. Anything with `secret.key` has full access.
-- The GUI trusts a server's certificate on first use, so someone who can intercept that
-  first connection and whom you don't check the fingerprint with could pose as the server.
-  Nothing is remembered, so it asks every time. Discovery only finds servers on the usual
+- A plain copy of the GUI trusts a server's certificate on first use, so someone who can
+  intercept that first connection could pose as the server. A copy downloaded from the web
+  page has the real certificate built in, so it is not affected. Nothing is remembered, so
+  a plain copy decides again every time. Discovery only finds servers on the usual
   ports, on the local network. `web_users.json` isn't copied between servers, so every
   server machine needs its own copy, and a token is only accepted where the account exists.
 - Only `web.py` and the GUI know who made a change, so changes from the command-line
