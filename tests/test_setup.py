@@ -11,10 +11,12 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -241,7 +243,19 @@ class ResetTest(SetupTestCase):
         self.assertIn("3 asset(s)", output)
         self.assertIn("secret.key", output)
 
-    def test_it_refuses_while_any_part_of_the_system_is_running(self):
+    def set_address(self, setting, address):
+        """Point one of the system's addresses at `address` until the test ends."""
+        module, attribute, index = setting
+        value = getattr(module, attribute)
+        self.addCleanup(setattr, module, attribute, value)
+        if index is None:
+            setattr(module, attribute, address)
+        else:
+            changed = list(value)
+            changed[index] = address
+            setattr(module, attribute, changed)
+
+    def test_it_says_what_is_running_and_stops_nothing_unless_confirmed(self):
         for setting, name in (
             ((common, "SERVERS", 0), "server.py"),
             ((common, "SERVERS", 1), "server.py --backup 1"),
@@ -250,24 +264,88 @@ class ResetTest(SetupTestCase):
             with self.subTest(name):
                 listener = node.create_listening_socket("127.0.0.1", 0)
                 self.addCleanup(listener.close)
-                module, attribute, index = setting
-                value = getattr(module, attribute)
-                self.addCleanup(setattr, module, attribute, value)
-                if index is None:
-                    setattr(module, attribute, listener.getsockname())
-                else:
-                    changed = list(value)
-                    changed[index] = listener.getsockname()
-                    setattr(module, attribute, changed)
+                self.set_address(setting, listener.getsockname())
 
-                # No answer is given, so asking for confirmation would raise an error.
-                result, output = self.run_quietly(setup.reset)
+                with mock.patch("setup.stop_programs") as stop:
+                    result, output = self.run_quietly(setup.reset, answers=["no"])
 
                 self.assertFalse(result)
+                self.assertIn("will be stopped first", output)
                 self.assertIn(name, output)
+                stop.assert_not_called()
                 self.assertTrue(set(self.ALL_FILES) <= self.remaining())
-                setattr(module, attribute, value)
                 listener.close()
+
+    def test_confirming_stops_what_is_running_and_then_deletes(self):
+        listener = node.create_listening_socket("127.0.0.1", 0)
+        self.addCleanup(listener.close)
+        self.set_address((web, "WEB_ADDRESS", None), listener.getsockname())
+
+        with mock.patch("setup.stop_programs", return_value=True) as stop:
+            result, output = self.run_quietly(setup.reset, answers=[setup.RESET_WORD])
+
+        stop.assert_called_once()
+        self.assertTrue(result)
+        self.assertIn("Reset complete", output)
+        self.assertEqual(self.remaining(), {"my_notes.txt", "server.py", "static"})
+
+    def test_nothing_is_deleted_if_something_could_not_be_stopped(self):
+        listener = node.create_listening_socket("127.0.0.1", 0)
+        self.addCleanup(listener.close)
+        self.set_address((common, "SERVERS", 0), listener.getsockname())
+
+        with mock.patch("setup.stop_programs", return_value=False):
+            result, output = self.run_quietly(setup.reset, answers=[setup.RESET_WORD])
+
+        self.assertFalse(result)
+        self.assertIn("Nothing was deleted", output)
+        self.assertTrue(set(self.ALL_FILES) <= self.remaining())
+
+    def test_stop_programs_really_ends_a_program_listening_on_a_port(self):
+        # A real separate program, found by the port it listens on.
+        program = subprocess.Popen([sys.executable, "-c",
+            "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); "
+            "print(s.getsockname()[1], flush=True); time.sleep(60)"],
+            stdout=subprocess.PIPE, text=True)
+        self.addCleanup(program.kill)
+        self.addCleanup(program.stdout.close)
+        port = int(program.stdout.readline())
+        self.set_address((common, "SERVERS", 0), ("127.0.0.1", port))
+        self.assertEqual(setup.running_programs(), ["server.py"])
+
+        self.assertTrue(setup.stop_programs())
+
+        self.assertEqual(setup.running_programs(), [])
+        self.assertIsNotNone(program.wait(timeout=10))
+
+    def test_stop_programs_stops_start_py_first_so_it_cannot_restart_anything(self):
+        # A pretend start.py that restarts its child, as the real one does.
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        child = ("import socket,time; s=socket.socket(); s.bind(('127.0.0.1',PORT)); s.listen(); time.sleep(60)")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        with open(os.path.join(folder, "start.py"), "w", encoding="utf-8") as file:
+            file.write("import subprocess,sys,time\n"
+                       f"code = {child!r}.replace('PORT', '{port}')\n"
+                       "while True:\n"
+                       "    p = subprocess.Popen([sys.executable, '-c', code])\n"
+                       "    p.wait()\n"
+                       "    time.sleep(0.5)\n")
+        starter = subprocess.Popen([sys.executable, "start.py"], cwd=folder)
+        self.addCleanup(starter.kill)
+        self.set_address((common, "SERVERS", 0), ("127.0.0.1", port))
+        deadline = time.monotonic() + 10
+        while not setup.running_programs() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        self.assertEqual(setup.running_programs(), ["server.py"])
+
+        self.assertTrue(setup.stop_programs())
+        time.sleep(2)  # long enough for a surviving start.py to have restarted its child
+
+        self.assertEqual(setup.running_programs(), [])
+        self.assertIsNotNone(starter.poll())
 
     def test_a_damaged_data_file_does_not_stop_a_reset(self):
         with open(self.path("assets.json"), "w", encoding="utf-8") as file:

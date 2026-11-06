@@ -8,13 +8,17 @@ Setup creates the secret the programs share, and asks you to create the first we
 start.py runs it by itself the first time, so you rarely need to run it directly.
 
 Reset permanently deletes every asset, account, secret and log on this machine, leaving
-the system as if it had just been downloaded. It doesn't touch the code or the git history.
+the system as if it had just been downloaded. It stops any of the system running on this
+machine first (after you confirm). It doesn't touch the code or the git history.
 """
 
 import json    # reads how many assets a reset would delete
 import os      # checks which files exist, and deletes them
+import signal  # ends programs on systems other than Windows
 import socket  # checks whether any part of the system is running
+import subprocess  # lists processes and ends them
 import sys     # sys.argv holds the --reset option; checks whether there is someone to ask
+import time    # waits for stopped programs to let go of their ports
 
 import common
 import server
@@ -29,6 +33,9 @@ RESET_WORD = "RESET"
 
 # How long to wait when checking whether a program is running.
 PORT_CHECK_SECONDS = 1
+
+# How long to wait for stopped programs to finish stopping.
+STOP_WAIT_SECONDS = 10
 
 
 def can_ask_questions() -> bool:
@@ -110,6 +117,95 @@ def running_programs() -> list:
     return [name for name, address in addresses.items() if is_running(address)]
 
 
+def process_table() -> dict:
+    """Return every process on this machine as {pid: (parent pid, command line)}."""
+    table = {}
+    if os.name == "nt":
+        command = ["powershell", "-NoProfile", "-Command",
+                   "Get-CimInstance Win32_Process | ForEach-Object "
+                   "{ \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }"]
+        separator = "|"
+    else:
+        command = ["ps", "-eo", "pid=,ppid=,args="]
+        separator = None  # ps pads with spaces
+    try:
+        output = subprocess.run(command, capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return table
+    for line in output.splitlines():
+        parts = line.strip().split(separator, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            table[int(parts[0])] = (int(parts[1]), parts[2])
+    return table
+
+
+def listening_pids(port: int) -> set:
+    """Return the process IDs listening on a TCP port on this machine."""
+    pids = set()
+    if os.name == "nt":
+        command = ["netstat", "-ano", "-p", "TCP"]
+    else:
+        command = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
+    try:
+        output = subprocess.run(command, capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return pids
+    for line in output.splitlines():
+        parts = line.split()
+        if os.name != "nt":
+            pids.update(int(part) for part in parts if part.isdigit())
+        elif len(parts) >= 5 and parts[3] == "LISTENING" and parts[1].rsplit(":", 1)[-1] == str(port):
+            pids.add(int(parts[4]))
+    return pids
+
+
+def stop_process(pid: int) -> None:
+    """Ask the operating system to end one process. Failing is fine: the caller checks
+    afterwards whether the programs really stopped."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=30)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def stop_programs() -> bool:
+    """Stop everything that is running on this machine, returning whether it all stopped.
+
+    Each program is found by the port it listens on. If start.py started it, start.py is
+    stopped first, because it restarts any program that stops. A server on another
+    machine can't be stopped from here, so that makes this return False.
+    """
+    table = process_table()
+    ports = [address[1] for address in common.SERVERS] + [web.WEB_ADDRESS[1]]
+    programs = set()
+    starters = []
+    for port in ports:
+        for pid in listening_pids(port):
+            programs.add(pid)
+            # Walk up through the parents looking for a start.py.
+            parent = table.get(pid, (None, ""))[0]
+            while parent in table and parent not in starters:
+                command = table[parent][1].replace("\\", "/").split()
+                if any(part.strip('"').endswith("start.py") for part in command):
+                    starters.append(parent)
+                parent = table[parent][0]
+
+    for pid in starters + sorted(programs):
+        if pid != os.getpid():
+            stop_process(pid)
+
+    # They can take a moment to let go of their ports.
+    deadline = time.monotonic() + STOP_WAIT_SECONDS
+    while running_programs():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.5)
+    return True
+
+
 def count_assets(path: str) -> int:
     """Return how many assets a data file holds, or 0 if it can't be read. A damaged file
     must not stop a reset, which may be just what is needed to recover from it."""
@@ -126,14 +222,11 @@ def reset() -> bool:
     """Delete everything the system has generated, once the user confirms. Returns whether
     anything was deleted.
 
-    It refuses while the system is running. A running server holds its data in memory, so
-    it would simply save it all again, or give it to the other server when they reconcile.
+    Anything running is stopped first, after the same confirmation. A running server holds
+    its data in memory, so it would simply save it all again, or give it to the other
+    server when they reconcile.
     """
     running = running_programs()
-    if running:
-        print(f"Nothing was deleted, because these are still running: {', '.join(running)}")
-        print("Stop them first, on every machine, then run this again.")
-        return False
 
     existing = [path for path in generated_files() if os.path.exists(path)]
     if not existing:
@@ -145,11 +238,20 @@ def reset() -> bool:
         print(f"  {os.path.basename(path)}")
     assets = max(count_assets(path) for path in servers_data_files())
     print(f"\nThat includes {assets} asset(s), every web account, the shared secret, the certificate and the logs.")
+    if running:
+        print(f"\nThese are running, and will be stopped first: {', '.join(running)}")
     print("It can't be undone.")
 
     if input(f"Type {RESET_WORD} to continue: ").strip() != RESET_WORD:
         print("Nothing was deleted.")
         return False
+
+    if running:
+        print("Stopping them...")
+        if not stop_programs():
+            print(f"Nothing was deleted, because these are still running: {', '.join(running_programs())}")
+            print("Stop them yourself (a server on another machine has to be stopped there), then run this again.")
+            return False
 
     failed = []
     for path in existing:

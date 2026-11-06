@@ -240,17 +240,20 @@ they don't vote, so they don't protect against a network split. See
 
 ## Resetting
 
-To put everything back to a fresh install, stop the system and run:
+To put everything back to a fresh install, run:
 
 ```
 python setup.py --reset
 ```
 
 **This permanently deletes every asset, every web account, the shared secret, the
-certificate and the logs on this machine.** It shows what will be lost and asks you to type `RESET` first. It doesn't touch
+certificate and the logs on this machine.** It shows what will be lost, and what is running,
+and asks you to type `RESET` first. After that it stops everything of the system running on
+this machine (`start.py` first, so it can't restart anything), then deletes. If something
+can't be stopped, nothing is deleted. It doesn't touch
 the code or the git history. If you use several machines, reset each of them, because a
-server that still has the data would copy it straight back. The next `python start.py` runs
-setup again.
+server that still has the data would copy it straight back, and a server on another machine
+has to be stopped there. The next `python start.py` runs setup again.
 
 ## Filling the table with test data
 
@@ -269,7 +272,7 @@ a second asset with the same description, category and location. Every asset is 
 as sample data, so it has a `sample data` tag (search for it to see only these). About two
 in five are lent to a made-up person, with loans from 30 days ago to 20 days ahead: most
 that have ended were returned, some late, and some are overdue, so the loans calendar has
-something to show. Adding 500 takes about 10 seconds. To clear them away again, stop the system and run `python setup.py --reset`,
+something to show. Adding 500 takes about 10 seconds. To clear them away again, run `python setup.py --reset`,
 which deletes every asset, not just these.
 
 ## Demo
