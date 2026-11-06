@@ -149,7 +149,9 @@
     <form id="checkout-form" class="dialog-form">
       <label class="wide">
         Borrower's name
-        <input name="borrower" required maxlength="1000" placeholder="Sam Lee" autocomplete="off">
+        <input name="borrower" required maxlength="1000" placeholder="Sam Lee" autocomplete="off" list="people-list">
+        <!-- The People tab's names, offered as the borrower is typed. -->
+        <datalist id="people-list"></datalist>
       </label>
       <label>
         Start date
@@ -205,6 +207,7 @@
       <nav id="tabs" class="tabs" aria-label="Pages">
         <a href="#assets" data-tab="assets">Assets</a>
         <a href="#loans" data-tab="loans">Loans</a>
+        <a href="#people" data-tab="people">People</a>
         <a href="#calendar" data-tab="calendar">Calendar</a>
         <a href="#review" data-tab="review">Review <span id="review-count" class="count">0</span></a>
       </nav>
@@ -296,6 +299,30 @@
         </table>
       </div>
       <p class="table-hint">Click a loan to see the asset's history.</p>
+    </section>
+
+    <!-- Everyone who has been lent something, so their name can be picked again at check-out. -->
+    <section data-page="people" hidden aria-labelledby="people-heading">
+      <div class="page-title">
+        <div>
+          <h2 id="people-heading">People</h2>
+          <p id="people-message"></p>
+        </div>
+      </div>
+      <div class="table-wrap scroll-list">
+        <table class="people-table">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Has on loan</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="people"></tbody>
+        </table>
+      </div>
+      <p class="table-hint">A name is added when something is checked out to them, and removed when
+        everything they have is back. You can also remove one yourself. This list is kept in this browser.</p>
     </section>
 
     <!-- Every loan in the month shown, on a month grid. -->

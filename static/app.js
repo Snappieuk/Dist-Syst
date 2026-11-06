@@ -157,6 +157,7 @@ async function saveCheckOut(event) {
   button.disabled = true;
   try {
     await assetAction(checkoutAsset, "check-out", details);
+    addPerson(details.borrower);
     checkoutDialog.close();
     showActionResult(`Checked out ${checkoutAsset.asset_id} to ${details.borrower} until ${details.due}`);
     await loadAssets();
@@ -375,6 +376,106 @@ function showLoans() {
   const overdue = all.filter(({ loan }) => loanState(loan) === "overdue").length;
   document.getElementById("loans-message").textContent =
     `Showing ${shown.length} of ${all.length} loan(s), ${overdue} overdue`;
+}
+
+// ---------- The People page ----------
+
+// The names are kept in this browser, so they survive a reload. Names are compared
+// ignoring capitals and extra spaces, so "sam lee" and "Sam  Lee" are the same person.
+const PEOPLE_KEY = "asset-people";
+
+function nameKey(name) {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function loadPeople() {
+  try {
+    const names = JSON.parse(localStorage.getItem(PEOPLE_KEY));
+    return Array.isArray(names) ? names.filter((name) => typeof name === "string") : [];
+  } catch (error) {
+    return []; // nothing saved yet, or storage is blocked
+  }
+}
+
+function savePeople(names) {
+  try {
+    localStorage.setItem(PEOPLE_KEY, JSON.stringify(names));
+  } catch (error) {
+    // Storage may be full or blocked; the list just won't be remembered.
+  }
+}
+
+// Called after a successful check-out, so the borrower appears on the People page.
+function addPerson(name) {
+  const people = loadPeople();
+  const clean = name.trim().replace(/\s+/g, " ");
+  if (clean && !people.some((known) => nameKey(known) === nameKey(clean))) {
+    people.push(clean);
+    savePeople(people);
+  }
+}
+
+function removePerson(name) {
+  savePeople(loadPeople().filter((known) => nameKey(known) !== nameKey(name)));
+  showPeople();
+}
+
+// The assets each person has out right now, by name.
+function openLoansByPerson() {
+  const out = new Map();
+  for (const asset of allAssets) {
+    const loan = currentLoan(asset);
+    if (loan) {
+      const key = nameKey(loan.borrower);
+      out.set(key, [...(out.get(key) || []), asset.asset_id]);
+    }
+  }
+  return out;
+}
+
+function showPeople() {
+  const out = openLoansByPerson();
+
+  // Someone with nothing left out is removed. This is what removes a person when their
+  // item comes back, wherever it was checked in. Skipped if no assets have loaded, so a
+  // failed load can't empty the list.
+  let people = loadPeople();
+  if (allAssets.length > 0) {
+    const stillOut = people.filter((name) => out.has(nameKey(name)));
+    if (stillOut.length !== people.length) {
+      savePeople(stillOut);
+      people = stillOut;
+    }
+  }
+  people.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+  // The check-out form offers these names as the borrower is typed.
+  document.getElementById("people-list").replaceChildren(...people.map((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    return option;
+  }));
+
+  const rows = people.map((name) => {
+    const row = document.createElement("tr");
+    const nameCell = document.createElement("td");
+    nameCell.textContent = name;
+    const itemsCell = document.createElement("td");
+    itemsCell.textContent = (out.get(nameKey(name)) || []).join(", ");
+    const actionCell = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${name}`);
+    remove.addEventListener("click", () => removePerson(name));
+    actionCell.append(remove);
+    row.append(nameCell, itemsCell, actionCell);
+    return row;
+  });
+  document.getElementById("people").replaceChildren(...rows);
+  document.getElementById("people-message").textContent =
+    people.length === 0 ? "Nobody has anything on loan." : `${people.length} ${people.length === 1 ? "person has" : "people have"} something on loan`;
 }
 
 // ---------- Loans calendar ----------
@@ -939,6 +1040,7 @@ function showAssets() {
   showMessage(visible);
   showReview();
   showLoans();
+  showPeople();
   showCalendar(allAssets);
 }
 
@@ -946,7 +1048,7 @@ function showAssets() {
 
 // The page is chosen by the address after the #, so a page can be bookmarked and the
 // browser's back button moves between pages. Anything unknown means the first page.
-const PAGES = ["assets", "loans", "calendar", "review"];
+const PAGES = ["assets", "loans", "people", "calendar", "review"];
 
 function showPage() {
   const wanted = location.hash.slice(1);

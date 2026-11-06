@@ -117,8 +117,9 @@ python web.py
 After logging in, you can search, filter by status, sort by clicking a column heading, and
 add, edit and delete assets. Adding and editing open in a window over the page, and the
 result of each change appears briefly in the bottom corner. The page refreshes every 5
-seconds. The page has four tabs: Assets (the table, with totals showing which server
-answered, in green for the primary and amber for the backup), Loans, Calendar and Review.
+seconds. The page has five tabs: Assets (the table, with totals showing which server
+answered, in green for the primary and amber for the backup), Loans, People, Calendar and Review.
+The Assets and Loans tables scroll inside their own area, so the page around them stays put.
 
 The button at the top right shows who is logged in and their role. It opens a small menu
 with Log out and, for admins, Manage accounts. That opens a window listing every account,
@@ -343,6 +344,11 @@ the return date, "On loan" or "Overdue".
 recorded with the asset: when, what, which web user asked and which server did it. The
 history travels with the asset, so every server has it. Click an asset on the web page,
 or double-click it (or use History) in the GUI, to see it.
+
+**People.** The People tab lists everyone who has been lent something. A name is added when
+you check something out to them, and the Borrower box offers these names as you type. A
+name is removed once everything they had is back (whoever checked it in), or when you press
+Remove. The list is kept in the browser you use, so another browser or device has its own.
 
 **Loans and calendar.** The Loans tab lists every loan, newest first, with a filter for
 on loan, overdue or returned. The Calendar tab shows a month at a time as a real calendar,
