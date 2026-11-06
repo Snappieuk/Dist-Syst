@@ -1106,24 +1106,41 @@ tbody tr.clickable:focus-visible {
 
 .history-list li {
   display: grid;
-  gap: 2px;
-  padding: 10px 0 10px 14px;
-  border-left: 2px solid var(--border);
+  grid-template-columns: 7.5rem 1fr;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-list li:last-child {
+  border-bottom: 0;
 }
 
 .history-list time {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+}
+
+.history-day {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.history-clock {
   color: var(--muted);
-  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
   font-size: 0.78rem;
 }
 
 .history-detail {
-  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .history-who {
+  margin-top: 2px;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
 }
 
 /* ---- Loans calendar ---- */
@@ -1241,10 +1258,54 @@ tbody tr.clickable:focus-visible {
   text-align: center;
 }
 
-.calendar-more {
+button.calendar-more {
+  justify-self: start;
   padding: 0 8px;
-  color: var(--muted);
+  border: 0;
+  background: none;
+  color: var(--accent);
   font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.calendar-more:hover {
+  text-decoration: underline;
+}
+
+/* ---- One day's loans ---- */
+
+.day-list {
+  margin: 0;
+  padding: 8px 20px 20px;
+  list-style: none;
+}
+
+button.day-loan {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.day-loan:hover .day-loan-title {
+  text-decoration: underline;
+}
+
+.day-loan-title {
+  font-weight: 600;
+}
+
+.day-loan-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 /* The loan itself, across the days it covers in that week. */

@@ -51,6 +51,7 @@ const accountList = document.getElementById("account-list");
 const checkoutDialog = document.getElementById("checkout-dialog");
 const checkoutForm = document.getElementById("checkout-form");
 const historyDialog = document.getElementById("history-dialog");
+const dayDialog = document.getElementById("day-dialog");
 const reviewTable = document.getElementById("review-table");
 const reviewSelectAll = document.getElementById("review-select-all");
 
@@ -204,18 +205,29 @@ function showHistory(asset) {
   document.getElementById("history-summary").textContent =
     `${asset.description}, ${asset.category}, at ${asset.location}. ` +
     `${asset.loans.length} loan(s) so far. Newest first.`;
+  // Each entry has the date and time on the left, so the list can be scanned by date, and
+  // what happened on the right, with who did it and which server saved it underneath.
   const entries = [...asset.history].reverse().map((entry) => {
     const item = document.createElement("li");
     const when = document.createElement("time");
     when.dateTime = entry.at;
-    when.textContent = new Date(entry.at).toLocaleString();
-    const what = document.createElement("span");
+    const moment = new Date(entry.at);
+    const day = document.createElement("span");
+    day.className = "history-day";
+    day.textContent = moment.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    const clock = document.createElement("span");
+    clock.className = "history-clock";
+    clock.textContent = moment.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    when.append(day, clock);
+    const text = document.createElement("div");
+    const what = document.createElement("div");
     what.className = "history-detail";
     what.textContent = entry.detail;
-    const who = document.createElement("span");
+    const who = document.createElement("div");
     who.className = "history-who";
-    who.textContent = `${entry.user ? `by ${entry.user}, ` : ""}on the ${entry.server} server`;
-    item.append(when, what, who);
+    who.textContent = `${entry.user ? `${entry.user}, ` : ""}${entry.server} server`;
+    text.append(what, who);
+    item.append(when, text);
     return item;
   });
   // Assets saved before history was added have none.
@@ -366,10 +378,23 @@ function showLoans() {
     row.tabIndex = 0;
     row.addEventListener("click", () => showHistory(asset));
     row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
+      if (event.key === "Enter" && event.target === row) {
         showHistory(asset);
       }
     });
+
+    // A loan that is still out can be checked back in from here. The button's own click
+    // must not also open the history.
+    const actions = document.createElement("td");
+    actions.className = "actions";
+    if (state !== "returned") {
+      const back = actionButton("Check in", "secondary", `Check in ${asset.asset_id}`, (event) => {
+        event.stopPropagation();
+        checkIn(asset);
+      });
+      actions.append(back);
+    }
+    row.append(actions);
     return row;
   });
   document.getElementById("loans").replaceChildren(...rows);
@@ -584,14 +609,17 @@ function showCalendar(assets) {
         row.append(bar);
       }
     });
-    // Loans that didn't fit are counted on the days they cover.
+    // Loans that didn't fit are counted on the days they cover. Clicking the count lists
+    // every loan on that day.
     hidden.forEach((count, i) => {
       if (count > 0) {
-        const more = document.createElement("span");
+        const more = document.createElement("button");
+        more.type = "button";
         more.className = "calendar-more";
         more.style.gridColumn = i + 1;
         more.style.gridRow = MAX_LANES + 2;
         more.textContent = `+${count} more`;
+        more.addEventListener("click", () => showDay(days[i], loans));
         row.append(more);
       }
     });
@@ -599,6 +627,36 @@ function showCalendar(assets) {
   }
   document.getElementById("calendar").replaceChildren(...pieces);
   document.getElementById("calendar-empty").hidden = loans.length > 0;
+}
+
+// Every loan covering one day, in a dialog. Choosing one opens that asset's history.
+function showDay(date, loans) {
+  document.getElementById("day-heading").textContent =
+    new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const covering = loans.filter(({ loan, end }) => loan.start <= date && end >= date);
+  document.getElementById("day-summary").textContent = `${covering.length} loan(s) on this day. Select one to see its history.`;
+  const items = covering.map(({ asset, loan }) => {
+    const item = document.createElement("li");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "day-loan";
+    const state = loan.returned ? `returned ${loan.returned}` : isOverdue(loan) ? "overdue" : "on loan";
+    const title = document.createElement("span");
+    title.className = "day-loan-title";
+    title.textContent = `${asset.asset_id} ${asset.description}`;
+    const detail = document.createElement("span");
+    detail.className = "day-loan-detail";
+    detail.textContent = `${loan.borrower}, ${loan.start} to ${loan.due}, ${state}`;
+    open.append(title, detail);
+    open.addEventListener("click", () => {
+      dayDialog.close();
+      showHistory(asset);
+    });
+    item.append(open);
+    return item;
+  });
+  document.getElementById("day-list").replaceChildren(...items);
+  dayDialog.showModal();
 }
 
 function moveCalendar(months) {

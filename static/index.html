@@ -179,6 +179,16 @@
     <ol id="history-list" class="history-list"></ol>
   </dialog>
 
+  <!-- Every loan on one calendar day, opened by clicking "+n more". -->
+  <dialog id="day-dialog" class="dialog" aria-labelledby="day-heading">
+    <div class="dialog-head">
+      <h2 id="day-heading">Loans</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close">&times;</button>
+    </div>
+    <p id="day-summary" class="dialog-note"></p>
+    <ul id="day-list" class="day-list"></ul>
+  </dialog>
+
   <p id="action-message" class="toast" role="status"></p>
 
   <main>
@@ -294,6 +304,7 @@
               <th scope="col">Start</th>
               <th scope="col">Due</th>
               <th scope="col">Returned</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
           <tbody id="loans"></tbody>
