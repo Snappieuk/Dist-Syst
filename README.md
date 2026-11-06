@@ -37,6 +37,7 @@ met and which tests prove it.
 | `send.py` | Command-line registration client. |
 | `receive.py` | Command-line query client, with optional search. |
 | `gui.py` | Tkinter GUI: log in, register, view, search, page through, edit and delete. |
+| `client.js` | Minimal Node.js client with no dependencies. It talks to the server only in JSON (TLS, 4-byte length header, UTF-8 JSON object) and fails over to the backup. |
 | `config.json` | Hosts, ports, timeouts, size limits and file names. |
 | `requirements.txt` | The one third-party package: `cryptography`, used only by `certificate.py`. |
 | `test_system.py`, `test_gui.py`, `test_reset.py` | Automated tests. |
@@ -63,6 +64,20 @@ python receive.py           # list every asset
 python receive.py laptop    # search every field
 python receive.py location=site a     # search one field
 ```
+
+### Node.js client
+
+`client.js` needs only Node.js (no `npm install`). Run it from this folder, since it reads `config.json` and `server.crt` beside itself. The first two arguments are always the username and password; `ping` ignores them but they must still be given.
+
+```
+node client.js x x ping
+node client.js alice secret list
+node client.js alice secret register '{"asset_id":"A1","description":"Laptop","category":"IT","location":"HQ","status":"In Use"}'
+node client.js alice secret edit A1 <expected_version> '{"location":"Lab"}'
+node client.js admin secret delete A1 <expected_version>
+```
+
+Each command except `ping` logs in first, then sends the request with a fresh `request_id` and prints the server's JSON reply. Only administrators can delete.
 
 ### Resetting
 
