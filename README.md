@@ -48,7 +48,7 @@ rule still load, and can be changed to one of the two.
 | `node.py` | Code used by every server: the data, the rules for changing it and the network loop. |
 | `common.py` | Code used by the servers and clients: the message format, where the servers are, error codes, tag generation and client failover. |
 | `cli.py` | The command-line client. `python cli.py add` registers a new asset, `list` lists the assets with their IDs, statuses and tags, and `change` marks one as "Not In Use" or "In Use", edits its details, or deletes it. |
-| `gui.py` | A Tkinter window that does all of the above. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. A "Flagged for review" area lists assets added while the primary was offline, and History (or a double-click) shows what has happened to an asset. |
+| `gui.py` | A Tkinter window that does all of the above. It is one standalone file with a login screen, and finds the servers from one address. Select a row to change its status, edit its details or delete it. A search box and status filter above the table ask the server for only the matching assets. The status line shows which server answered. A "Flagged for review" area lists assets added while the primary was offline, and History (or a double-click) shows what has happened to an asset. |
 | `web.py` | A web interface for browsing, adding and deleting assets, reviewing flagged ones, checking assets out and in, seeing their history and a loans calendar, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
@@ -97,6 +97,11 @@ python server.py
 python server.py --backup 1
 python gui.py
 ```
+
+`gui.py` is a single file with no other requirements. To use it on another computer, copy
+just that file and run it with Python 3.8 or later. Enter the server's address (or press
+Find servers to look for one on the local network) and log in with a web account. See
+[the GUI](#the-gui-on-other-computers).
 
 You can use `python cli.py add`, `python cli.py list` and `python cli.py change` instead of
 the GUI. Without a command, it asks which one you want. It waits for you to press Enter
@@ -401,10 +406,10 @@ last admin can't be removed or made a user, so the system can't be left with no 
 --set-password`, run on the machine itself, can replace a password. An existing account
 keeps its role when its password is replaced.
 
-**The GUI and the command-line clients (`cli.py`, `demo.py`)
-are trusted admin tools.** They have no login, because they prove themselves with
-`secret.key` instead, and anything with that file can do everything, including deleting.
-Only give `secret.key` to people who should have admin rights.
+**The command-line clients (`cli.py`, `demo.py`) are trusted admin tools.** They have no
+login, because they prove themselves with `secret.key` instead, and anything with that file
+can do everything, including deleting. Only give `secret.key` to people who should have
+admin rights. `gui.py` doesn't need that file: it logs in, as described next.
 
 Usernames ignore capitals and can only contain letters, numbers, dots, dashes and
 underscores. Passwords must be at least 8 characters. Only a salted PBKDF2 hash is stored,
@@ -415,6 +420,41 @@ logins in a row, on any usernames, logins are refused for a minute.
 
 `secret.key`, `tls.pem` and `web_users.json` are kept in `data/`, which git ignores. They
 should never be shared publicly.
+
+## The GUI on other computers
+
+`gui.py` is one file that imports nothing from the project, so it can be copied alone to
+any computer with Python 3.8 or later. It has no `secret.key`, `tls.pem` or settings
+file, and saves nothing.
+
+1. Run `python gui.py`. On the login screen, type the server's IP address or host name
+   (add `:port` if it isn't 65432), or press **Find servers**. Find servers broadcasts on
+   the local network to the usual ports, 65432 and 65433, and lists the servers that
+   answer, so a server on another port has to be typed in. **Check** tests an address
+   without logging in.
+2. The first time, it shows the server's certificate fingerprint and asks whether to trust
+   it. Compare it with the one the server's administrator gives you. After you
+   accept, only that exact certificate is used, so a different server at the same address
+   is refused, and no password is sent before you accept. It is remembered only until the
+   window closes, so you are asked each time.
+3. Log in with a web account. The server checks every request against it, so a user can
+   view, add and edit assets, and only an admin can delete assets or approve flagged ones
+   (other requests get `FORBIDDEN`).
+
+Only one address is needed. `PING` needs no login and lists every server's address, so the
+GUI learns where the backup is, and moves to it by itself if the primary fails. A server
+lists its own address as `config.json` gives it, so if that is `127.0.0.1` the GUI uses
+the address you typed instead.
+
+How it works: `LOGIN` checks the username and password against `web_users.json` and
+returns a token, `username:expiry:signature`, that lasts 8 hours. The signature is made
+with `secret.key`, so only a server can make one and it can't be edited, and the backup
+accepts the primary's tokens without a second login. Each request looks the account up
+again, so deleting an account or changing its role takes effect at once. A token may only
+be used for the client actions (`LIST`, `REGISTER`, `SET_STATUS`, `EDIT`,
+`APPROVE`, `DELETE`, `CHECK_OUT`, `CHECK_IN`), never to copy data between servers or
+`STOP` one. The audit log names the account, whatever `user` the GUI claims. Failed
+logins share the web page's limit: 5 in a row refuses logins for a minute.
 
 ## Logs
 
@@ -602,7 +642,8 @@ Errors from the servers look like `{"status": "ERROR", "code": "NOT_FOUND", "det
 | `CONFLICT` | Someone else changed the asset after the client read it |
 | `NOT_FOUND` | No server that replied has an asset with that ID |
 | `NOT_PRIMARY` | This server is on standby. Clients wait and retry while the backup takes over |
-| `UNAUTHORIZED` | The request didn't include the shared secret from `secret.key` |
+| `UNAUTHORIZED` | The request had neither the shared secret from `secret.key` nor a valid login token, or a login was refused |
+| `FORBIDDEN` | A logged-in user may not do that, for example a `user` account deleting |
 | `UNSUPPORTED_VERSION` | The request had no `protocol_version`, or one the server doesn't support. `supported_versions` lists the ones it does |
 | `TOO_LARGE` | The request or reply is over the 10 MiB limit |
 | `INTERNAL` | The server failed, for example because the disk is full |
@@ -757,10 +798,14 @@ Other limitations:
   different items. Category and location are free text.
 - The web page uses plain HTTP, so it is only safe while `web.py` listens on 127.0.0.1.
 - There are only two roles.
-- The roles only apply to the web page. Anything with `secret.key` has full access.
-- Only `web.py` knows who made a change, so only changes made on the web page are audited
-  with a name. Changes from the GUI or the command-line clients are audited with `user` set
-  to `null`. The servers trust the `user` a program sends, since only programs with
+- The roles apply to the web page and the GUI. Anything with `secret.key` has full access.
+- The GUI trusts a server's certificate on first use, so someone who can intercept that
+  first connection and whom you don't check the fingerprint with could pose as the server.
+  Nothing is remembered, so it asks every time. Discovery only finds servers on the usual
+  ports, on the local network. `web_users.json` isn't copied between servers, so every
+  server machine needs its own copy, and a token is only accepted where the account exists.
+- Only `web.py` and the GUI know who made a change, so changes from the command-line
+  clients are audited with `user` set to `null`. The servers trust the `user` a program sends, since only programs with
   `secret.key` can send one.
 - The audit logs are ordinary files, so someone with access to the machine could edit them.
   They are a record, not tamper-proof evidence.
