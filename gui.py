@@ -134,6 +134,8 @@ class AssetManagementApp:
         self.history_button.pack(side=tk.LEFT, padx=(8, 0))
         self.check_button = ttk.Button(actions, text="Check Out / In", command=self.check_out_or_in_selected)
         self.check_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.loans_button = ttk.Button(actions, text="Loans", command=self.show_loans)
+        self.loans_button.pack(side=tk.LEFT, padx=(8, 0))
         self.delete_button = ttk.Button(actions, text="Delete Asset", command=self.delete_selected)
         self.delete_button.pack(side=tk.RIGHT)
 
@@ -375,6 +377,40 @@ class AssetManagementApp:
         ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side=tk.LEFT, padx=(8, 0))
         frame.columnconfigure(1, weight=1)
         return window, boxes, save
+
+    def loan_rows(self) -> list:
+        """One (asset ID, borrower, start, due, returned) row per loan of the assets the
+        table shows, oldest start date first. A loan not yet returned shows "Overdue" once
+        its due date has passed, and "On loan" before that."""
+        today = datetime.date.today().isoformat()
+        rows = []
+        for asset in self.assets_by_id.values():
+            for loan in asset.get("loans") or []:
+                returned = loan.get("returned")
+                if returned is None:
+                    returned = "Overdue" if loan.get("due", "") < today else "On loan"
+                rows.append((asset.get("asset_id", ""), loan.get("borrower", ""),
+                             loan.get("start", ""), loan.get("due", ""), returned))
+        # Dates are YYYY-MM-DD text, so sorting the text sorts by date.
+        return sorted(rows, key=lambda row: (row[2], row[0]))
+
+    def show_loans(self) -> object:
+        """Open a window listing every loan of the assets the table shows."""
+        window = tk.Toplevel(self.root)
+        window.title("Loans")
+        window.transient(self.root)
+        columns = ("asset_id", "borrower", "start", "due", "returned")
+        tree = ttk.Treeview(window, columns=columns, show="headings", height=15)
+        for column, heading, width in (("asset_id", "Asset ID", 160), ("borrower", "Borrower", 160),
+                                       ("start", "Start", 100), ("due", "Due", 100),
+                                       ("returned", "Returned", 100)):
+            tree.heading(column, text=heading)
+            tree.column(column, width=width, minwidth=60, anchor=tk.W)
+        for row in self.loan_rows():
+            tree.insert("", tk.END, values=row)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        ttk.Button(window, text="Close", command=window.destroy).pack(pady=(0, 10))
+        return tree
 
     def _set_busy(self, busy: bool) -> None:
         """Disable the buttons during a request, so it cannot be sent twice."""
