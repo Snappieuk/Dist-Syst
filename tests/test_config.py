@@ -106,6 +106,14 @@ class ConfigFileTest(unittest.TestCase):
 
         self.assertEqual(self.show(), f"{common.DEFAULT_SERVERS} {common.DEFAULT_WEB_ADDRESS} 9 1 15")
 
+    def test_the_web_page_listens_on_every_network_by_default(self):
+        self.assertEqual(common.DEFAULT_WEB_ADDRESS, ("0.0.0.0", 8080))
+
+    def test_this_machine_connects_to_loopback_when_a_program_listens_everywhere(self):
+        self.assertEqual(common.address_to_connect_to(("0.0.0.0", 8080)), ("127.0.0.1", 8080))
+        self.assertEqual(common.address_to_connect_to(("::", 8080)), ("127.0.0.1", 8080))
+        self.assertEqual(common.address_to_connect_to(("10.0.0.5", 8080)), ("10.0.0.5", 8080))
+
     def test_environment_variables_override_the_file(self):
         self.write({"servers": ["from-file:1001"], "web_address": "from-file:9000"})
 

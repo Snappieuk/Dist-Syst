@@ -24,7 +24,7 @@ import time        # waits between checks
 import webbrowser  # opens the web page
 
 import setup
-from common import SERVERS, configure_logging
+from common import SERVERS, address_to_connect_to, configure_logging
 from web import WEB_ADDRESS
 
 logger = logging.getLogger("start")
@@ -85,7 +85,7 @@ def wait_for_web(processes: dict) -> None:
     deadline = time.monotonic() + WEB_START_SECONDS
     while time.monotonic() < deadline and first_stopped(processes) is None:
         try:
-            socket.create_connection(WEB_ADDRESS, timeout=1).close()
+            socket.create_connection(address_to_connect_to(WEB_ADDRESS), timeout=1).close()
             return
         except OSError:
             time.sleep(0.2)
@@ -159,7 +159,8 @@ def main() -> None:
     try:
         wait_for_web(processes)
         if first_stopped(processes) is None:
-            webbrowser.open(f"http://{WEB_ADDRESS[0]}:{WEB_ADDRESS[1]}")
+            # Listening on 0.0.0.0 means everywhere, so this machine's browser uses 127.0.0.1.
+            webbrowser.open("http://%s:%s" % address_to_connect_to(WEB_ADDRESS))
 
         # A program failing as it starts most likely means the system is already running
         # and its port is in use, so restarting it wouldn't help.

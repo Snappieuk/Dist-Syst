@@ -46,8 +46,9 @@ DEFAULT_SERVERS = [
 # and server.ID_LETTERS has this many.
 MAX_SERVERS = 25
 
-# Where web.py listens. 127.0.0.1 means only this machine can open the page.
-DEFAULT_WEB_ADDRESS = ("127.0.0.1", 8080)
+# Where web.py listens. 0.0.0.0 means every network the machine is on, so the page can be
+# opened from other devices as well as from this one. Use 127.0.0.1 to allow only this machine.
+DEFAULT_WEB_ADDRESS = ("0.0.0.0", 8080)
 
 # Settings can come from three places, and a later one overrides an earlier one:
 #   1. the defaults in this file
@@ -133,6 +134,14 @@ SERVERS = (parse_servers(os.environ[SERVERS_VARIABLE]) if os.environ.get(SERVERS
            else _config.get("servers", DEFAULT_SERVERS))
 WEB_ADDRESS = (parse_address(os.environ[WEB_ADDRESS_VARIABLE], WEB_ADDRESS_VARIABLE)
                if os.environ.get(WEB_ADDRESS_VARIABLE) else _config.get("web_address", DEFAULT_WEB_ADDRESS))
+
+
+def address_to_connect_to(address: tuple) -> tuple:
+    """The address to use to reach a program on THIS machine. A program listening on
+    0.0.0.0 or :: listens everywhere, but those can't be connected to (Windows refuses),
+    so this machine uses 127.0.0.1 for them."""
+    host, port = address
+    return ("127.0.0.1" if host in ("0.0.0.0", "::", "") else host, port)
 
 # Everything the programs create as they run goes in this one folder: the data files,
 # the web accounts, the shared secret, the certificate and the logs. Keeping it all in

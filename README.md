@@ -107,7 +107,8 @@ You can use `python cli.py add`, `python cli.py list` and `python cli.py change`
 the GUI. Without a command, it asks which one you want. It waits for you to press Enter
 before closing, so the window stays open if you start it by double-clicking.
 
-To use the web page, run this as well and open http://127.0.0.1:8080:
+To use the web page, run this as well and open http://127.0.0.1:8080 (on another device,
+use this computer's address instead, such as `http://192.168.1.20:8080`):
 
 ```
 python web.py
@@ -121,8 +122,10 @@ primary and amber for the backup.
 
 The button at the top right shows who is logged in and their role. It opens a small menu
 with Log out and, for admins, Manage accounts. That opens a window listing every account,
-where an admin can change roles, delete accounts and create new ones. Only this machine can open it
-unless you change its address in the settings below.
+where an admin can change roles, delete accounts and create new ones. The page listens on
+every network by default (`0.0.0.0`), so other devices can open it. It is plain HTTP, so on
+a network you don't trust, set `web_address` to `127.0.0.1:8080` to allow only this machine.
+The computer's firewall may also need to allow port 8080.
 
 ## Settings
 
@@ -132,7 +135,7 @@ Everything works without any settings. To change them, copy `config.example.json
 | Setting | Default | Meaning |
 |---|---|---|
 | `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | Where the servers are: the primary first, then each backup in the order they take over |
-| `web_address` | `"127.0.0.1:8080"` | Where `web.py` listens |
+| `web_address` | `"0.0.0.0:8080"` | Where `web.py` listens. `0.0.0.0` is every network; `127.0.0.1` is only this machine |
 | `timeout_seconds` | `5` | How long a program waits on each network step before giving up |
 | `heartbeat_timeout_seconds` | `1` | How long the servers wait for each other's heartbeats |
 | `failover_wait_seconds` | `15` | How long a client keeps trying while the backup takes over |

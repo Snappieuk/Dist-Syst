@@ -104,7 +104,7 @@ def is_running(address: tuple) -> bool:
 
 def running_programs() -> list:
     """Return the name of each part of the system that is currently running."""
-    addresses = {"server.py": common.SERVERS[0], "web.py": web.WEB_ADDRESS}
+    addresses = {"server.py": common.SERVERS[0], "web.py": common.address_to_connect_to(web.WEB_ADDRESS)}
     for index in range(1, len(common.SERVERS)):
         addresses[f"server.py --backup {index}"] = common.SERVERS[index]
     return [name for name, address in addresses.items() if is_running(address)]

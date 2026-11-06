@@ -43,8 +43,8 @@ from common import (
     send_request,
 )
 
-# Where the web interface listens. By default 127.0.0.1:8080, which means only this
-# machine can open it. It can be set in config.json or with ASSET_WEB_ADDRESS.
+# Where the web interface listens. By default 0.0.0.0:8080, which means any device on the
+# network can open it. It can be set in config.json or with ASSET_WEB_ADDRESS.
 WEB_ADDRESS = common.WEB_ADDRESS
 
 # How long to wait on a browser before giving up on it, so that an idle connection
@@ -926,7 +926,10 @@ def main() -> None:
     # ThreadingHTTPServer gives each browser request its own thread, so one slow
     # browser does not delay the others.
     with ThreadingHTTPServer(WEB_ADDRESS, WebHandler) as web_server:
-        logger.info("Web interface at http://%s:%s (press Ctrl+C to stop)", *WEB_ADDRESS)
+        logger.info("Web interface at http://%s:%s (press Ctrl+C to stop)", *common.address_to_connect_to(WEB_ADDRESS))
+        if WEB_ADDRESS[0] in ("0.0.0.0", "::"):
+            logger.info("It listens on every network, so other devices can open it using this "
+                        "computer's own address and port %s.", WEB_ADDRESS[1])
         try:
             web_server.serve_forever()
         except KeyboardInterrupt:
