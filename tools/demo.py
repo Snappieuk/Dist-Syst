@@ -1,7 +1,7 @@
 """
 Shows a failover, step by step, on a running system.
 
-    python demo.py
+    python tools/demo.py
 
 Start the system first, either with python start.py or with each server in its own
 terminal. The demo adds an asset, stops the primary as if it had crashed, adds another
@@ -14,6 +14,12 @@ terminals, the demo tells you when to start server.py again.
 """
 
 import time  # times the failover, and waits for the primary to return
+import os    # finds the project folder
+import sys   # sys.path is where Python looks for modules
+
+# This file is in tools/, but common.py is one folder up, in the project folder, so
+# Python is told to look there too.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import common
 from common import IN_USE, new_register_request, request_from, send_request

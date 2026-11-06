@@ -20,7 +20,7 @@ import unittest
 from unittest import mock
 
 import common
-import demo
+from tools import demo
 
 # The project folder, one above this tests folder.
 FOLDER = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

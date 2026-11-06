@@ -15,7 +15,7 @@ import unittest
 from unittest import mock
 
 import common
-import fill
+from tools import fill
 from tests.test_demo import ServerTestCase  # starts real servers on spare ports
 
 

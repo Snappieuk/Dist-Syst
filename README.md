@@ -50,8 +50,7 @@ rule still load, and can be changed to one of the two.
 | `web.py` | A web interface for browsing, adding and deleting assets, and creating accounts, behind a login. It serves the page in `static/` and talks to the servers like any other client. |
 | `static/` | The web page: `index.html`, `app.js` and `style.css`. |
 | `start.py` | Starts the primary, backup and web interface on this machine with one command, running setup first if needed, and restarts any that stops. |
-| `demo.py` | Shows a failover step by step on a running system. |
-| `fill.py` | Fills a running system with made-up assets, 500 unless `--count` says otherwise, so there is a full table to try things on. |
+| `tools/` | Two helpers for trying the system out. `demo.py` shows a failover step by step on a running system. `fill.py` fills a running system with made-up assets, 500 unless `--count` says otherwise, so there is a full table to try things on. |
 | `config.example.json` | An example of the optional settings file, `config.json`. |
 | `setup.py` | First-time setup, which creates the shared secret, the TLS certificate and the first web account, and a full reset with `--reset`. |
 | `requirements.txt` | The one package needed, `cryptography`, to create the certificate. |
@@ -207,8 +206,8 @@ To see how the web page and GUI cope with a full table, start the system, then r
 a second terminal:
 
 ```
-python fill.py               # adds 500 made-up assets
-python fill.py --count 100   # or any other number (-n 100 for short)
+python tools/fill.py               # adds 500 made-up assets
+python tools/fill.py --count 100   # or any other number (-n 100 for short)
 ```
 
 The assets are registered through the servers like any other, so the backup gets a copy
@@ -224,7 +223,7 @@ The quickest way to show a failover is to start the system, then run this in a s
 terminal:
 
 ```
-python demo.py
+python tools/demo.py
 ```
 
 Keep the `start.py` window visible beside it, because the server logs show the same events

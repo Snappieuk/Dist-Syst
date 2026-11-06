@@ -1,8 +1,8 @@
 """
 Fills the system with made-up assets, so the table has plenty of rows to look at.
 
-    python fill.py               adds 500 assets
-    python fill.py --count 100   adds 100 assets (or -n 100)
+    python tools/fill.py               adds 500 assets
+    python tools/fill.py --count 100   adds 100 assets (or -n 100)
 
 Start the system first, with python start.py. Each asset is registered through the
 servers exactly as python cli.py add does it, so the backup gets a copy and the web page and GUI
@@ -13,6 +13,12 @@ python setup.py --reset, which deletes every asset.
 import argparse  # reads the --count option
 import random    # picks the made-up details
 import string    # the letters and digits a serial number is made from
+import os        # finds the project folder
+import sys       # sys.path is where Python looks for modules
+
+# This file is in tools/, but common.py is one folder up, in the project folder, so
+# Python is told to look there too.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import IN_USE, NOT_IN_USE, new_register_request, send_request
 
