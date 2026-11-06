@@ -43,7 +43,7 @@ namespace AssetApp
             BuildLoansTab();
             BuildReviewTab();
 
-            Shown += delegate { Refresh_(); };
+            Shown += delegate { Refresh_(); StartAutoRefresh(); };
         }
 
         // A table with the look used on every tab: full-row selection, column headers, no grid.
@@ -219,6 +219,65 @@ namespace AssetApp
                     }
                     else MessageBox.Show(this, J.Text(reply, "detail"), "Not done", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
+            });
+        }
+
+        // ---- Keeping the tables up to date ----
+
+        // Check for changes made by other people every few seconds, like the web page does.
+        readonly System.Windows.Forms.Timer autoRefresh = new System.Windows.Forms.Timer { Interval = 5000 };
+        bool autoRefreshing;
+
+        void StartAutoRefresh()
+        {
+            autoRefresh.Tick += delegate { AutoRefresh(); };
+            autoRefresh.Start();
+        }
+
+        // A short text that changes whenever an asset is added, changed or deleted, because
+        // the server raises an asset's version on every change.
+        static string Signature(List<Dictionary<string, object>> list)
+        {
+            List<string> parts = new List<string>();
+            foreach (Dictionary<string, object> asset in list)
+                parts.Add(J.Text(asset, "asset_id") + ":" + J.Number(asset, "version"));
+            return string.Join(",", parts.ToArray());
+        }
+
+        // A quiet version of Refresh_: no busy cursor, no error boxes, and the tables are only
+        // redrawn if something changed. It skips a turn while a request or another window
+        // (a form being filled in, a message box) is open, so it never gets in the way.
+        void AutoRefresh()
+        {
+            if (busy || autoRefreshing || Form.ActiveForm != this) return;
+            autoRefreshing = true;
+            Dictionary<string, object> listRequest = ListRequest();   // read on this thread: it reads widgets
+
+            Background.Run<Dictionary<string, object>>(this, delegate { return Net.Send(listRequest); },
+            delegate(Dictionary<string, object> list, Exception error)
+            {
+                autoRefreshing = false;
+                if (error != null || busy || Form.ActiveForm != this || J.Text(list, "status") != "OK") return;
+
+                List<Dictionary<string, object>> fresh = J.Objects(list, "assets");
+                if (Signature(fresh) == Signature(assets)) return;
+
+                // Redrawing clears the tables, so remember what was selected or ticked.
+                string selected = assetList.SelectedItems.Count == 0 ? null : J.Text((Dictionary<string, object>)assetList.SelectedItems[0].Tag, "asset_id");
+                List<string> ticked = new List<string>();
+                foreach (ListViewItem row in reviewList.CheckedItems)
+                    ticked.Add(J.Text((Dictionary<string, object>)row.Tag, "asset_id"));
+
+                assets = fresh;
+                FillAssets();
+                FillLoans();
+                FillReview();
+
+                foreach (ListViewItem row in assetList.Items)
+                    if (J.Text((Dictionary<string, object>)row.Tag, "asset_id") == selected) { row.Selected = true; row.EnsureVisible(); }
+                foreach (ListViewItem row in reviewList.Items)
+                    if (ticked.Contains(J.Text((Dictionary<string, object>)row.Tag, "asset_id"))) row.Checked = true;
+                statusText.Text = assets.Count + " assets, served by " + J.Text(list, "served_by") + "  (updated)";
             });
         }
     }
