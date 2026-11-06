@@ -42,11 +42,16 @@ namespace AssetApp
             AddButton(assetButtons, "Check Out / In", delegate { CheckOutOrIn(); });
         }
 
-        // Show the asset's history, newest last, in a read-only window.
+        // Show the selected asset's history.
         void ShowHistory()
         {
             Dictionary<string, object> asset = RequireSelected();
-            if (asset == null) return;
+            if (asset != null) ShowHistoryOf(asset);
+        }
+
+        // Show an asset's history, newest last, in a read-only window.
+        void ShowHistoryOf(Dictionary<string, object> asset)
+        {
             using (Form window = new Form { Text = "History of " + J.Text(asset, "asset_id"), Size = new Size(760, 380), StartPosition = FormStartPosition.CenterParent })
             {
                 ListView list = NewList();
