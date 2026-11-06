@@ -189,7 +189,13 @@ INTERNAL = "INTERNAL"        # the server failed; the request itself may be fine
 DUPLICATE_ASSET = "DUPLICATE_ASSET"  # the same item is already registered
 CONFLICT = "CONFLICT"        # someone else changed the asset since the client read it
 NOT_PRIMARY = "NOT_PRIMARY"  # this server is on standby; try the other one
-UNAUTHORIZED = "UNAUTHORIZED"  # the request did not include the shared secret
+UNAUTHORIZED = "UNAUTHORIZED"  # no shared secret, and no valid login either
+FORBIDDEN = "FORBIDDEN"      # a logged-in user is not allowed to do that (only admins can delete)
+
+# A GUI finds servers by broadcasting this text over UDP to a server's port. A server
+# answers with a JSON object naming this service. It is not secret and reveals no data.
+DISCOVERY_REQUEST = b"ASSET_MANAGEMENT_DISCOVER"
+SERVICE_NAME = "asset-management"
 UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"  # no protocol_version, or one the server doesn't speak
 
 # The version of the message format this program speaks, sent in every request. A

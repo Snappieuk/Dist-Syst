@@ -29,15 +29,21 @@ import socket     # provides the networking building blocks (sockets)
 import sys        # sys.exit() reports startup failures
 import threading  # gives each client a thread, and provides the lock
 
+import accounts   # logins and tokens for clients without the shared secret (gui.py)
+import common     # common.SERVERS is read when a PING reply lists the servers
+
 from common import (
     BAD_REQUEST,
     CONFLICT,
+    DISCOVERY_REQUEST,
     DUPLICATE_ASSET,
+    FORBIDDEN,
     IN_USE,
     NOT_IN_USE,
     INTERNAL,
     NOT_FOUND,
     NOT_PRIMARY,
+    SERVICE_NAME,
     STATUSES,
     SUPPORTED_PROTOCOL_VERSIONS,
     TOO_LARGE,
@@ -121,6 +127,14 @@ current = threading.local()
 
 # The longest web username accepted in a request's "user" field.
 MAX_USER_LENGTH = 64
+
+# What may be asked without the shared secret: a login, and a check that a server is there.
+OPEN_ACTIONS = ("PING", "LOGIN")
+
+# What a client with only a login token may do, and which of those need an admin account,
+# as on the web page. Anything else (copying data between servers, STOP) needs the secret.
+TOKEN_ACTIONS = ("LIST", "REGISTER", "SET_STATUS", "EDIT", "APPROVE", "DELETE", "CHECK_OUT", "CHECK_IN")
+ADMIN_ACTIONS = ("DELETE", "APPROVE")
 
 
 def utc_timestamp() -> str:
@@ -695,8 +709,24 @@ def process_request(request: dict) -> dict:
 
     if action == "PING":
         # The heartbeat between servers. It takes no lock, so a server that is busy
-        # saving is not mistaken for one that has failed.
-        return {"status": "OK", "accepts_writes": accepts_writes}
+        # saving is not mistaken for one that has failed. It also needs no login: the GUI
+        # uses it to check an address before logging in, and "servers" tells it where
+        # every server is, so one address is enough. No asset data is revealed.
+        return {"status": "OK", "accepts_writes": accepts_writes,
+                "servers": [list(address) for address in common.SERVERS]}
+
+    if action == "LOGIN":
+        username, password = request.get("username"), request.get("password")
+        if not isinstance(username, str) or not isinstance(password, str):
+            return error_reply(BAD_REQUEST, "username and password must be text")
+        try:
+            token, username, role = accounts.login(username, password)
+        except accounts.LoginError as exc:
+            logger.warning("Failed login as %r", username[:MAX_USER_LENGTH])
+            return error_reply(UNAUTHORIZED, str(exc))
+        logger.info("%s logged in (%s)", username, role)
+        return {"status": "OK", "token": token, "username": username, "role": role,
+                "expires_in": accounts.TOKEN_SECONDS}
 
     if action == "STOP":
         # Used by demo.py to show a failover. The server ends abruptly, without telling
@@ -761,6 +791,23 @@ def process_request(request: dict) -> dict:
     return error_reply(BAD_REQUEST, f"Unknown action: {action!r}")
 
 
+def check_token_request(request: dict) -> object:
+    """Decide whether a request that carries a login token may go ahead. Returns an error
+    reply if not, or None if it may, after naming the account as the request's "user" so
+    the audit log says who made the change (whatever the client claimed)."""
+    try:
+        username, role = accounts.check_token(request.get("token"))
+    except accounts.LoginError as exc:
+        return error_reply(UNAUTHORIZED, str(exc))
+    action = request.get("action")
+    if action not in TOKEN_ACTIONS:
+        return error_reply(FORBIDDEN, "A logged-in user cannot do that")
+    if action in ADMIN_ACTIONS and role != accounts.ADMIN:
+        return error_reply(FORBIDDEN, "Only an admin can do that")
+    request["user"] = username
+    return None
+
+
 def is_authorized(request: dict) -> bool:
     """Check that a request carries the shared secret.
 
@@ -786,8 +833,19 @@ def read_and_process(conn: socket.socket) -> dict:
         # so the client can be told.
         return error_reply(BAD_REQUEST, f"Invalid message: {exc}")
 
+    # Programs of this system (web.py, the command-line clients, the other server) carry the
+    # shared secret. Anyone else may only PING or LOGIN, or send a login token, which
+    # allows the client actions below and, for deleting, an admin account.
     if not is_authorized(request):
-        return error_reply(UNAUTHORIZED, "This program does not have the system's secret.key file")
+        action = request.get("action")
+        if action in OPEN_ACTIONS:
+            pass
+        elif "token" in request:
+            problem = check_token_request(request)
+            if problem:
+                return problem
+        else:
+            return error_reply(UNAUTHORIZED, "This program does not have the system's secret.key file")
 
     # Checked after the secret, so only programs of this system learn which versions exist.
     version = request.get("protocol_version")
@@ -886,6 +944,33 @@ def run_server(server_sock: socket.socket) -> None:
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
 
+def run_discovery(sock: socket.socket, port: int) -> None:
+    """Answer discovery broadcasts forever, so a GUI can find this server without being
+    told its address. The reply only says that a server is here, and on which port."""
+    reply = json.dumps({"service": SERVICE_NAME, "role": ROLE, "port": port}).encode("utf-8")
+    while True:
+        try:
+            data, sender = sock.recvfrom(1024)
+            if data == DISCOVERY_REQUEST:
+                sock.sendto(reply, sender)
+        except OSError:
+            if sock.fileno() == -1:
+                return  # closed, so the server is stopping
+            # Anything else, such as an unreachable sender, is only that one request.
+
+
+def start_discovery(port: int) -> None:
+    """Start answering discovery broadcasts on this server's port number (UDP). Discovery is
+    a convenience, so if the port can't be used the server carries on without it."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("", port))  # all interfaces, so broadcasts arriving on any network reach it
+    except OSError as exc:
+        logger.warning("Discovery is off, because UDP port %s can't be used: %s", port, exc)
+        return
+    threading.Thread(target=run_discovery, args=(sock, port), daemon=True).start()
+
+
 def listening_address(address: tuple) -> tuple:
     """Return the address this server should listen on.
 
@@ -923,5 +1008,6 @@ def start_up(address: tuple) -> socket.socket:
         sys.exit(1)
 
     logger.info("Asset Management %s server listening on %s:%s", ROLE, *address)
+    start_discovery(address[1])
     logger.info("Press Ctrl+C to stop.")
     return server_sock

@@ -26,6 +26,7 @@ import time
 import unittest
 from unittest import mock
 
+import accounts
 import cli
 import common
 import node
@@ -1387,6 +1388,130 @@ class TimestampTest(NodeTestCase):
 
         self.assertEqual(data["deleted_at"], {})
         self.assertEqual(node.load_assets(), ([make_record()], {"AST-P000002": None}, 2))
+
+
+class LoginTest(NodeTestCase):
+    """Clients without the shared secret (gui.py) log in with an account and send a token."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.listener = node.create_listening_socket("127.0.0.1", 0)
+        cls.address = cls.listener.getsockname()
+        threading.Thread(target=node.run_server, args=(cls.listener,), daemon=True).start()
+
+    def setUp(self):
+        super().setUp()
+        # Accounts live in a temporary file. A low cost keeps the tests quick.
+        users = {}
+        for name, role in (("alex", "admin"), ("sam", "user")):
+            salt = "ab" * 16
+            users[name] = {"salt": salt, "iterations": 1000, "role": role,
+                           "hash": accounts.hash_password(f"{name} password", salt, 1000)}
+        path = os.path.join(self.temp_dir.name, "users.json")
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(users, file)
+        patcher = mock.patch.object(accounts, "USERS_FILE", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        accounts.failed_logins, accounts.locked_until = 0, 0.0
+        node.assets.append(make_record())
+
+    def ask(self, request: dict, secret: bool = False) -> dict:
+        """Send a request as a client would. Without `secret` it carries no shared secret."""
+        request = {**request, "protocol_version": common.PROTOCOL_VERSION}
+        if secret:
+            request["auth"] = common.shared_secret()
+        with common.connect(self.address, timeout=5) as sock:
+            common.send_message(sock, request)
+            return common.receive_message(sock)
+
+    def login(self, name: str = "alex", password: str = None) -> dict:
+        return self.ask({"action": "LOGIN", "username": name, "password": password or f"{name} password"})
+
+    def test_ping_needs_no_login_and_says_where_the_servers_are(self):
+        with mock.patch.object(common, "SERVERS", [("10.0.0.1", 65432), ("10.0.0.2", 65433)]):
+            reply = self.ask({"action": "PING"})
+        self.assertEqual(reply["servers"], [["10.0.0.1", 65432], ["10.0.0.2", 65433]])
+        self.assertNotIn("assets", reply)
+
+    def test_everything_else_still_needs_the_secret_or_a_token(self):
+        self.assertEqual(self.ask({"action": "LIST"})["code"], common.UNAUTHORIZED)
+        self.assertEqual(self.ask({"action": "LIST", "token": "nonsense"})["code"], common.UNAUTHORIZED)
+        self.assertEqual(self.ask({"action": "LIST"}, secret=True)["status"], "OK")
+
+    def test_a_correct_login_gives_a_token_that_works_without_the_secret(self):
+        reply = self.login()
+        self.assertEqual((reply["status"], reply["username"], reply["role"]), ("OK", "alex", "admin"))
+        listing = self.ask({"action": "LIST", "token": reply["token"]})
+        self.assertEqual(len(listing["assets"]), 1)
+
+    def test_wrong_password_and_unknown_user_get_the_same_refusal(self):
+        wrong = self.login("alex", "not it")
+        unknown = self.login("nobody", "not it")
+        self.assertEqual(wrong["code"], common.UNAUTHORIZED)
+        self.assertEqual(wrong["detail"], unknown["detail"])
+
+    def test_too_many_failed_logins_lock_everyone_out_for_a_while(self):
+        for _ in range(accounts.FAILED_LOGIN_LIMIT):
+            self.login("alex", "not it")
+        self.assertIn("Too many", self.login()["detail"])
+
+    def test_a_changed_token_is_refused(self):
+        token = self.login("sam")["token"]
+        name, expires, signature = token.split(":")
+        for bad in (f"alex:{expires}:{signature}", f"{name}:{int(expires) + 99999}:{signature}",
+                    f"{name}:{expires}:{'0' * 64}", f"{name}:{expires}"):
+            with self.subTest(bad):
+                self.assertEqual(self.ask({"action": "LIST", "token": bad})["code"], common.UNAUTHORIZED)
+
+    def test_an_expired_token_is_refused(self):
+        token = self.login()["token"]
+        with mock.patch("accounts.time.time", return_value=time.time() + accounts.TOKEN_SECONDS + 1):
+            self.assertEqual(self.ask({"action": "LIST", "token": token})["code"], common.UNAUTHORIZED)
+
+    def test_a_token_stops_working_when_its_account_is_removed(self):
+        token = self.login("sam")["token"]
+        with open(accounts.USERS_FILE, "w", encoding="utf-8") as file:
+            json.dump({}, file)
+        self.assertEqual(self.ask({"action": "LIST", "token": token})["code"], common.UNAUTHORIZED)
+
+    def test_only_an_admin_can_delete_or_approve(self):
+        user, admin = self.login("sam")["token"], self.login("alex")["token"]
+        request = {"action": "DELETE", "asset_id": "AST-P000001"}
+        self.assertEqual(self.ask({**request, "token": user})["code"], common.FORBIDDEN)
+        self.assertEqual(self.ask({"action": "APPROVE", "asset_id": "AST-P000001", "token": user})["code"],
+                         common.FORBIDDEN)
+        self.assertEqual(len(node.assets), 1)
+        self.assertEqual(self.ask({**request, "token": admin})["status"], "OK")
+        self.assertEqual(node.assets, [])
+
+    def test_a_user_can_change_assets_and_the_audit_user_is_the_account_not_the_claim(self):
+        token = self.login("sam")["token"]
+        request = {"action": "SET_STATUS", "asset_id": "AST-P000001", "status": "Not In Use",
+                   "token": token, "user": "someone else"}
+        seen = []
+        with mock.patch.object(node, "set_asset_status",
+                               side_effect=lambda *args: seen.append(node.current.request["user"]) or {"status": "OK"}):
+            self.assertEqual(self.ask(request)["status"], "OK")
+        self.assertEqual(seen, ["sam"])
+
+    def test_a_token_cannot_run_server_to_server_actions(self):
+        token = self.login()["token"]
+        for action in ("STOP", "HANDOVER", "INSTALL_STATE"):
+            with self.subTest(action):
+                self.assertEqual(self.ask({"action": action, "token": token})["code"], common.FORBIDDEN)
+
+    def test_a_server_answers_discovery_broadcasts(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        self.addCleanup(sock.close)
+        threading.Thread(target=node.run_discovery, args=(sock, 65432), daemon=True).start()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+            client.settimeout(3)
+            client.sendto(b"something else", sock.getsockname())  # ignored
+            client.sendto(common.DISCOVERY_REQUEST, sock.getsockname())
+            reply = json.loads(client.recvfrom(1024)[0])
+        self.assertEqual(reply, {"service": common.SERVICE_NAME, "role": "primary", "port": 65432})
 
 
 class StartSyncTest(unittest.TestCase):
