@@ -247,9 +247,11 @@ button.account-toggle[aria-expanded="true"] {
   font-size: 0.82rem;
 }
 
-button.menu-item {
+button.menu-item,
+a.menu-item {
   display: block;
   width: 100%;
+  box-sizing: border-box;
   padding: 9px 10px;
   border: 0;
   border-radius: var(--radius);
@@ -257,9 +259,11 @@ button.menu-item {
   color: var(--text);
   font-weight: 500;
   text-align: left;
+  text-decoration: none;
 }
 
-button.menu-item:hover {
+button.menu-item:hover,
+a.menu-item:hover {
   background: var(--surface-raised);
   color: var(--accent);
 }

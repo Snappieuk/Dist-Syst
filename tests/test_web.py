@@ -1104,6 +1104,62 @@ class AuditFileTest(WebTestCase):
                                         account="newbie", role=web.USER)])
 
 
+class GuiDownloadTest(WebTestCase):
+    """The "Download desktop app" link: gui.py with this system's settings filled in."""
+
+    def download(self, **options) -> tuple:
+        return self.fetch(web.GUI_DOWNLOAD_ADDRESS, **options)
+
+    def test_it_needs_a_login(self):
+        self.assertEqual(self.download(cookie=None)[0], 401)
+
+    def test_it_is_a_download_of_gui_py(self):
+        status, headers, _ = self.download()
+        self.assertEqual(status, 200)
+        self.assertIn("attachment", headers["Content-Disposition"])
+        self.assertIn("gui.py", headers["Content-Disposition"])
+
+    def test_it_holds_the_real_fingerprint_and_the_servers(self):
+        import ast
+        import ssl
+        import gui
+
+        _, _, body = self.download()
+        source = body.decode("utf-8")
+        settings = {}
+        for node_ in ast.parse(source).body:  # read the two settings without running the file
+            if (isinstance(node_, ast.Assign) and isinstance(node_.targets[0], ast.Name)
+                    and node_.targets[0].id in ("SITE_SERVERS", "SITE_FINGERPRINT")):
+                settings[node_.targets[0].id] = ast.literal_eval(node_.value)
+
+        with open(common.ensure_tls_file(), "r", encoding="ascii") as file:
+            pem = file.read()
+        certificate = pem[pem.index("-----BEGIN CERTIFICATE-----"):]
+        expected = gui.fingerprint(ssl.PEM_cert_to_DER_cert(certificate))
+        self.assertEqual(settings["SITE_FINGERPRINT"], expected)
+        # The test's asset server is on 127.0.0.1, which is what the browser used too.
+        self.assertEqual(settings["SITE_SERVERS"], [tuple(self.asset_server)])
+
+    def test_loopback_servers_become_the_address_the_browser_used(self):
+        with mock.patch.object(common, "SERVERS", [("127.0.0.1", 65432), ("10.0.0.5", 65433)]):
+            source = web.gui_with_site_settings("files.example")
+        self.assertIn("SITE_SERVERS = [('files.example', 65432), ('10.0.0.5', 65433)]\n", source)
+
+    def test_it_holds_no_secrets(self):
+        _, _, body = self.download()
+        self.assertNotIn(b"PRIVATE KEY", body)
+        with open(common.SECRET_FILE, "rb") as file:
+            self.assertNotIn(file.read().strip(), body)
+
+    def test_an_unsafe_host_is_refused(self):
+        with self.assertRaises(ValueError):
+            web.gui_with_site_settings("x'; import os #")
+
+    def test_the_page_links_to_it(self):
+        _, _, body = self.fetch("/")
+        self.assertIn(web.GUI_DOWNLOAD_ADDRESS.encode(), body)
+
+
 class PageTest(WebTestCase):
     def test_the_page_is_served(self):
         status, headers, body = self.fetch("/")

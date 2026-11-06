@@ -22,6 +22,7 @@ import logging    # records what happens, including errors, without stopping
 import os         # os.path finds the page's files
 import re         # checks that a username is acceptable
 import secrets    # generates login tokens, password salts and a first password
+import ssl        # converts the certificate so it can be fingerprinted for the GUI download
 import sys        # sys.argv holds the --set-password option
 import threading  # the locks protect the data shared between request threads
 import time       # sessions and lockouts expire
@@ -598,6 +599,46 @@ def delete_account_reply(username: str, deleted_by: str) -> tuple:
     return 200, {"deleted": username}
 
 
+GUI_DOWNLOAD_ADDRESS = "/download/gui.py"
+GUI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui.py")
+SAFE_HOST = re.compile(r"[A-Za-z0-9.:-]{1,253}")  # what a host name or IP address may contain
+
+
+def certificate_fingerprint() -> str:
+    """The SHA-256 fingerprint of the servers' certificate (data/tls.pem), written the same
+    way as gui.py writes it: AB:CD:... Only the certificate is read, never the private key."""
+    with open(common.ensure_tls_file(), "r", encoding="ascii") as file:
+        found = re.search(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", file.read(), re.S)
+    if found is None:
+        raise ValueError("There is no certificate in the TLS file")
+    digest = hashlib.sha256(ssl.PEM_cert_to_DER_cert(found.group(0))).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def gui_with_site_settings(web_host: str) -> str:
+    """The text of gui.py with SITE_SERVERS and SITE_FINGERPRINT filled in.
+
+    The servers in config.json are often written as 127.0.0.1, which is only right on the
+    server's own computer, so those are replaced by the host the browser used to reach this
+    page. Neither value is secret; the secret key and passwords are never put in the file.
+    """
+    if not SAFE_HOST.fullmatch(web_host or ""):
+        raise ValueError("The web page was reached by an address that can't be used")
+    servers = []
+    for host, port in common.SERVERS:
+        servers.append((web_host if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0") else host, port))
+
+    with open(GUI_FILE, "r", encoding="utf-8") as file:
+        source = file.read()
+    # Each setting line must be there exactly once, or the file isn't the one expected.
+    for old, new in (("SITE_SERVERS = []\n", f"SITE_SERVERS = {servers!r}\n"),
+                     ("SITE_FINGERPRINT = None\n", f"SITE_FINGERPRINT = {certificate_fingerprint()!r}\n")):
+        if source.count(old) != 1:
+            raise ValueError(f"gui.py doesn't contain the line {old.strip()!r} exactly once")
+        source = source.replace(old, new)
+    return source
+
+
 class WebHandler(BaseHTTPRequestHandler):
     """Answers one browser request. Each request runs on its own thread."""
 
@@ -620,6 +661,8 @@ class WebHandler(BaseHTTPRequestHandler):
             username = self.admin_or_refuse()
             if username is not None:
                 self.send_json(200, {"accounts": list_accounts()})
+        elif path == GUI_DOWNLOAD_ADDRESS:
+            self.send_gui_download()
         elif path in STATIC_FILES:
             self.send_static_file(*STATIC_FILES[path])
         elif path == "/favicon.ico":
@@ -817,6 +860,24 @@ class WebHandler(BaseHTTPRequestHandler):
             return None
         return body
 
+    def send_gui_download(self) -> None:
+        """Send gui.py with this system's server addresses and certificate fingerprint filled
+        in, so the user only has to run it and log in. Only logged-in users get it."""
+        if not self.is_logged_in():
+            self.send_json(401, {"error": "Please log in"})
+            return
+        # The host the browser used to reach this page is how this machine is known to the
+        # user, which is what "127.0.0.1" in the servers list has to be turned into.
+        host = urlsplit("//" + self.headers.get("Host", "")).hostname or ""
+        try:
+            source = gui_with_site_settings(host)
+        except (OSError, ValueError) as exc:
+            logger.error("Could not make the GUI download: %s", exc)
+            self.send_json(500, {"error": "The GUI could not be prepared"})
+            return
+        self.send_body(200, "text/x-python; charset=utf-8", source.encode("utf-8"),
+                       extra_headers={"Content-Disposition": 'attachment; filename="gui.py"'})
+
     def send_static_file(self, file_name: str, content_type: str) -> None:
         with open(os.path.join(STATIC_FOLDER, file_name), "rb") as file:
             self.send_body(200, content_type, file.read())
@@ -824,13 +885,16 @@ class WebHandler(BaseHTTPRequestHandler):
     def send_json(self, status: int, body: dict, cookie: str = None) -> None:
         self.send_body(status, "application/json", json.dumps(body).encode("utf-8"), cookie)
 
-    def send_body(self, status: int, content_type: str, payload: bytes, cookie: str = None) -> None:
+    def send_body(self, status: int, content_type: str, payload: bytes, cookie: str = None,
+                  extra_headers: dict = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
 
         if cookie is not None:
             self.send_header("Set-Cookie", cookie)
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
 
         # The data changes, so a browser must not keep an old copy.
         self.send_header("Cache-Control", "no-store")
