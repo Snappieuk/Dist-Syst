@@ -8,6 +8,7 @@
 //   node client.js <username> <password> edit <asset_id> <expected_version> '{"location":"Lab"}'
 //   node client.js <username> <password> delete <asset_id> <expected_version>
 const tls = require("tls");
+const net = require("net");
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
@@ -22,7 +23,11 @@ function sendRequest(server, request) {
     header.writeUInt32BE(body.length);
     let buf = Buffer.alloc(0);
     const sock = tls.connect(
-      { host: server.host, port: server.port, ca, servername: server.host, minVersion: "TLSv1.2" },
+      {
+        host: server.host, port: server.port, ca, minVersion: "TLSv1.2",
+        // Node rejects an IP address as the SNI name; the certificate is still checked against the IP.
+        ...(net.isIP(server.host) ? {} : { servername: server.host }),
+      },
       () => sock.write(Buffer.concat([header, body]))
     );
     sock.setTimeout(config.client_timeout_seconds * 1000, () => sock.destroy(new Error("timeout")));
