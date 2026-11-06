@@ -352,6 +352,13 @@ def public_asset(asset: dict) -> dict:
 
     # Assets saved before tagging was added have no tags, so those are worked out here.
     public["tags"] = asset.get("tags") or generate_asset_tags(asset)
+
+    # Whether it awaits review, whether it is made up, every loan it has had (for the
+    # check-out form and the calendar) and what has happened to it.
+    public["flagged"] = bool(asset.get("flagged"))
+    public["sample"] = bool(asset.get("sample"))
+    public["loans"] = asset.get("loans") or []
+    public["history"] = asset.get("history") or []
     return public
 
 
@@ -467,6 +474,45 @@ def edit_asset_reply(asset_id: str, body: dict, username: str = "someone") -> tu
     else:
         logger.info("%s could not edit %r: %s", username, asset_id, result.get("error"))
     return status, result
+
+
+# The things that can be done to one asset by POSTing to /api/assets/<id>/<name>: the
+# request each sends to the servers, the fields of the browser's body it passes on, and
+# whether only an admin may do it.
+ASSET_ACTIONS = {
+    "approve": ("APPROVE", (), True),
+    "check-out": ("CHECK_OUT", ("borrower", "start", "due"), False),
+    "check-in": ("CHECK_IN", ("returned",), False),
+}
+
+
+def asset_action_reply(asset_id: str, name: str, body: dict, username: str = "someone") -> tuple:
+    """Approve, check out or check in an asset for `username`, returning an HTTP status and
+    a JSON body. Only the expected fields are passed on. The version the user was looking
+    at is required, so a change someone else has just made isn't missed."""
+    action, fields, _ = ASSET_ACTIONS[name]
+    version = body.get("version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        return 400, {"error": "The version of the asset is needed"}
+
+    request = {"action": action, "asset_id": asset_id, "expected_version": version, "user": username}
+    request.update({field: body[field] for field in fields if body.get(field) not in (None, "")})
+    status, reply, result = change_reply(request, 200)
+    if reply is not None:
+        result["asset"] = public_asset(reply["stored"])
+        logger.info("%s did %s on %r, served by the %s", username, action, asset_id, reply.get("served_by"))
+    else:
+        logger.info("%s could not do %s on %r: %s", username, action, asset_id, result.get("error"))
+    return status, result
+
+
+def asset_action_address(path: str) -> object:
+    """Split /api/assets/<id>/<name> into the asset ID and the action's name, or return
+    None if the path isn't one of these."""
+    if not path.startswith(ASSET_ADDRESS_PREFIX):
+        return None
+    asset_id, _, name = path[len(ASSET_ADDRESS_PREFIX):].rpartition("/")
+    return (unquote(asset_id), name) if asset_id and name in ASSET_ACTIONS else None
 
 
 def create_account_reply(body: dict, created_by: str) -> tuple:
@@ -593,6 +639,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self.handle_login()
         elif path == "/api/logout":
             self.handle_logout()
+        elif asset_action_address(path) is not None:
+            self.handle_asset_action(*asset_action_address(path))
         elif path not in ("/api/assets", "/api/users"):
             self.send_json(404, {"error": "There is nothing at this address"})
         else:
@@ -685,6 +733,20 @@ class WebHandler(BaseHTTPRequestHandler):
             logger.info("%s logged in from %s", reply["username"], browser)
             audit("LOGIN", user=reply["username"], address=browser)
             self.send_json(status, reply, session_cookie(token, SESSION_SECONDS))
+
+    def handle_asset_action(self, asset_id: str, name: str) -> None:
+        """Approve, check out or check in one asset, for a logged-in user."""
+        username = session_username(self.session_token())
+        if username is None:
+            self.send_json(401, {"error": "Please log in"})
+            return
+        if ASSET_ACTIONS[name][2] and not is_admin(username):
+            logger.warning("%s tried to %s %r, but isn't an admin", username, name, asset_id)
+            self.send_json(403, {"error": ADMIN_ONLY})
+            return
+        body = self.read_json_body()
+        if body is not None:
+            self.send_json(*asset_action_reply(asset_id, name, body, username))
 
     def handle_logout(self) -> None:
         token = self.session_token()

@@ -307,7 +307,7 @@ class AssetsApiTest(WebTestCase):
         self.assertEqual(
             set(body["assets"][0]),
             {"asset_id", "description", "category", "location", "status", "date_registered", "tags", "version",
-             "created_at", "updated_at"},
+             "created_at", "updated_at", "flagged", "sample", "loans", "history"},
         )
 
     def test_assets_saved_without_tags_still_get_them(self):
@@ -868,6 +868,42 @@ class RoleTest(WebTestCase):
         self.assertEqual(status, 201)
         status, _ = self.as_user(f"/api/assets/{self.asset_id}", "PATCH", {"version": 1, "changes": {"location": "B"}})
         self.assertEqual(status, 200)
+
+    def test_only_an_admin_can_approve_a_flagged_asset(self):
+        node.assets[0] = dict(node.assets[0], flagged=True)
+        path = f"/api/assets/{self.asset_id}/approve"
+
+        with self.assertLogs("asset_web", "WARNING"):
+            self.assertEqual(self.as_user(path, "POST", {"version": 1})[0], 403)
+        self.assertTrue(node.assets[0]["flagged"])
+
+        status, _, reply = self.fetch(path, "POST", {"version": 1})
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(reply)["asset"]["flagged"])
+
+    def test_a_user_can_check_an_asset_out_and_in(self):
+        status, body = self.as_user(f"/api/assets/{self.asset_id}/check-out", "POST",
+                                    {"version": 1, "borrower": "Sam Lee", "start": "2026-11-01", "due": "2026-11-08"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["asset"]["loans"][0]["borrower"], "Sam Lee")
+        self.assertEqual(body["asset"]["history"][-1]["user"], "worker")
+
+        status, body = self.as_user(f"/api/assets/{self.asset_id}/check-in", "POST", {"version": 2})
+        self.assertEqual(status, 200, body)
+        self.assertIsNotNone(body["asset"]["loans"][0]["returned"])
+
+    def test_a_bad_loan_or_unknown_action_is_refused(self):
+        status, body = self.as_user(f"/api/assets/{self.asset_id}/check-out", "POST",
+                                    {"version": 1, "borrower": "Sam", "start": "2026-11-09", "due": "2026-11-01"})
+        self.assertEqual(status, 400)
+        self.assertIn("due date", body["error"])
+        self.assertEqual(self.as_user(f"/api/assets/{self.asset_id}/explode", "POST", {"version": 1})[0], 404)
+        self.assertEqual(self.as_user(f"/api/assets/{self.asset_id}/check-in", "POST", {})[0], 400)  # no version
+
+    def test_the_browser_sees_flags_loans_and_history(self):
+        asset = self.as_user("/api/assets")[1]["assets"][0]
+        self.assertEqual((asset["flagged"], asset["sample"], asset["loans"]), (False, False, []))
+        self.assertEqual(asset["history"][0]["action"], "REGISTER")
 
     def test_a_user_cannot_delete(self):
         with self.assertLogs("asset_web", "WARNING") as logs:
