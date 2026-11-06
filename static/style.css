@@ -1,24 +1,25 @@
-/* Follows the viewer's light or dark setting. */
+/* Follows the viewer's light or dark setting. A warm off-white page, black ink for the
+   main buttons and text, and one burnt-orange accent used sparingly, rather than the
+   indigo-to-violet colours so many generated pages use. */
 :root {
   color-scheme: light dark;
-  --background: #f4f5fa;
-  --background-glow: rgba(99, 102, 241, 0.10);
+  --background: #f4f3ef;
   --surface: #ffffff;
-  --surface-raised: #f7f8fc;
-  --text: #171a26;
-  --muted: #5d6478;
-  --border: #e3e6ef;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef0ff;
-  --on-accent: #ffffff;
+  --surface-raised: #f8f7f4;
+  --text: #17181a;
+  --muted: #62645f;
+  --border: #dcd9d2;
+  --ink: #17181a;          /* solid buttons and the top bar */
+  --on-ink: #f4f3ef;
+  --accent: #b4441b;       /* focus, sort order, hovers and the logo mark */
+  --accent-soft: #f6e6de;
   --problem: #b3261e;
   --problem-soft: #fdecea;
   --good: #11804a;
   --good-background: #def5e8;
   --warning: #9a5b00;
   --warning-background: #fcf0d6;
-  --neutral-background: #eceef4;
+  --neutral-background: #ebe9e4;
   --shadow: 0 1px 2px rgba(23, 26, 38, 0.04), 0 4px 14px rgba(23, 26, 38, 0.05);
   --shadow-large: 0 4px 12px rgba(23, 26, 38, 0.08), 0 18px 48px rgba(23, 26, 38, 0.18);
   --radius: 14px;
@@ -26,24 +27,23 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0e1016;
-    --background-glow: rgba(129, 140, 248, 0.10);
-    --surface: #181b24;
-    --surface-raised: #20242f;
-    --text: #e9ebf2;
-    --muted: #a0a7b7;
-    --border: #2c313d;
-    --accent: #a5b4fc;
-    --accent-hover: #c7d2fe;
-    --accent-soft: #262b45;
-    --on-accent: #14162a;
+    --background: #121314;
+    --surface: #1b1c1e;
+    --surface-raised: #232427;
+    --text: #e9e7e2;
+    --muted: #a3a59f;
+    --border: #313336;
+    --ink: #e9e7e2;
+    --on-ink: #121314;
+    --accent: #f08a5d;
+    --accent-soft: #3a2419;
     --problem: #ff9d94;
     --problem-soft: #3a1d1b;
     --good: #86e0ad;
     --good-background: #163428;
     --warning: #f5c77a;
     --warning-background: #3a2c12;
-    --neutral-background: #282d39;
+    --neutral-background: #2a2b2e;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 14px rgba(0, 0, 0, 0.22);
     --shadow-large: 0 4px 12px rgba(0, 0, 0, 0.35), 0 18px 48px rgba(0, 0, 0, 0.5);
   }
@@ -57,9 +57,7 @@
 body {
   min-height: 100vh;
   margin: 0;
-  background:
-    radial-gradient(1200px 400px at 50% -120px, var(--background-glow), transparent),
-    var(--background);
+  background: var(--background);
   color: var(--text);
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   line-height: 1.45;
@@ -116,8 +114,7 @@ h3 {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), #8b5cf6);
-  box-shadow: inset 0 0 0 6px transparent, inset 0 0 0 8px rgba(255, 255, 255, 0.85);
+  background: var(--accent);
 }
 
 .account-menu {
@@ -140,6 +137,7 @@ button.account-toggle:hover,
 button.account-toggle[aria-expanded="true"] {
   border-color: var(--accent);
   background: var(--surface-raised);
+  color: var(--text);
 }
 
 .account-name {
@@ -171,8 +169,8 @@ button.account-toggle[aria-expanded="true"] {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), #8b5cf6);
-  color: #ffffff;
+  background: var(--ink);
+  color: var(--on-ink);
   font-size: 0.85rem;
   font-weight: 700;
 }
@@ -298,10 +296,10 @@ button:focus-visible {
 /* The column heading buttons have their own, plainer style further down. */
 button {
   padding: 9px 16px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--ink);
   border-radius: 10px;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--ink);
+  color: var(--on-ink);
   font: inherit;
   font-size: 0.92rem;
   font-weight: 600;
@@ -310,8 +308,9 @@ button {
 }
 
 button:hover {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
 }
 
 button:active {
@@ -339,6 +338,7 @@ button.delete {
 button.delete:hover {
   border-color: var(--problem-soft);
   background: var(--problem-soft);
+  color: var(--problem);
 }
 
 button:disabled {
@@ -415,7 +415,6 @@ button.primary-action {
   height: 40px;
   margin-bottom: 14px;
   border-radius: 12px;
-  box-shadow: inset 0 0 0 9px transparent, inset 0 0 0 12px rgba(255, 255, 255, 0.85);
 }
 
 .login-head h2 {
@@ -672,7 +671,6 @@ td:nth-child(7) {
 }
 
 td:first-child {
-  color: var(--accent);
   font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
   font-size: 0.85rem;
   font-weight: 600;
