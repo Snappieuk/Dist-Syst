@@ -8,3 +8,6 @@ data/
 
 # This machine's own settings. config.example.json shows what it can hold.
 config.json
+
+# The compiled C# client; build it from clients/AssetClient.cs
+clients/*.exe
