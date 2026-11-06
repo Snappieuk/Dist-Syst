@@ -16,6 +16,7 @@ import re
 import socket
 import tempfile
 import threading
+import gc
 import time
 import unittest
 from unittest import mock
@@ -392,6 +393,9 @@ class GuiLoginTest(unittest.TestCase):
 
     def setUp(self):
         import accounts
+        # Free the earlier tests' windows on this thread. Tcl crashes if a server thread
+        # happens to be the one that frees them.
+        gc.collect()
         gui = self.gui
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -457,3 +461,80 @@ class GuiLoginTest(unittest.TestCase):
         then.reset_mock()
         screen._trust(self.address, ("CC:DD", {"status": "OK"}), None, then)
         then.assert_not_called()
+
+
+class GuiSiteSettingsTest(unittest.TestCase):
+    """A copy of gui.py downloaded from the web page has the servers and the real
+    certificate's fingerprint filled in. An ordinary copy still works on its own."""
+
+    def setUp(self):
+        import tkinter as tk
+        import gui
+        self.gui = gui
+        try:
+            self.root = tk.Tk()
+        except Exception as exc:
+            raise unittest.SkipTest(f"No window can be opened here: {exc}")
+        self.root.withdraw()
+        # Collect the window's objects here, on the main thread: Tcl crashes if another
+        # thread (such as a server's) happens to be the one that frees them.
+        self.addCleanup(gc.collect)
+        self.addCleanup(self.root.destroy)
+        self.addCleanup(lambda: vars(gui.session).clear())
+        gui.session.servers, gui.session.trusted, gui.session.token = [], None, None
+
+    def pinned_screen(self):
+        patches = (mock.patch.object(self.gui, "SITE_FINGERPRINT", "AA:BB"),
+                   mock.patch.object(self.gui, "SITE_SERVERS", [("10.0.0.1", 65432), ("10.0.0.2", 65433)]))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        return self.gui.LoginWindow(self.root, lambda: None)
+
+    def test_the_downloaded_copy_starts_with_the_servers_and_the_certificate(self):
+        screen = self.pinned_screen()
+        self.assertEqual(self.gui.session.trusted, "AA:BB")
+        self.assertEqual(screen.server_box.get(), "10.0.0.1:65432")
+
+    def test_the_plain_copy_starts_empty_and_trusts_the_first_certificate(self):
+        screen = self.gui.LoginWindow(self.root, lambda: None)
+        self.assertIsNone(self.gui.session.trusted)
+        self.assertEqual(screen.server_box.get(), "")
+        then = mock.Mock()
+        screen._trust(("10.0.0.1", 65432), ("CC:DD", {"status": "OK"}), None, then)
+        self.assertEqual(self.gui.session.trusted, "CC:DD")
+        then.assert_called_once()
+
+    def test_the_downloaded_copy_refuses_any_other_certificate(self):
+        screen = self.pinned_screen()
+        then = mock.Mock()
+        with mock.patch("gui.messagebox.askyesno") as ask:
+            screen._trust(("10.0.0.1", 65432), ("CC:DD", {"status": "OK"}), None, then)
+        ask.assert_not_called()
+        then.assert_not_called()
+        self.assertEqual(self.gui.session.trusted, "AA:BB")
+        self.assertIn("not the server", screen.message.cget("text"))
+
+    def test_the_downloaded_copy_tries_the_other_servers_if_the_first_is_down(self):
+        screen = self.pinned_screen()
+        asked = []
+
+        def fake_probe(address):
+            asked.append(address)
+            if address[0] == "10.0.0.1":
+                raise ConnectionRefusedError("down")
+            return "AA:BB", {"status": "OK", "servers": [["10.0.0.1", 65432], ["10.0.0.2", 65433]]}
+
+        done = []
+        screen.server_box.set("10.0.0.1:65432")
+        # Run the "background" work right here, so no thread outlives the window.
+        def run_here(work, finish):
+            try:
+                finish(work(), None)
+            except OSError as exc:
+                finish(None, exc)
+
+        with mock.patch.object(self.gui, "probe", fake_probe), mock.patch.object(screen, "_run", run_here):
+            screen._connect(lambda: done.append(True))
+        self.assertEqual(asked, [("10.0.0.1", 65432), ("10.0.0.2", 65433)])
+        self.assertEqual(done, [True])
