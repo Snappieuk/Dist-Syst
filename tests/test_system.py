@@ -149,6 +149,7 @@ class SystemTest(NodeTestCase):
             {
                 "asset_id", "description", "category", "location", "status",
                 "date_registered", "tags", "version", "request_id", "created_at", "updated_at",
+                "history",
             },
         )
         self.assertEqual(stored["description"], "Dell laptop")
@@ -1023,6 +1024,80 @@ class SystemTest(NodeTestCase):
                     file.write(content)
                 with self.assertRaises(ValueError):
                     node.load_assets()
+
+
+class ReviewLoanHistoryTest(NodeTestCase):
+    """Flagging assets added while the primary was offline, lending assets, and history."""
+
+    def ask(self, **request) -> dict:
+        return node.process_request(request)
+
+    def add(self, description="Dell laptop", **extra) -> dict:
+        reply = self.ask(action="REGISTER", asset=make_asset(description, **extra))
+        self.assertEqual(reply["status"], "OK", reply)
+        return reply["stored"]
+
+    def test_only_assets_added_by_a_backup_are_flagged(self):
+        self.assertNotIn("flagged", self.add("On the primary"))
+        node.ROLE = "backup"
+        flagged = self.add("On the backup")
+        self.assertTrue(flagged["flagged"])
+        self.assertIn("primary was offline", flagged["history"][0]["detail"])
+
+    def test_approving_clears_the_flag_and_is_recorded(self):
+        node.ROLE = "backup"
+        asset = self.add()
+        reply = self.ask(action="APPROVE", asset_id=asset["asset_id"], expected_version=1, user="alice")
+        self.assertFalse(reply["stored"]["flagged"])
+        self.assertEqual(reply["stored"]["version"], 2)
+        last = reply["stored"]["history"][-1]
+        self.assertEqual((last["action"], last["user"]), ("APPROVE", "alice"))
+
+    def test_a_loan_is_recorded_and_returned(self):
+        asset = self.add()
+        out = self.ask(action="CHECK_OUT", asset_id=asset["asset_id"], borrower="Sam Lee",
+                       start="2026-11-01", due="2026-11-14")["stored"]
+        self.assertEqual(out["status"], common.IN_USE)
+        self.assertEqual(out["loans"], [{"borrower": "Sam Lee", "start": "2026-11-01", "due": "2026-11-14",
+                                         "returned": None}])
+
+        back = self.ask(action="CHECK_IN", asset_id=asset["asset_id"], returned="2026-11-10")["stored"]
+        self.assertEqual(back["status"], common.NOT_IN_USE)
+        self.assertEqual(back["loans"][0]["returned"], "2026-11-10")
+        self.assertEqual([entry["action"] for entry in back["history"]], ["REGISTER", "CHECK_OUT", "CHECK_IN"])
+
+    def test_bad_loans_are_refused(self):
+        asset_id = self.add()["asset_id"]
+        for request in (
+            {"borrower": "Sam", "start": "2026-11-10", "due": "2026-11-01"},  # due before start
+            {"borrower": "Sam", "start": "10/11/2026", "due": "2026-11-20"},  # not YYYY-MM-DD
+            {"borrower": "", "start": "2026-11-01", "due": "2026-11-20"},    # no borrower
+        ):
+            with self.subTest(request):
+                self.assertEqual(self.ask(action="CHECK_OUT", asset_id=asset_id, **request)["code"], common.BAD_REQUEST)
+        self.assertEqual(self.ask(action="CHECK_IN", asset_id=asset_id)["code"], common.BAD_REQUEST)  # not on loan
+
+    def test_an_asset_on_loan_cant_be_lent_again(self):
+        asset_id = self.add()["asset_id"]
+        loan = {"borrower": "Sam", "start": "2026-11-01", "due": "2026-11-20"}
+        self.ask(action="CHECK_OUT", asset_id=asset_id, **loan)
+        reply = self.ask(action="CHECK_OUT", asset_id=asset_id, **dict(loan, borrower="Alex"))
+        self.assertEqual(reply["code"], common.CONFLICT)
+        self.assertIn("Sam", reply["detail"])
+
+    def test_status_changes_and_edits_are_in_the_history(self):
+        asset_id = self.add()["asset_id"]
+        self.ask(action="SET_STATUS", asset_id=asset_id, status=common.NOT_IN_USE)
+        edited = self.ask(action="EDIT", asset_id=asset_id, changes={"location": "Site B"})["stored"]
+        details = [entry["detail"] for entry in edited["history"]]
+        self.assertEqual(details[1], "Status changed from In Use to Not In Use")
+        self.assertIn("location to 'Site B'", details[2])
+
+    def test_sample_assets_are_tagged(self):
+        sample = self.add("Made up", sample=True)
+        self.assertTrue(sample["sample"])
+        self.assertIn(common.SAMPLE_TAG, sample["tags"])
+        self.assertNotIn(common.SAMPLE_TAG, self.add("Real")["tags"])
 
 
 class ReconcileTest(NodeTestCase):

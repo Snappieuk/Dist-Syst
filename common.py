@@ -206,6 +206,9 @@ OUT_OF_SYNC = "OUT_OF_SYNC"  # the backup missed a change, so it needs all the d
 
 # The only two statuses an asset can have. Every client offers just these, and the
 # server rejects anything else, because any program could send other text.
+# The tag every made-up asset gets, such as those from tools/fill.py and tools/demo.py.
+SAMPLE_TAG = "sample data"
+
 IN_USE = "In Use"
 NOT_IN_USE = "Not In Use"
 STATUSES = (IN_USE, NOT_IN_USE)
@@ -310,6 +313,10 @@ def generate_asset_tags(asset: dict) -> list:
     description = asset.get("description", "")
     for token in _phrase_to_tags(description)[:5]:
         add_tag(token)
+
+    # Made-up assets, such as tools/fill.py's, so they are easy to find and remove.
+    if asset.get("sample") is True:
+        add_tag(SAMPLE_TAG)
 
     return tags
 

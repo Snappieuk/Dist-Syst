@@ -33,6 +33,8 @@ from common import (
     BAD_REQUEST,
     CONFLICT,
     DUPLICATE_ASSET,
+    IN_USE,
+    NOT_IN_USE,
     INTERNAL,
     NOT_FOUND,
     NOT_PRIMARY,
@@ -263,6 +265,11 @@ def validate_asset(asset: object) -> dict:
     clean = {field: check_text(asset.get(field), field) for field in CLIENT_FIELDS}
     clean["status"] = check_status(clean["status"])
 
+    # Made-up assets, such as those from tools/fill.py, say so, and get a "sample data"
+    # tag, so they are easy to find and tell apart from real ones.
+    if asset.get("sample") is True:
+        clean["sample"] = True
+
     # The date and times come from the server, and any the client sent are ignored,
     # because client clocks can be wrong or in other time zones.
     clean["date_registered"] = datetime.date.today().isoformat()
@@ -329,6 +336,35 @@ def commit_change(change: dict, undo) -> None:
         on_change(dict(change, seq=last_seq))
 
 
+def history_entry(action: str, detail: str) -> dict:
+    """One line of an asset's history: when, what, who asked (if a web user did) and
+    which server did it."""
+    request = getattr(current, "request", None) or {}
+    return {"at": utc_timestamp(), "action": action, "detail": detail,
+            "user": request.get("user"), "server": ROLE}
+
+
+def with_history(asset: dict, action: str, detail: str) -> dict:
+    """Return a copy of an asset with one more line of history. Each asset carries its own
+    history, so it is copied to the other servers along with the asset."""
+    return dict(asset, history=asset.get("history", []) + [history_entry(action, detail)])
+
+
+def save_update(index: int, previous: dict, updated: dict) -> dict:
+    """Store a changed copy of an asset in place of the old one, and return the reply.
+    The caller must hold the lock, and has already added a line of history.
+
+    A new record replaces the old one rather than the old one being edited, because a
+    LIST reply may be being sent from the old one on another thread, outside the lock.
+    """
+    updated["version"] = previous.get("version", 0) + 1
+    updated["updated_at"] = utc_timestamp()
+    updated["tags"] = generate_asset_tags(updated)
+    assets[index] = updated
+    commit_change({"asset": updated}, lambda: assets.__setitem__(index, previous))
+    return {"status": "OK", "stored": updated}
+
+
 def register_asset(clean: dict, request_id: object) -> dict:
     """Store a validated asset under a new ID and return the reply.
 
@@ -369,6 +405,16 @@ def register_asset(clean: dict, request_id: object) -> dict:
         now = utc_timestamp()
         asset = dict(clean, asset_id=generate_asset_id(), request_id=request_id, version=1,
                      created_at=now, updated_at=now)
+
+        # Only the primary normally accepts changes. One registered while a backup was in
+        # charge is flagged, so someone can check it once the primary is back.
+        if ROLE == "primary":
+            asset = with_history(asset, "REGISTER", "Registered")
+        else:
+            asset["flagged"] = True
+            asset = with_history(asset, "REGISTER",
+                                 f"Registered by the {ROLE} server while the primary was offline, "
+                                 "so flagged for review")
         asset["tags"] = generate_asset_tags(asset)
 
         assets.append(asset)
@@ -414,7 +460,8 @@ def set_asset_status(asset_id: str, status: str, expected_version: object = None
         if conflict:
             return conflict
 
-        updated = dict(previous, status=status, version=previous.get("version", 0) + 1, updated_at=utc_timestamp())
+        updated = with_history(previous, "SET_STATUS", f"Status changed from {previous['status']} to {status}")
+        updated = dict(updated, status=status, version=previous.get("version", 0) + 1, updated_at=utc_timestamp())
         updated["tags"] = generate_asset_tags(updated)
 
         assets[index] = updated
@@ -472,14 +519,88 @@ def edit_asset(asset_id: str, changes: dict, expected_version: object = None) ->
                     existing_id=other["asset_id"],
                 )
 
-        updated["version"] = previous.get("version", 0) + 1
-        updated["updated_at"] = utc_timestamp()
-        updated["tags"] = generate_asset_tags(updated)
+        changed = ", ".join(f"{field} to {value!r}" for field, value in changes.items()
+                            if previous.get(field) != value)
+        updated = with_history(updated, "EDIT", f"Changed {changed}")
+        return save_update(index, previous, updated)
 
-        assets[index] = updated
-        commit_change({"asset": updated}, lambda: assets.__setitem__(index, previous))
 
-    return {"status": "OK", "stored": updated}
+def find_for_change(asset_id: str, expected_version: object) -> tuple:
+    """Find an asset that is about to be changed, returning its position, the asset and
+    None, or None, None and an error reply. The caller must hold the lock."""
+    if not accepts_writes:
+        return None, None, not_primary_reply()
+    index = find_asset(asset_id)
+    if index is None:
+        return None, None, error_reply(NOT_FOUND, f"No asset has the ID {asset_id!r}")
+    conflict = version_conflict(assets[index], expected_version)
+    if conflict:
+        return None, None, conflict
+    return index, assets[index], None
+
+
+def approve_asset(asset_id: str, expected_version: object = None) -> dict:
+    """Clear an asset's review flag, once someone has checked it, and return the reply.
+    Approving one that isn't flagged changes nothing."""
+    with assets_lock:
+        index, previous, error = find_for_change(asset_id, expected_version)
+        if error:
+            return error
+        if not previous.get("flagged"):
+            return {"status": "OK", "stored": previous}
+        updated = with_history(dict(previous, flagged=False), "APPROVE", "Approved after review")
+        return save_update(index, previous, updated)
+
+
+def check_date(value: object, name: str) -> str:
+    """Return a date given as YYYY-MM-DD, or raise ValueError."""
+    try:
+        return datetime.date.fromisoformat(check_text(value, name)).isoformat()
+    except ValueError:
+        raise ValueError(f"{name} must be a date written as YYYY-MM-DD") from None
+
+
+def current_loan(asset: dict) -> object:
+    """Return the loan an asset is out on, or None. Only the last loan can be unreturned."""
+    loans = asset.get("loans") or []
+    return loans[-1] if loans and loans[-1].get("returned") is None else None
+
+
+def check_out_asset(asset_id: str, borrower: str, start: str, due: str, expected_version: object = None) -> dict:
+    """Lend an asset to someone from `start` to `due`, and return the reply. Each asset
+    keeps every loan it has had, which is what the calendar shows."""
+    if due < start:  # ISO dates sort in date order
+        return error_reply(BAD_REQUEST, "The due date can't be before the start date")
+    with assets_lock:
+        index, previous, error = find_for_change(asset_id, expected_version)
+        if error:
+            return error
+        loan = current_loan(previous)
+        if loan:
+            return error_reply(CONFLICT, f"{asset_id} is already checked out to {loan['borrower']} until {loan['due']}")
+        loans = (previous.get("loans") or []) + [{"borrower": borrower, "start": start, "due": due, "returned": None}]
+        updated = with_history(dict(previous, loans=loans, status=IN_USE), "CHECK_OUT",
+                               f"Checked out to {borrower} from {start}, due back {due}")
+        return save_update(index, previous, updated)
+
+
+def check_in_asset(asset_id: str, returned: str = None, expected_version: object = None) -> dict:
+    """Record an asset on loan as returned, today unless another date is given, and
+    return the reply."""
+    returned = returned or datetime.date.today().isoformat()
+    with assets_lock:
+        index, previous, error = find_for_change(asset_id, expected_version)
+        if error:
+            return error
+        loan = current_loan(previous)
+        if loan is None:
+            return error_reply(BAD_REQUEST, f"{asset_id} isn't checked out")
+        if returned < loan["start"]:
+            return error_reply(BAD_REQUEST, "The return date can't be before the loan started")
+        loans = previous["loans"][:-1] + [dict(loan, returned=returned)]
+        updated = with_history(dict(previous, loans=loans, status=NOT_IN_USE), "CHECK_IN",
+                               f"Returned by {loan['borrower']} on {returned}")
+        return save_update(index, previous, updated)
 
 
 def delete_asset(asset_id: str, expected_version: object = None) -> dict:
@@ -616,6 +737,22 @@ def process_request(request: dict) -> dict:
         if action == "DELETE":
             asset_id = check_text(request.get("asset_id"), "asset_id")
             return delete_asset(asset_id, check_expected_version(request))
+
+        if action == "APPROVE":
+            asset_id = check_text(request.get("asset_id"), "asset_id")
+            return approve_asset(asset_id, check_expected_version(request))
+
+        if action == "CHECK_OUT":
+            asset_id = check_text(request.get("asset_id"), "asset_id")
+            borrower = check_text(request.get("borrower"), "borrower")
+            start, due = check_date(request.get("start"), "start"), check_date(request.get("due"), "due")
+            return check_out_asset(asset_id, borrower, start, due, check_expected_version(request))
+
+        if action == "CHECK_IN":
+            asset_id = check_text(request.get("asset_id"), "asset_id")
+            returned = request.get("returned")
+            returned = None if returned is None else check_date(returned, "returned")
+            return check_in_asset(asset_id, returned, check_expected_version(request))
     except ValueError as exc:
         return error_reply(BAD_REQUEST, str(exc))
     finally:
