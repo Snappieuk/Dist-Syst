@@ -62,6 +62,41 @@ async function call(request) {
   throw lastError;
 }
 
+// Step-by-step guide that asks for each field and re-asks until it is valid.
+async function registerGuide() {
+  const rl = require("readline/promises").createInterface({ input: process.stdin, output: process.stdout });
+  const ask = async (label) => {
+    for (;;) {
+      const value = (await rl.question(label)).trim();
+      if (value) return value;
+      console.log("  This can't be empty.");
+    }
+  };
+  console.log("\n--- Asset register guide ---");
+  const asset = {
+    asset_id: await ask("Asset ID (e.g. A1): "),
+    description: await ask("Description: "),
+    category: await ask("Category: "),
+    location: await ask("Location: "),
+  };
+  for (;;) {
+    const choice = (await rl.question("Status - 1) In Use  2) Not In Use: ")).trim();
+    if (choice === "1" || choice === "2") {
+      asset.status = choice === "1" ? "In Use" : "Not In Use";
+      break;
+    }
+    console.log("  Please type 1 or 2.");
+  }
+  console.log("\n" + JSON.stringify(asset, null, 2));
+  const ok = (await rl.question("Register this asset? (y/n): ")).trim().toLowerCase();
+  rl.close();
+  if (ok !== "y") {
+    console.log("Cancelled.");
+    process.exit(0);
+  }
+  return asset;
+}
+
 async function main() {
   const [username, password, command, ...args] = process.argv.slice(2);
   if (!command) {
@@ -85,7 +120,10 @@ async function main() {
       request = { action: "LIST", token };
       break;
     case "register":
-      request = { action: "REGISTER", token, request_id: id(), asset: JSON.parse(args[0]) };
+      request = {
+        action: "REGISTER", token, request_id: id(),
+        asset: args[0] ? JSON.parse(args[0]) : await registerGuide(),
+      };
       break;
     case "edit":
       request = {

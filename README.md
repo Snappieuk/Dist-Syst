@@ -72,12 +72,13 @@ python receive.py location=site a     # search one field
 ```
 node client.js x x ping
 node client.js alice secret list
+node client.js alice secret register
 node client.js alice secret register '{"asset_id":"A1","description":"Laptop","category":"IT","location":"HQ","status":"In Use"}'
 node client.js alice secret edit A1 <expected_version> '{"location":"Lab"}'
 node client.js admin secret delete A1 <expected_version>
 ```
 
-Each command except `ping` logs in first, then sends the request with a fresh `request_id` and prints the server's JSON reply. Only administrators can delete.
+Each command except `ping` logs in first, then sends the request with a fresh `request_id` and prints the server's JSON reply. `register` with no JSON starts a step-by-step guide that asks for each field, offers the two statuses as a menu, and asks you to confirm. Only administrators can delete.
 
 ### Resetting
 
