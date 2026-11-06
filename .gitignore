@@ -16,3 +16,12 @@ secret.key
 # The private key for TLS, which must never be shared
 server.key
 server.crt
+
+# Left behind by working on the extend-system branch in this same folder. None of it
+# belongs on this branch: built programs, the web accounts (password hashes), the
+# certificate and everything else the running system writes.
+*.exe
+data/
+tls.pem
+web_users.json
+web_password.json
