@@ -127,6 +127,9 @@ class DemoTest(ServerTestCase):
         self.assertIn("served by the primary", output)
         self.assertIn("served by the backup", output)
         self.assertNotIn("MISSING", output)
+        self.assertIn("FLAGGED FOR REVIEW", output)
+        self.assertIn("Approved", output)
+        self.assertIn("Checked", output)  # the first asset was lent out
         self.assertEqual(primary.returncode, 1)
         self.assertEqual(demo.held_by(self.servers[0]), set())
 

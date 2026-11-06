@@ -4,16 +4,19 @@ Shows a failover, step by step, on a running system.
     python tools/demo.py
 
 Start the system first, either with python start.py or with each server in its own
-terminal. The demo adds an asset, stops the primary as if it had crashed, adds another
-asset while the backup is in charge, waits for the primary to come back, shows that
-nothing was lost, then deletes the assets it added. It pauses between steps so you can
+terminal. The demo adds an asset and lends it out, stops the primary as if it had
+crashed, adds another asset while the backup is in charge (which is flagged for review),
+waits for the primary to come back, shows that nothing was lost, approves the flagged
+asset, then deletes the assets it added. Its assets are marked as sample data, like
+those from tools/fill.py, so they carry a "sample data" tag. It pauses between steps so you can
 explain what is happening, and the server logs show the same events from their side.
 
 start.py restarts the stopped primary by itself. If you started the servers in separate
 terminals, the demo tells you when to start server.py again.
 """
 
-import time  # times the failover, and waits for the primary to return
+import datetime  # the demo loan runs from today
+import time      # times the failover, and waits for the primary to return
 import os    # finds the project folder
 import sys   # sys.path is where Python looks for modules
 
@@ -59,7 +62,8 @@ def add_asset(description: str) -> tuple:
     and return the stored asset and the name of that server."""
     started = time.monotonic()
     reply = send_request(new_register_request(
-        {"description": description, "category": "Demo", "location": "Demo room", "status": IN_USE}
+        {"description": description, "category": "Demo", "location": "Demo room", "status": IN_USE,
+         "sample": True}
     ))
     if reply.get("status") != "OK":
         raise RuntimeError(f"The asset was not added: {reply.get('detail')}")
@@ -67,6 +71,22 @@ def add_asset(description: str) -> tuple:
     print(f"  Added {stored['asset_id']} ({description}) in {time.monotonic() - started:.1f} seconds,"
           f" served by the {reply['served_by']}.")
     return stored, reply["served_by"]
+
+
+def lend(asset: dict) -> None:
+    """Check the demo asset out for a week, so it shows on the web page's calendar."""
+    today = datetime.date.today()
+    reply = send_request({"action": "CHECK_OUT", "asset_id": asset["asset_id"], "borrower": "Demo borrower",
+                          "start": today.isoformat(), "due": (today + datetime.timedelta(days=7)).isoformat()})
+    if reply.get("status") == "OK":
+        print(f"  Checked {asset['asset_id']} out to Demo borrower for a week. It shows as a bar on the"
+              " web page's loans calendar.")
+
+
+def is_flagged(asset_id: str) -> bool:
+    """Whether the asset is waiting for review, according to whichever server answers."""
+    assets = send_request({"action": "LIST"}).get("assets", [])
+    return any(asset["asset_id"] == asset_id and asset.get("flagged") for asset in assets)
 
 
 def held_by(address: tuple) -> set:
@@ -113,6 +133,7 @@ def run_demo() -> bool:
     if first["asset_id"] in held_by(backup):
         print("  The backup already holds a copy, because the primary copies each change"
               " before replying.")
+    lend(first)
     pause()
 
     heading(3, "Stopping the primary, as if it had crashed")
@@ -128,6 +149,8 @@ def run_demo() -> bool:
     if served_by == "backup":
         print(f"  Its ID starts with {second['asset_id'][:5]}, because the backup issues IDs"
               " from its own range.")
+        if second.get("flagged"):
+            print("  It is FLAGGED FOR REVIEW, because it was added while the primary was offline.")
     else:
         print("  The primary was restarted before the backup took over, so it handled this.")
     show_servers()
@@ -152,7 +175,21 @@ def run_demo() -> bool:
     print("  Nothing was lost, including the change made while the primary was down.")
     pause()
 
-    heading(6, "Tidying up")
+    heading(6, "Reviewing the asset added while the primary was offline")
+    if is_flagged(second["asset_id"]):
+        print(f"  {second['asset_id']} is listed under \"Flagged for review\" on the web page and in"
+              " the GUI, where an admin can approve or deny it.")
+        current = {asset["asset_id"]: asset for asset in send_request({"action": "LIST"})["assets"]}
+        reply = send_request({"action": "APPROVE", "asset_id": second["asset_id"],
+                              "expected_version": current[second["asset_id"]]["version"]})
+        if reply.get("status") == "OK":
+            print(f"  Approved {second['asset_id']}, so it is no longer flagged. Its history records"
+                  " the approval.")
+    else:
+        print("  Nothing needs reviewing, because the primary handled every change.")
+    pause()
+
+    heading(7, "Tidying up")
     remove([first["asset_id"], second["asset_id"]])
     print("\nDemo complete.")
     return True
