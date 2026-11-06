@@ -117,8 +117,8 @@ python web.py
 After logging in, you can search, filter by status, sort by clicking a column heading, and
 add, edit and delete assets. Adding and editing open in a window over the page, and the
 result of each change appears briefly in the bottom corner. The page refreshes every 5
-seconds. Its summary cards show the totals and which server answered, in green for the
-primary and amber for the backup.
+seconds. The page has four tabs: Assets (the table, with totals showing which server
+answered, in green for the primary and amber for the backup), Loans, Calendar and Review.
 
 The button at the top right shows who is logged in and their role. It opens a small menu
 with Log out and, for admins, Manage accounts. That opens a window listing every account,
@@ -344,10 +344,13 @@ recorded with the asset: when, what, which web user asked and which server did i
 history travels with the asset, so every server has it. Click an asset on the web page,
 or double-click it (or use History) in the GUI, to see it.
 
-**Loans calendar.** Below the web page's table, a month at a time, each loan is a bar from
-its start to its end: green while out, red when overdue (running up to today) and grey once
-returned. It follows the search like the table, and clicking a bar shows that asset's
-history. Every loan an asset has had is kept, so past months show too.
+**Loans and calendar.** The Loans tab lists every loan, newest first, with a filter for
+on loan, overdue or returned. The Calendar tab shows a month at a time as a real calendar,
+weeks starting on Monday. Each loan is a bar across its days: green while out, red when
+overdue (running up to today) and grey once returned. A day with more loans than fit shows
+"+N more". Both cover all assets, and clicking a loan or bar shows that asset's history.
+Every loan an asset has had is kept, so past months show too. The Review tab is always
+there, and says so when nothing is waiting.
 
 **Totals.** The totals at the top of the web page count what the search and status filter
 match, so searching "switch" shows how many switches there are, how many are in use and
