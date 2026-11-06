@@ -51,7 +51,7 @@ const accountList = document.getElementById("account-list");
 const checkoutDialog = document.getElementById("checkout-dialog");
 const checkoutForm = document.getElementById("checkout-form");
 const historyDialog = document.getElementById("history-dialog");
-const reviewSection = document.getElementById("review-section");
+const reviewTable = document.getElementById("review-table");
 const reviewSelectAll = document.getElementById("review-select-all");
 
 const ROLE_DESCRIPTIONS = {
@@ -274,18 +274,23 @@ function reviewRow(asset) {
 
 function showReview() {
   const flagged = flaggedAssets();
-  reviewSection.hidden = flagged.length === 0;
+  // The Review page is always there. With nothing flagged it says so instead of vanishing.
+  reviewTable.hidden = flagged.length === 0;
+  document.getElementById("review-count").textContent = flagged.length;
+  document.getElementById("review-count").classList.toggle("waiting", flagged.length > 0);
   // Forget ticks on assets that are no longer flagged.
   reviewChecked = new Set(flagged.map((asset) => asset.asset_id).filter((id) => reviewChecked.has(id)));
 
-  document.getElementById("review-explanation").textContent = flagged.length === 1
-    ? "This asset was added while the primary server was offline. Check it, then approve or deny it."
-    : `These ${flagged.length} assets were added while the primary server was offline. Check them, then approve or deny them.`;
+  document.getElementById("review-explanation").textContent = flagged.length === 0
+    ? "Nothing is waiting for review. An asset appears here when it is added while the primary server is offline."
+    : flagged.length === 1
+      ? "This asset was added while the primary server was offline. Check it, then approve or deny it."
+      : `These ${flagged.length} assets were added while the primary server was offline. Check them, then approve or deny them.`;
   document.getElementById("review-assets").replaceChildren(...flagged.map(reviewRow));
 
   const isAdmin = role === "admin";
-  document.getElementById("review-buttons").hidden = !isAdmin;
-  document.getElementById("review-note").hidden = isAdmin;
+  document.getElementById("review-buttons").hidden = !isAdmin || flagged.length === 0;
+  document.getElementById("review-note").hidden = isAdmin || flagged.length === 0;
   reviewSelectAll.disabled = !isAdmin;
   reviewSelectAll.checked = flagged.length > 0 && reviewChecked.size === flagged.length;
   reviewSelectAll.indeterminate = reviewChecked.size > 0 && reviewChecked.size < flagged.length;
@@ -841,7 +846,28 @@ function showAssets() {
   tableBody.replaceChildren(...rows);
   showMessage(visible);
   showReview();
-  showCalendar(visible);
+  showCalendar(allAssets);
+}
+
+// ---------- Pages ----------
+
+// The page is chosen by the address after the #, so a page can be bookmarked and the
+// browser's back button moves between pages. Anything unknown means the first page.
+const PAGES = ["assets", "calendar", "review"];
+
+function showPage() {
+  const wanted = location.hash.slice(1);
+  const page = PAGES.includes(wanted) ? wanted : PAGES[0];
+  for (const section of document.querySelectorAll("[data-page]")) {
+    section.hidden = section.dataset.page !== page;
+  }
+  for (const tab of document.querySelectorAll("[data-tab]")) {
+    if (tab.dataset.tab === page) {
+      tab.setAttribute("aria-current", "page");
+    } else {
+      tab.removeAttribute("aria-current");
+    }
+  }
 }
 
 // Status is free text, so the choices come from the assets themselves. The current
@@ -1047,4 +1073,6 @@ document.getElementById("deny-all").addEventListener("click", () => review(flagg
 editCancel.addEventListener("click", stopEdit);
 
 makeHeadingsSortable();
+window.addEventListener("hashchange", showPage);
+showPage();
 refreshRepeatedly();

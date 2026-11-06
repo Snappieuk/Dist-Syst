@@ -275,6 +275,47 @@ a.menu-item:hover {
   }
 }
 
+/* ---- The page tabs under the top bar ---- */
+
+/* Plain text links with a line under the current one, like a printed index. */
+.tabs {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs a {
+  margin-bottom: -1px;  /* the current tab's line covers the rule under the row */
+  padding: 8px 2px;
+  border-bottom: 3px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tabs a:hover {
+  color: var(--text);
+}
+
+.tabs a[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+/* How many are waiting, in amber once there is something to do. */
+.count {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.count.waiting {
+  color: var(--warning);
+  font-weight: 700;
+}
+
 /* ---- Forms and buttons ---- */
 
 label {
@@ -402,12 +443,11 @@ button.primary-action {
   white-space: nowrap;
 }
 
+/* Nothing on the page sits in a box. Sections are separated by plain rules and white space,
+   and only things that really float over the page (windows, the menu and notices) have
+   an edge. */
 .panel {
-  padding: 16px 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  padding: 0;
 }
 
 /* ---- Logging in ---- */
@@ -425,8 +465,8 @@ button.primary-action {
   width: 100%;
   max-width: 380px;
   box-sizing: border-box;
-  padding: 32px;
-  border-top: 3px solid var(--text);  /* the same heavy rule as the totals strip */
+  padding: 24px 0 0;
+  border-top: 3px solid var(--text);
 }
 
 .login-head {
@@ -479,27 +519,21 @@ button.primary-action {
   color: var(--problem);
 }
 
-/* The totals sit in one ruled strip, divided by thin lines, rather than separate cards.
-   The heavier line along the top is in the text colour. */
+/* The totals are a plain row of figures between two rules, not a set of cards. */
 .stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 40px;
   margin-bottom: 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  padding: 12px 0;
   border-top: 3px solid var(--text);
+  border-bottom: 1px solid var(--border);
 }
 
 .stat {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 14px 18px;
-  border-right: 1px solid var(--border);
-}
-
-.stat:last-child {
-  border-right: 0;
+  gap: 2px;
 }
 
 .stat-label {
@@ -562,7 +596,6 @@ button.primary-action {
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 14px;
-  padding: 10px;
 }
 
 .search-field {
@@ -586,13 +619,9 @@ button.primary-action {
 
 /* ---- The table ---- */
 
-/* A wide table scrolls inside this box, so a phone's page itself does not scroll sideways. */
+/* A wide table scrolls sideways inside this wrapper, so a phone's page itself does not. */
 .table-wrap {
   overflow-x: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
 }
 
 table {
@@ -668,23 +697,23 @@ td {
 }
 
 /* Keep IDs, statuses and dates on one line. */
-td:first-child,
-td:nth-child(5),
-td:nth-child(7) {
+#assets td:first-child,
+#assets td:nth-child(5),
+#assets td:nth-child(7) {
   white-space: nowrap;
 }
 
-td:first-child {
+#assets td:first-child {
   font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
   font-size: 0.85rem;
   font-weight: 600;
 }
 
-td:nth-child(2) {
+#assets td:nth-child(2) {
   font-weight: 600;
 }
 
-td:nth-child(7) {
+#assets td:nth-child(7) {
   color: var(--muted);
 }
 
@@ -920,29 +949,9 @@ button.icon-button:hover {
 
 /* ---- Flagged for review ---- */
 
-/* Stands out with a heavy amber edge, because these assets need someone's attention. */
-.review {
-  margin-bottom: 18px;
-  padding: 16px 18px;
-  border-left: 4px solid var(--warning);
-}
-
-.review-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.review-head h2 {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
 .review-head p,
-.review-note {
+.review-note,
+#review-explanation {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
@@ -1056,13 +1065,6 @@ tbody tr.clickable:focus-visible {
 }
 
 /* ---- Loans calendar ---- */
-
-.calendar-section {
-  padding: 16px 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--text);
-}
 
 .calendar-head {
   display: flex;
