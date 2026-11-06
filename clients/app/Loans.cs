@@ -96,10 +96,12 @@ namespace AssetApp
         // ---- Loans tab ----
 
         readonly ListView loanList = NewList();
+        readonly FlowLayoutPanel loanButtons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 6) };
 
         void BuildLoansTab()
         {
             TabPage page = new TabPage("Loans");
+            AddButton(loanButtons, "Check in", delegate { CheckInSelectedLoan(); });
             loanList.Columns.Add("Asset ID", 100);
             loanList.Columns.Add("Description", 240);
             loanList.Columns.Add("Borrower", 140);
@@ -107,31 +109,62 @@ namespace AssetApp
             loanList.Columns.Add("Due", 90);
             loanList.Columns.Add("Returned", 100);
             page.Controls.Add(loanList);
+            page.Controls.Add(loanButtons);   // added last so it sits above the table
             tabs.TabPages.Add(page);
         }
 
+        // Check in the asset of the selected loan. Only a loan still out can be checked in.
+        void CheckInSelectedLoan()
+        {
+            if (loanList.SelectedItems.Count == 0 || loanList.SelectedItems[0].Tag == null)
+            {
+                MessageBox.Show(this, "Select a loan that is still out (one with no return date) first.", "Check in", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            Dictionary<string, object> asset = (Dictionary<string, object>)loanList.SelectedItems[0].Tag;
+            Dictionary<string, object> loan = CurrentLoan(asset);
+            if (loan == null) return;
+            if (MessageBox.Show(this, J.Text(asset, "asset_id") + " is out on loan to " + J.Text(loan, "borrower") + ".\nCheck it back in?",
+                                "Check in", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            Dictionary<string, object> back = Net.Request("CHECK_IN");
+            back["asset_id"] = J.Text(asset, "asset_id");
+            back["expected_version"] = J.Number(asset, "version");
+            Perform(back, "Asset checked in", null);
+        }
+
         // Every loan of the assets shown, oldest start date first. Dates are yyyy-MM-dd,
-        // so sorting them as text sorts them by date.
+        // so sorting them as text sorts them by date. A loan still out keeps its asset in
+        // the row's Tag, which is what Check in uses.
         void FillLoans()
         {
             List<string[]> rows = new List<string[]>();
-            List<bool> overdue = new List<bool>();
+            List<Dictionary<string, object>> owners = new List<Dictionary<string, object>>();
             foreach (Dictionary<string, object> asset in assets)
                 foreach (Dictionary<string, object> loan in J.Objects(asset, "loans"))
                 {
-                    bool late = J.Text(loan, "returned") == "" && IsOverdue(loan);
-                    string returned = J.Text(loan, "returned") != "" ? J.Text(loan, "returned") : (late ? "Overdue" : "");
+                    bool out_ = J.Text(loan, "returned") == "";
+                    string returned = !out_ ? J.Text(loan, "returned") : (IsOverdue(loan) ? "Overdue" : "");
                     rows.Add(new string[] { J.Text(asset, "asset_id"), J.Text(asset, "description"), J.Text(loan, "borrower"),
                                             J.Text(loan, "start"), J.Text(loan, "due"), returned });
+                    owners.Add(out_ ? asset : null);
                 }
-            rows.Sort(delegate(string[] a, string[] b) { return string.CompareOrdinal(a[3], b[3]); });
+
+            // Sort the rows and their owners together, by start date.
+            int[] order = new int[rows.Count];
+            for (int i = 0; i < order.Length; i++) order[i] = i;
+            Array.Sort(order, delegate(int a, int b)
+            {
+                int byStart = string.CompareOrdinal(rows[a][3], rows[b][3]);
+                return byStart != 0 ? byStart : a.CompareTo(b);
+            });
 
             loanList.BeginUpdate();
             loanList.Items.Clear();
-            foreach (string[] row in rows)
+            foreach (int i in order)
             {
-                ListViewItem item = new ListViewItem(row);
-                if (row[5] == "Overdue") item.ForeColor = Color.Firebrick;
+                ListViewItem item = new ListViewItem(rows[i]);
+                item.Tag = owners[i];
+                if (rows[i][5] == "Overdue") item.ForeColor = Color.Firebrick;
                 loanList.Items.Add(item);
             }
             loanList.EndUpdate();

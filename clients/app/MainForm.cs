@@ -41,6 +41,7 @@ namespace AssetApp
             BuildAssetsTab();
             BuildAssetButtons();
             BuildLoansTab();
+            BuildPeopleTab();
             BuildReviewTab();
 
             Shown += delegate { Refresh_(); StartAutoRefresh(); };
@@ -205,6 +206,7 @@ namespace AssetApp
                     assets = J.Objects(list, "assets");
                     FillAssets();
                     FillLoans();
+                    FillPeople();
                     FillReview();
                     statusText.Text = assets.Count + " assets, served by " + J.Text(list, "served_by");
                 }
@@ -271,6 +273,7 @@ namespace AssetApp
                 assets = fresh;
                 FillAssets();
                 FillLoans();
+                FillPeople();
                 FillReview();
 
                 foreach (ListViewItem row in assetList.Items)
