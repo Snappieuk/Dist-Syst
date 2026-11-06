@@ -1,4 +1,4 @@
-// Stand-in tabs, filled in by the next steps.
+// Stand-in for the Review tab, filled in by the next step.
 
 using System.Windows.Forms;
 
@@ -6,9 +6,6 @@ namespace AssetApp
 {
     partial class MainForm
     {
-        void BuildMoreAssetButtons() { }
-        void BuildLoansTab() { }
-        void FillLoans() { }
         void BuildReviewTab() { }
         void FillReview() { }
     }
