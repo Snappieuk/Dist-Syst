@@ -1045,11 +1045,53 @@ td.loan-out {
 }
 
 .people-table {
-  min-width: 480px;
+  min-width: 560px;
+}
+
+.people-table td {
+  vertical-align: top;
 }
 
 .people-table td:last-child {
   text-align: right;
+}
+
+/* The badge and the name with the item count under it. */
+.person-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.person-name small {
+  color: var(--muted);
+}
+
+/* One line per item the person has out. */
+.person-loans {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.person-loans li {
+  padding: 3px 0;
+}
+
+.person-loans li + li {
+  border-top: 1px solid var(--border);
+}
+
+.loan-due {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.loan-due.overdue {
+  color: var(--problem);
+  font-weight: 600;
 }
 
 #people-message {

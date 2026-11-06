@@ -491,12 +491,41 @@ function showPeople() {
     return option;
   }));
 
+  // One row per person: who they are and how many items, then one line per item with
+  // what it is and when it is due back, so nothing has to be looked up elsewhere.
   const rows = people.map((person) => {
     const row = document.createElement("tr");
+
     const nameCell = document.createElement("td");
-    nameCell.textContent = person.name;
+    nameCell.className = "person-name";
+    const badge = document.createElement("span");
+    badge.className = "avatar";
+    badge.setAttribute("aria-hidden", "true");
+    badge.textContent = person.name.charAt(0).toUpperCase();
+    const label = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = person.name;
+    const count = document.createElement("small");
+    count.textContent = `${person.assets.length} ${person.assets.length === 1 ? "item" : "items"}`;
+    label.append(name, document.createElement("br"), count);
+    nameCell.append(badge, label);
+
     const itemsCell = document.createElement("td");
-    itemsCell.textContent = person.assets.map((asset) => asset.asset_id).join(", ");
+    const list = document.createElement("ul");
+    list.className = "person-loans";
+    for (const asset of [...person.assets].sort((a, b) => currentLoan(a).due.localeCompare(currentLoan(b).due))) {
+      const loan = currentLoan(asset);
+      const item = document.createElement("li");
+      const id = document.createElement("strong");
+      id.textContent = asset.asset_id;
+      const due = document.createElement("span");
+      due.className = isOverdue(loan) ? "loan-due overdue" : "loan-due";
+      due.textContent = isOverdue(loan) ? `Overdue, was due ${loan.due}` : `Due ${loan.due}`;
+      item.append(id, ` ${asset.description} `, due);
+      list.append(item);
+    }
+    itemsCell.append(list);
+
     const actionCell = document.createElement("td");
     const remove = document.createElement("button");
     remove.type = "button";
