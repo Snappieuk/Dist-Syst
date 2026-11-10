@@ -38,6 +38,7 @@ met and which tests prove it.
 | `receive.py` | Command-line query client, with optional search. |
 | `gui.py` | Tkinter GUI: log in, register, view, search, page through, edit and delete. |
 | `seed.py` | Fills a running server with sample assets, then edits and deletes some, so every stored field has a value. |
+| `client.cs` | C# client that needs nothing installed on Windows: it is built with the C# compiler included with Windows. Same commands and JSON-only messages as `client.js`. |
 | `client.js` | Minimal Node.js client with no dependencies. It talks to the server only in JSON (TLS, 4-byte length header, UTF-8 JSON object) and fails over to the backup. |
 | `config.json` | Hosts, ports, timeouts, size limits and file names. |
 | `requirements.txt` | The one third-party package: `cryptography`, used only by `certificate.py`. |
@@ -95,6 +96,36 @@ node client.js admin secret delete A1 <expected_version>
 ```
 
 Each command except `ping` logs in first, then sends the request with a fresh `request_id` and prints the server's JSON reply. `register` with no JSON starts a step-by-step guide that asks for each field, offers the two statuses as a menu, and asks you to confirm. Only administrators can delete.
+
+### C# client
+
+`client.cs` is a client written in C#. It needs nothing installed on Windows: it is
+compiled with the C# compiler that comes with the .NET Framework, which is part of
+Windows 10 and 11, and uses only .NET Framework libraries. Build it once from this
+folder:
+
+```
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs
+```
+
+This creates `client.exe`. Run it from this folder, since it reads `config.json` and
+`server.crt` beside itself:
+
+```
+client.exe x x ping
+client.exe alice secret list
+client.exe alice secret register
+client.exe alice secret register asset_id=A1 description=Laptop category=IT location=HQ "status=In Use"
+client.exe alice secret edit A1 <expected_version> location=Lab
+client.exe admin secret delete A1 <expected_version>
+```
+
+It works like `client.js`: the first two arguments are always the username and
+password, `register` with no fields starts a step-by-step guide, and it tries the
+backup if the primary can't be reached. It only connects to a server that presents
+exactly the certificate in `server.crt`. Fields are given as `field=value`, which
+avoids PowerShell removing the quotes from JSON on the command line, but one JSON
+object also works. It exits with 1 if the reply is an error.
 
 ### Resetting
 
