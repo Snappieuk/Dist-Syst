@@ -3,5 +3,8 @@
   // and searches. They are regenerated whenever a program runs, so are never edited.
   "files.exclude": {
     "**/__pycache__": true
-  }
+  },
+  // Have Pylance check every Python file in the project, including ones that aren't open,
+  // so the Problems panel lists every issue.
+  "python.analysis.diagnosticMode": "workspace"
 }
