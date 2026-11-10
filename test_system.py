@@ -25,6 +25,7 @@ import ssl
 import certificate
 import common
 import receive
+import seed
 import send
 import server
 import users
@@ -942,6 +943,40 @@ class ChangeTest(ServerTestCase):
             self.assertEqual(self.edit("AST-0001", 1, request_id="e", location="X")["code"], common.INTERNAL)
         self.assertEqual(self.listed()[0]["location"], "Site A")
         self.assertNotIn("e", self.server.requests)
+
+
+class SeedTest(ServerTestCase):
+    """seed.py fills the server with sample assets that use every field."""
+
+    def run_seed(self, username: str, password: str, arguments: list) -> str:
+        output = io.StringIO()
+        with mock.patch("builtins.input", return_value=username), mock.patch("getpass.getpass", return_value=password), \
+                contextlib.redirect_stdout(output):
+            seed.main(self.config, arguments)
+        return output.getvalue()
+
+    def test_an_administrator_fills_every_field_of_a_stored_asset(self):
+        output = self.run_seed("admin", ADMIN_PASSWORD, ["20"])
+        self.assertIn("Registered 20 sample assets, edited 6 and deleted 2.", output)
+        stored = list(self.server.assets.values())
+        self.assertEqual(len(stored), 20)
+        self.assertEqual(len(self.listed()), 18)  # the deleted ones are left out
+        self.assertEqual({asset["status"] for asset in stored}, set(common.STATUSES))
+        for field in common.ASSET_FIELDS + ("version", "created_at", "updated_at"):
+            self.assertTrue(all(asset[field] for asset in stored), field)
+        self.assertTrue(any(asset["version"] > 1 and asset["updated_at"] for asset in stored))
+        self.assertTrue(any(asset.get("deleted") and asset.get("deleted_at") for asset in stored))
+
+    def test_running_it_again_skips_taken_ids_and_an_ordinary_user_deletes_nothing(self):
+        self.run_seed("admin", ADMIN_PASSWORD, ["10"])
+        output = self.run_seed("alice", USER_PASSWORD, ["10"])
+        self.assertIn("You are not an administrator", output)
+        self.assertIn("Registered 10 sample assets, edited 3 and deleted 0.", output)
+        self.assertIn("Skipped 10 asset IDs", output)
+        self.assertIn("SEED-0020", self.server.assets)
+
+    def test_a_bad_count_prints_the_usage(self):
+        self.assertIn("Usage", self.run_seed("admin", ADMIN_PASSWORD, ["lots"]))
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ met and which tests prove it.
 | `send.py` | Command-line registration client. |
 | `receive.py` | Command-line query client, with optional search. |
 | `gui.py` | Tkinter GUI: log in, register, view, search, page through, edit and delete. |
+| `seed.py` | Fills a running server with sample assets, then edits and deletes some, so every stored field has a value. |
 | `client.js` | Minimal Node.js client with no dependencies. It talks to the server only in JSON (TLS, 4-byte length header, UTF-8 JSON object) and fails over to the backup. |
 | `config.json` | Hosts, ports, timeouts, size limits and file names. |
 | `requirements.txt` | The one third-party package: `cryptography`, used only by `certificate.py`. |
@@ -64,6 +65,21 @@ python receive.py           # list every asset
 python receive.py laptop    # search every field
 python receive.py location=site a     # search one field
 ```
+
+### Sample data
+
+To fill a running server with sample assets so every field has a value:
+
+```
+python seed.py              # 30 assets
+python seed.py 100          # 100 assets
+```
+
+It logs in, then registers assets `SEED-0001`, `SEED-0002` and so on, with both
+statuses and a range of categories and locations. Every third asset is then edited, so
+`version` and `updated_at` change. If you log in as an administrator, every tenth asset
+is also deleted, so `deleted` and `deleted_at` are filled. IDs that are already taken
+are skipped, so you can run it again to add more.
 
 ### Node.js client
 
