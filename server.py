@@ -5,10 +5,9 @@ An asset server. Every server in the system is this one program.
     python server.py --backup 1   runs the second address in the list
     python server.py --backup 2   runs the third, and so on
 
-Each runs as its own process with its own data file, possibly on its own machine. The
-flag only says which entry in the server list (in config.json) this server is. To add a
-server, add its address to the end of the list on every machine and start it with the
-next number.
+Each runs as its own process with its own data file, all on this one machine. The flag
+only says which entry in the server list (in config.json) this server is. To add a server,
+add another 127.0.0.1 address to the end of the list and start it with the next number.
 
 One rule decides everything: the order of the list is the order of succession.
 

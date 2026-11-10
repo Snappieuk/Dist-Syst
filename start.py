@@ -10,8 +10,7 @@ each had been started in its own terminal. They share this window, so each log l
 says which one wrote it. Press Ctrl+C to stop them all.
 
 If one of them stops after starting properly, for example because demo.py stopped it,
-the others carry on and it is restarted after RESTART_SECONDS, the way a cluster manager
-such as Kubernetes restarts a failed server. One that fails as it starts, usually because
+the others carry on and it is restarted after RESTART_SECONDS. One that fails as it starts, usually because
 its port is in use, stops everything instead, so it can't be restarted over and over.
 """
 

@@ -642,12 +642,12 @@ def certificate_fingerprint() -> str:
 
 
 def site_servers(web_host: str) -> list:
-    """The servers' (host, port) pairs, with loopback names replaced by the host the browser
-    used to reach this page, because "127.0.0.1" means nothing on another computer."""
+    """The servers' (host, port) pairs as another computer would reach them. Every server is
+    on this machine, so each one is the host the browser used to reach this page, with the
+    server's own port, because "127.0.0.1" means nothing on another computer."""
     if not SAFE_HOST.fullmatch(web_host or ""):
         raise ValueError("The web page was reached by an address that can't be used")
-    return [(web_host if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0") else host, port)
-            for host, port in common.SERVERS]
+    return [(web_host, port) for _host, port in common.SERVERS]
 
 
 def site_url(host_header: str) -> Optional[str]:

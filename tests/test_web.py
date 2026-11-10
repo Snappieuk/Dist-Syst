@@ -1221,10 +1221,10 @@ class GuiDownloadTest(WebTestCase):
         # The test's asset server is on 127.0.0.1, which is what the browser used too.
         self.assertEqual(settings["SITE_SERVERS"], [tuple(self.asset_server)])
 
-    def test_loopback_servers_become_the_address_the_browser_used(self):
-        with mock.patch.object(common, "SERVERS", [("127.0.0.1", 65432), ("10.0.0.5", 65433)]):
+    def test_the_servers_are_reached_by_the_address_the_browser_used(self):
+        with mock.patch.object(common, "SERVERS", [("127.0.0.1", 65432), ("localhost", 65433)]):
             source = web.gui_with_site_settings("files.example")
-        self.assertIn("SITE_SERVERS = [('files.example', 65432), ('10.0.0.5', 65433)]\n", source)
+        self.assertIn("SITE_SERVERS = [('files.example', 65432), ('files.example', 65433)]\n", source)
 
     def test_it_holds_no_secrets(self):
         _, _, body = self.download()
@@ -1280,9 +1280,9 @@ class AppDownloadTest(WebTestCase):
             with open(os.path.join(web.APP_SOURCE_FOLDER, name), "rb") as file:
                 self.assertNotIn(web.APP_MARKER, file.read())
 
-    def test_loopback_servers_become_the_address_the_browser_used(self):
-        with mock.patch.object(common, "SERVERS", [("127.0.0.1", 65432), ("10.0.0.5", 65433)]):
-            self.assertEqual(web.site_servers("files.example"), [("files.example", 65432), ("10.0.0.5", 65433)])
+    def test_the_servers_are_reached_by_the_address_the_browser_used(self):
+        with mock.patch.object(common, "SERVERS", [("127.0.0.1", 65432), ("localhost", 65433)]):
+            self.assertEqual(web.site_servers("files.example"), [("files.example", 65432), ("files.example", 65433)])
 
     def test_the_page_links_to_it(self):
         _, _, body = self.fetch("/")

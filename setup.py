@@ -250,7 +250,7 @@ def reset() -> bool:
         print("Stopping them...")
         if not stop_programs():
             print(f"Nothing was deleted, because these are still running: {', '.join(running_programs())}")
-            print("Stop them yourself (a server on another machine has to be stopped there), then run this again.")
+            print("Stop them yourself, then run this again.")
             return False
 
     failed = []

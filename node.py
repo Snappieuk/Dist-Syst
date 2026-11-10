@@ -977,10 +977,9 @@ def listening_address(address: tuple) -> tuple:
     """Return the address this server should listen on: every network connection this
     machine has (0.0.0.0), on the port from its own entry in SERVERS.
 
-    The host in SERVERS is only the name other programs use to reach it, and may not even
-    belong to this machine (a router, a container), so it is not used for listening. That
-    also means a GUI on another device can connect without any extra setting. Setting
-    ASSET_LISTEN_HOST, for example to 127.0.0.1, listens on just that address instead.
+    The host in SERVERS is always 127.0.0.1, which is how programs on this machine reach
+    it. Listening everywhere instead means a GUI on another device can connect without any
+    extra setting. Setting ASSET_LISTEN_HOST to 127.0.0.1 accepts only this machine.
     """
     return (os.environ.get("ASSET_LISTEN_HOST") or "0.0.0.0", address[1])
 
