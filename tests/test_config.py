@@ -153,38 +153,11 @@ class ConfigFileTest(unittest.TestCase):
         self.write({"timeout": 5})
         self.assertIn("unknown settings: timeout", self.show())
 
-    def test_the_proxy_settings_default_to_off_and_loopback(self):
-        self.assertEqual(self.proxy_settings(), "False 127.0.0.1")
-
-    def test_the_proxy_settings_are_read_from_the_file(self):
-        self.write({"behind_https_proxy": True, "trusted_proxy": "192.168.1.5"})
-        self.assertEqual(self.proxy_settings(), "True 192.168.1.5")
-
-    def test_the_proxy_environment_variables_override_the_file(self):
-        self.write({"behind_https_proxy": False, "trusted_proxy": "192.168.1.5"})
-        self.assertEqual(self.proxy_settings(**{common.BEHIND_HTTPS_PROXY_VARIABLE: "true",
-                                                common.TRUSTED_PROXY_VARIABLE: "10.0.0.2"}), "True 10.0.0.2")
-
-    def test_bad_proxy_settings_are_refused(self):
-        for settings in ({"behind_https_proxy": "yes"}, {"trusted_proxy": ""}, {"trusted_proxy": 5}):
-            with self.subTest(settings):
-                self.write(settings)
-                with self.assertRaises(ValueError):
-                    common.load_config(self.path)
-
-    def proxy_settings(self, **variables) -> str:
-        result = run_with({"ASSET_CONFIG": self.path, common.BEHIND_HTTPS_PROXY_VARIABLE: None,
-                           common.TRUSTED_PROXY_VARIABLE: None, **variables},
-                          "import common; print(common.BEHIND_HTTPS_PROXY, common.TRUSTED_PROXY)")
-        return (result.stdout + result.stderr).strip()
-
     def test_the_example_file_matches_the_defaults(self):
         settings = common.load_config(os.path.join(FOLDER, "config.example.json"))
 
         self.assertEqual(settings["servers"], common.DEFAULT_SERVERS)
         self.assertEqual(settings["web_address"], common.DEFAULT_WEB_ADDRESS)
-        self.assertEqual((settings["behind_https_proxy"], settings["trusted_proxy"]),
-                         (False, common.DEFAULT_TRUSTED_PROXY))
         self.assertEqual((settings["timeout_seconds"], settings["heartbeat_timeout_seconds"],
                           settings["failover_wait_seconds"]), (5, 1, 15))
 

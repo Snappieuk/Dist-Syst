@@ -848,12 +848,11 @@ class AuditLogTest(WebTestCase):
 
 
 class ProxyTest(WebTestCase):
-    """Behind an HTTPS reverse proxy: a Secure cookie, and the real address in the log."""
+    """Behind an HTTPS reverse proxy: a Secure cookie, and the real address in the log.
+    Nothing is configured: the proxy's own headers are all web.py needs."""
 
-    def behind_proxy(self, trusted: str = "127.0.0.1") -> None:
-        for name, value in (("BEHIND_HTTPS_PROXY", True), ("TRUSTED_PROXY", trusted)):
-            self.addCleanup(setattr, web, name, getattr(web, name))
-            setattr(web, name, value)
+    # What Nginx Proxy Manager adds to every request it passes on.
+    PROXY = {"X-Forwarded-Proto": "https"}
 
     def login_logged(self, headers: dict) -> tuple:
         body = {"username": USERNAME, "password": PASSWORD}
@@ -861,42 +860,33 @@ class ProxyTest(WebTestCase):
             _, response, _ = self.fetch("/api/login", "POST", body, extra_headers=headers, cookie=None)
         return response, "\n".join(logs.output)
 
-    def test_the_cookie_is_not_secure_by_default(self):
+    def test_the_cookie_is_not_secure_when_reached_directly(self):
         _, headers, _ = self.fetch("/api/login", "POST", {"username": USERNAME, "password": PASSWORD}, cookie=None)
         self.assertNotIn("Secure", headers["Set-Cookie"])
 
-    def test_the_cookie_is_secure_behind_a_proxy(self):
-        self.behind_proxy()
-        headers, _ = self.login_logged({})
+    def test_the_cookie_is_secure_through_a_proxy(self):
+        headers, _ = self.login_logged(self.PROXY)
         self.assertIn("; Secure", headers["Set-Cookie"])
         self.assertIn("HttpOnly", headers["Set-Cookie"])
 
-    def test_logging_out_also_sends_a_secure_cookie_behind_a_proxy(self):
-        self.behind_proxy()
-        _, headers, _ = self.fetch("/api/logout", "POST")
+    def test_logging_out_also_sends_a_secure_cookie_through_a_proxy(self):
+        _, headers, _ = self.fetch("/api/logout", "POST", extra_headers=self.PROXY)
         self.assertIn("; Secure", headers["Set-Cookie"])
 
-    def test_the_forwarded_address_is_logged_when_the_proxy_is_trusted(self):
-        self.behind_proxy()
-        _, text = self.login_logged({"X-Forwarded-For": "203.0.113.9"})
-        self.assertIn(f"{USERNAME} logged in from 203.0.113.9", text)
+    def test_the_forwarded_address_is_logged_with_the_real_one(self):
+        _, text = self.login_logged({**self.PROXY, "X-Forwarded-For": "203.0.113.9"})
+        self.assertIn(f"{USERNAME} logged in from 203.0.113.9 via 127.0.0.1", text)
 
-    def test_only_the_address_the_proxy_added_is_believed(self):
-        self.behind_proxy()
+    def test_only_the_address_the_proxy_added_is_used(self):
         _, text = self.login_logged({"X-Forwarded-For": "6.6.6.6, 203.0.113.9"})
-        self.assertIn("logged in from 203.0.113.9", text)
+        self.assertIn("logged in from 203.0.113.9 via 127.0.0.1", text)
 
-    def test_the_header_is_ignored_when_the_request_is_not_from_the_proxy(self):
-        self.behind_proxy(trusted="10.9.9.9")
-        _, text = self.login_logged({"X-Forwarded-For": "203.0.113.9"})
+    def test_without_the_header_only_the_real_address_is_logged(self):
+        _, text = self.login_logged({})
         self.assertIn(f"{USERNAME} logged in from 127.0.0.1", text)
-
-    def test_the_header_is_ignored_when_not_behind_a_proxy(self):
-        _, text = self.login_logged({"X-Forwarded-For": "203.0.113.9"})
-        self.assertIn(f"{USERNAME} logged in from 127.0.0.1", text)
+        self.assertNotIn(" via ", text)
 
     def test_a_forwarded_value_that_is_not_an_address_is_never_logged(self):
-        self.behind_proxy()
         _, text = self.login_logged({"X-Forwarded-For": "fake log line"})
         self.assertNotIn("fake log line", text)
         self.assertIn("127.0.0.1", text)
@@ -1290,12 +1280,11 @@ class AppDownloadTest(WebTestCase):
 
 
 class ProxyDownloadTest(WebTestCase):
-    """Behind an HTTPS reverse proxy the downloads hold the site's https address, as the
-    browser reached it, instead of server addresses and a fingerprint."""
+    """Through an HTTPS reverse proxy the downloads hold the site's https address, as the
+    browser reached it. Reached directly, they hold server addresses and a fingerprint."""
 
-    def behind_proxy(self) -> None:
-        self.addCleanup(setattr, web, "BEHIND_HTTPS_PROXY", web.BEHIND_HTTPS_PROXY)
-        web.BEHIND_HTTPS_PROXY = True
+    # What Nginx Proxy Manager adds to every request it passes on.
+    PROXY = {"Host": "assets.example.com", "X-Forwarded-Proto": "https"}
 
     @staticmethod
     def settings_of(source: str) -> dict:
@@ -1308,23 +1297,20 @@ class ProxyDownloadTest(WebTestCase):
         return found
 
     def test_the_address_comes_from_the_host_the_browser_used(self):
-        self.behind_proxy()
-        self.assertEqual(web.site_url("assets.example.com"), "https://assets.example.com")
-        self.assertEqual(web.site_url("Assets.Example.com:8443"), "https://assets.example.com:8443")
-        self.assertEqual(web.site_url("[::1]:8443"), "https://[::1]:8443")
+        self.assertEqual(web.site_url("assets.example.com", True), "https://assets.example.com")
+        self.assertEqual(web.site_url("Assets.Example.com:8443", True), "https://assets.example.com:8443")
+        self.assertEqual(web.site_url("[::1]:8443", True), "https://[::1]:8443")
 
-    def test_no_address_is_made_when_not_behind_a_proxy(self):
-        self.assertIsNone(web.site_url("assets.example.com"))
+    def test_no_address_is_made_when_reached_directly(self):
+        self.assertIsNone(web.site_url("assets.example.com", False))
 
     def test_an_unsafe_host_is_refused(self):
-        self.behind_proxy()
         for host in ("x'; import os #", "", "host:", "a b"):
             with self.subTest(host), self.assertRaises(ValueError):
-                web.site_url(host)
+                web.site_url(host, True)
 
     def test_gui_download_holds_the_address_and_no_servers_or_fingerprint(self):
-        self.behind_proxy()
-        status, _, body = self.fetch(web.GUI_DOWNLOAD_ADDRESS, extra_headers={"Host": "assets.example.com"})
+        status, _, body = self.fetch(web.GUI_DOWNLOAD_ADDRESS, extra_headers=self.PROXY)
 
         self.assertEqual(status, 200)
         settings = self.settings_of(body.decode("utf-8"))
@@ -1333,7 +1319,7 @@ class ProxyDownloadTest(WebTestCase):
         self.assertIsNone(settings["SITE_FINGERPRINT"])
         self.assertNotIn(b"65432", body.split(b"SITE_URL = ")[1].split(b"\n")[0])
 
-    def test_gui_download_is_unchanged_when_not_behind_a_proxy(self):
+    def test_gui_download_is_unchanged_when_reached_directly(self):
         _, _, body = self.fetch(web.GUI_DOWNLOAD_ADDRESS, extra_headers={"Host": "assets.example.com"})
         settings = self.settings_of(body.decode("utf-8"))
         self.assertIsNone(settings["SITE_URL"])
@@ -1349,11 +1335,10 @@ class ProxyDownloadTest(WebTestCase):
     def test_app_download_holds_only_the_address(self):
         if web.find_csc() is None:
             self.skipTest("the C# compiler is only on Windows")
-        self.behind_proxy()
         folder = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         with mock.patch.object(web, "APP_FILE", os.path.join(folder, "AssetApp.exe")):
-            status, _, body = self.fetch(web.APP_DOWNLOAD_ADDRESS, extra_headers={"Host": "assets.example.com"})
+            status, _, body = self.fetch(web.APP_DOWNLOAD_ADDRESS, extra_headers=self.PROXY)
 
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body[body.rindex(web.APP_MARKER) + len(web.APP_MARKER):]),

@@ -109,12 +109,9 @@ SESSION_SECONDS = 8 * 60 * 60
 FAILED_LOGIN_LIMIT = 5
 LOCKOUT_SECONDS = 60
 
-# Set these when this program sits behind an HTTPS reverse proxy such as Nginx Proxy
-# Manager (config.json "behind_https_proxy" / "trusted_proxy", or ASSET_BEHIND_HTTPS_PROXY /
-# ASSET_TRUSTED_PROXY). The session cookie is then marked Secure, and the browser's real
-# address is read from X-Forwarded-For when the request came from the proxy.
-BEHIND_HTTPS_PROXY = common.BEHIND_HTTPS_PROXY
-TRUSTED_PROXY = common.TRUSTED_PROXY
+# Nothing needs setting to run this behind an HTTPS reverse proxy such as Nginx Proxy
+# Manager. The proxy adds "X-Forwarded-Proto: https" to each request it passes on, and each
+# request is handled by what that header says: see WebHandler.through_https_proxy().
 
 # Usernames that have been tried and failed, so that guessing different made-up names
 # can't fill the memory: when the table is full, entries no longer locked are dropped.
@@ -411,15 +408,16 @@ def assets_reply() -> tuple:
     }
 
 
-def session_cookie(token: str, max_age: int) -> str:
+def session_cookie(token: str, max_age: int, secure: bool = False) -> str:
     """Build the header that gives a browser its login.
 
     HttpOnly stops scripts reading it, and SameSite=Strict stops other websites sending
-    it. It is only marked Secure behind an HTTPS proxy, because otherwise this program
-    serves plain HTTP, and a browser would not send a Secure cookie back over it.
+    it. `secure` is true when the browser reached this page through an HTTPS proxy. The
+    cookie is then marked Secure, so the browser only ever sends it over HTTPS. Reached
+    directly, this program serves plain HTTP, where a Secure cookie would never come back.
     """
-    secure = "; Secure" if BEHIND_HTTPS_PROXY else ""
-    return f"session={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{secure}"
+    flag = "; Secure" if secure else ""
+    return f"session={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict{flag}"
 
 
 def change_reply(request: dict, success_status: int) -> tuple:
@@ -650,11 +648,11 @@ def site_servers(web_host: str) -> list:
     return [(web_host, port) for _, port in common.SERVERS]
 
 
-def site_url(host_header: str) -> Optional[str]:
-    """The https:// address of this site, for a download, when it sits behind an HTTPS
-    reverse proxy (behind_https_proxy is on); otherwise None. It is built from the host
-    (and port, if any) the browser used, which is the name the person reaches the site by."""
-    if not BEHIND_HTTPS_PROXY:
+def site_url(host_header: str, through_https_proxy: bool) -> Optional[str]:
+    """The https:// address of this site, for a download, when the browser reached it
+    through an HTTPS reverse proxy; otherwise None. It is built from the host (and port, if
+    any) the browser used, which is the name the person reaches the site by."""
+    if not through_https_proxy:
         return None
     parts = urlsplit("//" + (host_header or ""))
     try:
@@ -882,7 +880,7 @@ class WebHandler(BaseHTTPRequestHandler):
         else:
             logger.info("%s logged in from %s", reply["username"], browser)
             audit("LOGIN", user=reply["username"], address=browser)
-            self.send_json(status, reply, session_cookie(token, SESSION_SECONDS))
+            self.send_json(status, reply, session_cookie(token, SESSION_SECONDS, self.through_https_proxy()))
 
     def handle_asset_action(self, asset_id: str, name: str) -> None:
         """Approve, check out or check in one asset, for a logged-in user."""
@@ -905,23 +903,29 @@ class WebHandler(BaseHTTPRequestHandler):
         if username is not None:
             logger.info("%s logged out", username)
             audit("LOGOUT", user=username)
-        self.send_json(200, {}, session_cookie("", 0))
+        self.send_json(200, {}, session_cookie("", 0, self.through_https_proxy()))
+
+    def through_https_proxy(self) -> bool:
+        """Whether the browser reached this page through an HTTPS reverse proxy. Nginx Proxy
+        Manager, like most proxies, adds "X-Forwarded-Proto: https" to every request it
+        passes on. Sending the header without a proxy gains nothing: it only marks the
+        login cookie Secure, which a plain-HTTP browser then can't send back."""
+        return self.headers.get("X-Forwarded-Proto", "").strip().lower() == "https"
 
     def browser_address(self) -> str:
         """The address to record for whoever is making this request.
 
-        Behind a proxy every request comes from the proxy, so its X-Forwarded-For header
-        says who really asked. Anyone can send that header, so it is believed only when
-        the request really came from the trusted proxy, and only the last entry, which
-        is the one the proxy added, is used. It must be a valid address, so it can't
-        put anything else into the log.
+        Behind a proxy every request comes from the proxy, and its X-Forwarded-For header
+        says who really asked. Anyone can send that header, so the log shows both: the
+        forwarded address, then the address the request really came from, as
+        "203.0.113.9 via 192.168.1.5". Only the last entry is used, because that is the one
+        the proxy added. It must be a valid address, so it can't put anything else into
+        the log.
         """
         direct = self.client_address[0]
-        if not BEHIND_HTTPS_PROXY or direct != TRUSTED_PROXY:
-            return direct
         forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
         try:
-            return str(ipaddress.ip_address(forwarded))
+            return f"{ipaddress.ip_address(forwarded)} via {direct}"
         except ValueError:
             return direct
 
@@ -995,7 +999,7 @@ class WebHandler(BaseHTTPRequestHandler):
         # user, which is what "127.0.0.1" in the servers list has to be turned into.
         host = urlsplit("//" + self.headers.get("Host", "")).hostname or ""
         try:
-            source = gui_with_site_settings(host, site_url(self.headers.get("Host", "")))
+            source = gui_with_site_settings(host, site_url(self.headers.get("Host", ""), self.through_https_proxy()))
         except (OSError, ValueError) as exc:
             logger.error("Could not make the GUI download: %s", exc)
             self.send_json(500, {"error": "The GUI could not be prepared"})
@@ -1011,7 +1015,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         host = urlsplit("//" + self.headers.get("Host", "")).hostname or ""
         try:
-            program = app_with_site_settings(host, site_url(self.headers.get("Host", "")))
+            program = app_with_site_settings(host, site_url(self.headers.get("Host", ""), self.through_https_proxy()))
         except ValueError as exc:
             logger.error("Could not make the app download: %s", exc)
             self.send_json(500, {"error": "The app could not be prepared"})
