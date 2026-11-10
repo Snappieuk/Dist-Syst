@@ -1,23 +1,236 @@
 # Asset Management System
 
-A distributed client–server system for registering, listing, searching, editing and
-deleting asset records.
+Keep a list of your organisation's assets (laptops, furniture, vans...) on a server, and
+register, view, search, edit and delete them from several kinds of client program.
 
-A primary server and a backup server run as separate processes, on one machine or
-several. Clients (two command-line programs and a Tkinter GUI) talk to them with
-length-prefixed UTF-8 JSON messages over TLS-encrypted TCP connections. Users log in
-and get a session token, and their role decides what they may do.
+There are two servers: a **primary** and a **backup** that keeps a copy of everything.
+If the primary stops, the clients carry on using the backup by themselves.
 
-This branch (`requirements-only`) builds on the starter code on `main` and adds only
-what the requirements ask for. The table at the end shows where each requirement is
-met and which tests prove it.
+## Quick start
+
+Follow these steps in order. You only need to do steps 1 to 3 once.
+
+### Step 1: Install Python
+
+You need Python 3.8 or newer. To check, open a terminal (see step 2) and type:
 
 ```
-   send.py    receive.py    gui.py          clients: log in, then try the primary,
-       \          |          /              and the backup if the primary is down
-        v         v         v
-  +------------------+   copies every change   +------------------+
-  |  server.py       | ----------------------> |  server.py backup|
+python --version
+```
+
+If it says `Python 3.8` or higher, go to step 2. Otherwise, install Python from
+[python.org](https://www.python.org/downloads/). On Windows, tick **"Add python.exe to
+PATH"** on the first screen of the installer.
+
+### Step 2: Open a terminal in this folder
+
+All the commands below are typed into a terminal that is open **in this folder** (the
+folder that has `server.py` in it).
+
+On Windows: open this folder in File Explorer, click in the address bar at the top,
+type `cmd` and press Enter. A black window opens, already in the right folder.
+
+### Step 3: Set up (once only)
+
+Type these commands one at a time, pressing Enter after each:
+
+```
+pip install -r requirements.txt
+python certificate.py
+python users.py add admin admin
+python users.py add alice user
+```
+
+What they do:
+
+1. Installs the one package the system needs.
+2. Creates the security certificate that encrypts every connection
+   (`server.crt` and `server.key`).
+3. Creates an account called `admin` that can do everything. It asks for a password
+   twice. The password must be **at least 8 characters**, and nothing appears on
+   screen as you type it; that's normal.
+4. Creates an account called `alice` that can do everything except delete. You can use
+   any names you like instead of `admin` and `alice`.
+
+### Step 4: Start the servers
+
+Open **two** terminals in this folder (repeat step 2 twice). Type one command in each:
+
+| Terminal | Type | You should see a line ending in |
+| --- | --- | --- |
+| First | `python server.py` | `Asset Management primary server listening on 0.0.0.0:65432` |
+| Second | `python server.py backup` | `Asset Management backup server listening on 0.0.0.0:65433` |
+
+**Leave both windows open.** Closing a window stops that server. The backup is
+optional, but without it nothing keeps a copy of your data.
+
+### Step 5: Open the program and log in
+
+Open one more terminal in this folder and type:
+
+```
+python gui.py
+```
+
+A window opens. Then:
+
+1. Click **Find servers**. The Server box fills in with the primary it found. To use
+   a different server, click the arrow on the Server box and pick from the list, or
+   type an address yourself (like `192.168.1.20` or `192.168.1.20:65433`).
+2. Type your username and password from step 3.
+3. Click **Log in**.
+4. The first time, a box asks **"Trust this server?"** and shows a long code (the
+   certificate fingerprint). Click **Yes**. (If someone else runs the server, check
+   the code matches the one they gave you. `python certificate.py` prints it.)
+
+You now see the list of assets. It is empty until you register some.
+
+### Step 6 (optional): Add sample data
+
+To fill the server with example assets to try things out, open another terminal in
+this folder and type:
+
+```
+python seed.py
+```
+
+Log in as `admin` when it asks. It adds 30 sample assets. Click **Show all** in the
+window to see them. Type `python seed.py 100` for 100 instead.
+
+## Using the window
+
+| To... | Do this |
+| --- | --- |
+| Register an asset | Fill in all five boxes under "Asset details", then click **Register new asset**. |
+| Edit an asset | Click it in the list. Its details appear in the boxes below. Change them, then click **Save changes**. (The Asset ID can't be changed.) |
+| Delete an asset | Click it in the list, then click **Delete selected**. Only `admin` accounts can delete. |
+| Search | Type in the box at the top and click **Search**. Choose a field from the drop-down to search only that field, or leave it on "Any field". Click **Show all** to clear the search. |
+| See more | The list shows 20 assets at a time. Use **< Previous** and **Next >** at the bottom. |
+| Empty the boxes | Click **Clear form**. |
+
+The bar at the bottom of the window tells you what happened, or what went wrong.
+
+## Other ways to connect
+
+You can use any of these instead of `gui.py`, or as well as it. The servers must be
+running (step 4) for all of them.
+
+### C# program (Windows, nothing to install)
+
+A Windows program written in C#. It needs no Python, so you can copy it to any
+Windows 10 or 11 computer.
+
+1. **Build it.** Double-click `build.bat`. It creates `client.exe` in this folder,
+   using the C# compiler that comes with Windows.
+2. **Run it.** Double-click `client.exe`. A window opens that works exactly like
+   `gui.py` (see step 5 and "Using the window" above).
+
+`client.exe` can also be used from a terminal in this folder. The first two words
+after it are always your username and password:
+
+```
+client.exe alice yourpassword list
+client.exe alice yourpassword register
+client.exe alice yourpassword edit SEED-0001 1 location=Lab
+client.exe admin yourpassword delete SEED-0001 2
+client.exe x x ping
+```
+
+- `list` shows every asset.
+- `register` on its own asks for each field, one at a time.
+- `edit` and `delete` need the asset's current **version** number (the `version` shown
+  by `list`). If someone changed the asset since, you get a `CONFLICT` error: run
+  `list` again to get the new version.
+- `ping` checks a server is there, without logging in (type anything for the
+  username and password).
+
+On the command line, `client.exe` reads `config.json` and `server.crt`, so run it in
+this folder, or copy those two files next to it.
+
+### Command-line Python programs
+
+```
+python send.py                        # register one asset (asks for each field)
+python receive.py                     # list every asset
+python receive.py laptop              # list assets with "laptop" in any field
+python receive.py location=site a     # list assets whose location contains "site a"
+```
+
+Each asks for your username and password first.
+
+### Node.js program
+
+If you have [Node.js](https://nodejs.org/) installed, `client.js` takes the same
+commands as `client.exe` on the command line:
+
+```
+node client.js alice yourpassword list
+node client.js alice yourpassword register
+node client.js x x ping
+```
+
+In PowerShell, use `register` on its own (it asks for each field) rather than typing
+JSON after it, because PowerShell removes the quotes from JSON.
+
+## If something goes wrong
+
+| Problem | What to do |
+| --- | --- |
+| `python` is not recognised | Python isn't installed, or wasn't added to PATH. Reinstall it and tick "Add python.exe to PATH" (step 1). Then open a **new** terminal. |
+| `No module named 'cryptography'` | Run `pip install -r requirements.txt` (step 3). |
+| A server says the port is already in use | That server is already running in another window. Use that one, or close it first. |
+| **Find servers** finds nothing | Check the servers are running (step 4). If you only just started them, wait 5 seconds and try again. If the servers are on another computer, its firewall may be blocking them: type the server's address into the Server box instead. |
+| "Could not connect: nothing answered there" | The server isn't running at that address, or the address or port is wrong. |
+| "Login failed" or `UNAUTHENTICATED` | Wrong username or password. To reset a password, run `python users.py add NAME admin` (or `user`) again. Run `python users.py list` to see every account. |
+| "Certificate changed" | The server's certificate is different from last time (for example after `reset.py` or `certificate.py --replace`). If you expected that, delete `.asset_management_gui.json` (for `gui.py`) or `.asset_management_csharp.json` (for `client.exe`) from your home folder (`C:\Users\YourName`), then log in again. |
+| `FORBIDDEN` when deleting | Only `admin` accounts can delete. |
+| `CONFLICT` | Someone else changed that asset since you last loaded it. The list has been refreshed: make your change again. |
+| `client.exe` won't build | `build.bat` explains what's missing. The C# compiler is part of the .NET Framework 4, which comes with Windows 10 and 11. |
+
+## Starting again from nothing
+
+Close both server windows, then type:
+
+```
+python reset.py
+```
+
+It lists what it will delete and asks you to type `RESET` to confirm. It deletes every
+asset, every account, the logs and the certificate, but never the program files. Then it
+offers to make a new certificate and admin account for you. (`python reset.py --yes`
+skips the confirmation.)
+
+## Running on several computers
+
+By default everything runs on one computer. To put the servers on different computers:
+
+1. In `config.json`, replace `127.0.0.1` under `servers` with each server computer's
+   real IP address (for example `192.168.1.20`). Use the same `config.json` everywhere.
+2. Run `python certificate.py --replace`, so the certificate names those addresses.
+3. Copy these files from the first computer to the others:
+   - `server.crt` and `config.json` go to **every** computer.
+   - `server.key`, `users.json` and `secret.key` go **only** to the computer that runs
+     the other server. Never give these to anyone else.
+4. Allow ports 65432 and 65433 through each server computer's firewall.
+
+`gui.py` and `client.exe` need none of these files. Just type a server's address into
+the Server box, or click **Find servers** if it's on the same network.
+
+## Accounts and what they can do
+
+| Account type | Log in | Register, view, search, edit | Delete |
+| --- | --- | --- | --- |
+| `admin` | yes | yes | yes |
+| `user` | yes | yes | no (`FORBIDDEN`) |
+
+## How it works
+
+```
+   send.py    receive.py    gui.py    client.exe    client.js
+        \          |          |          |          /
+         v         v          v          v         v       clients try the primary, and
+  +------------------+   copies every change   +------------------+  the backup if the
+  |  server.py       | ----------------------> |  server.py backup|  primary is down
   |  (primary)       | <---------------------- |  (backup)        |
   |                  |   takes back changes    |                  |
   +------------------+   after an outage       +------------------+
@@ -25,155 +238,32 @@ met and which tests prove it.
    audit_primary.log                            audit_backup.log
 ```
 
+Clients and servers send each other JSON messages over encrypted (TLS) connections.
+Users log in and get a session token, and their account type decides what they may do.
+
+This branch (`requirements-only`) builds on the starter code on `main` and adds only
+what the requirements ask for. The table at the end shows where each requirement is
+met and which tests prove it.
+
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `server.py` | The server. `python server.py` runs the primary and `python server.py backup` runs the backup. It validates and stores assets, checks logins and roles, saves to disk, keeps the audit log and replicates to the backup. |
-| `common.py` | Code shared by every program: the message format, protocol version, error codes, loading `config.json`, TLS settings and client failover. |
+| `common.py` | Code shared by every Python program: the message format, protocol version, error codes, loading `config.json`, TLS settings and client failover. |
 | `users.py` | Accounts, password hashing and session tokens. Run it to add accounts. |
 | `certificate.py` | Creates the TLS certificate and private key. |
 | `reset.py` | Deletes everything the system has created, back to a fresh install, then offers to set up again. |
+| `gui.py` | Tkinter window: log in, register, view, search, page through, edit and delete. |
 | `send.py` | Command-line registration client. |
 | `receive.py` | Command-line query client, with optional search. |
-| `gui.py` | Tkinter GUI: log in, register, view, search, page through, edit and delete. |
 | `seed.py` | Fills a running server with sample assets, then edits and deletes some, so every stored field has a value. |
-| `client.cs`, `client_gui.cs` | C# client that needs nothing installed on Windows: it is built with the C# compiler included with Windows. With no arguments it opens a window like `gui.py`; with arguments it takes the same commands as `client.js`. JSON-only messages. |
+| `client.cs`, `client_gui.cs` | C# client. With no arguments it opens a window like `gui.py`; with arguments it takes the same commands as `client.js`. Built with the C# compiler that comes with Windows. |
 | `build.bat` | Builds `client.exe` from the C# files. |
-| `client.js` | Minimal Node.js client with no dependencies. It talks to the server only in JSON (TLS, 4-byte length header, UTF-8 JSON object) and fails over to the backup. |
+| `client.js` | Minimal Node.js client with no dependencies. |
 | `config.json` | Hosts, ports, timeouts, size limits and file names. |
 | `requirements.txt` | The one third-party package: `cryptography`, used only by `certificate.py`. |
 | `test_system.py`, `test_gui.py`, `test_reset.py` | Automated tests. |
-
-## Setting up and running
-
-Requires Python 3.8 or later.
-
-```
-pip install -r requirements.txt
-python certificate.py                 # creates server.crt and server.key
-python users.py add admin admin       # creates an administrator (asks for a password)
-python users.py add alice user        # creates an ordinary user
-```
-
-Then start each program in its own terminal:
-
-```
-python server.py            # the primary
-python server.py backup     # the backup
-python gui.py               # the GUI, or:
-python send.py              # register an asset
-python receive.py           # list every asset
-python receive.py laptop    # search every field
-python receive.py location=site a     # search one field
-```
-
-### Sample data
-
-To fill a running server with sample assets so every field has a value:
-
-```
-python seed.py              # 30 assets
-python seed.py 100          # 100 assets
-```
-
-It logs in, then registers assets `SEED-0001`, `SEED-0002` and so on, with both
-statuses and a range of categories and locations. Every third asset is then edited, so
-`version` and `updated_at` change. If you log in as an administrator, every tenth asset
-is also deleted, so `deleted` and `deleted_at` are filled. IDs that are already taken
-are skipped, so you can run it again to add more.
-
-### Node.js client
-
-`client.js` needs only Node.js (no `npm install`). Run it from this folder, since it reads `config.json` and `server.crt` beside itself. The first two arguments are always the username and password; `ping` ignores them but they must still be given.
-
-```
-node client.js x x ping
-node client.js alice secret list
-node client.js alice secret register
-node client.js alice secret register '{"asset_id":"A1","description":"Laptop","category":"IT","location":"HQ","status":"In Use"}'
-node client.js alice secret edit A1 <expected_version> '{"location":"Lab"}'
-node client.js admin secret delete A1 <expected_version>
-```
-
-Each command except `ping` logs in first, then sends the request with a fresh `request_id` and prints the server's JSON reply. `register` with no JSON starts a step-by-step guide that asks for each field, offers the two statuses as a menu, and asks you to confirm. Only administrators can delete.
-
-### C# client
-
-`client.cs` and `client_gui.cs` are a client written in C#. It needs nothing installed
-on Windows: it is compiled with the C# compiler that comes with the .NET Framework,
-which is part of Windows 10 and 11, and uses only .NET Framework libraries (Windows
-Forms for the window). To build `client.exe`, double-click `build.bat`, or run
-`.\build.bat` in this folder. It runs:
-
-```
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs client_gui.cs
-```
-
-Double-click `client.exe`, or run it with no arguments, to open a window that works
-like `gui.py`: log in (with "Check" and "Find servers"), then view, search, page
-through, register, edit and delete assets. Like `gui.py`, it needs no other files: it
-shows a server's certificate fingerprint the first time and asks whether to trust it,
-and remembers servers and trusted certificates in `.asset_management_csharp.json` in
-your home folder.
-
-With arguments it works on the command line instead. Run those commands from this
-folder, since they read `config.json` and `server.crt` beside `client.exe`:
-
-```
-client.exe x x ping
-client.exe alice secret list
-client.exe alice secret register
-client.exe alice secret register asset_id=A1 description=Laptop category=IT location=HQ "status=In Use"
-client.exe alice secret edit A1 <expected_version> location=Lab
-client.exe admin secret delete A1 <expected_version>
-```
-
-It works like `client.js`: the first two arguments are always the username and
-password, `register` with no fields starts a step-by-step guide, and it tries the
-backup if the primary can't be reached. It only connects to a server that presents
-exactly the certificate in `server.crt`. Fields are given as `field=value`, which
-avoids PowerShell removing the quotes from JSON on the command line, but one JSON
-object also works. It exits with 1 if the reply is an error.
-
-### Resetting
-
-To start again from nothing, stop both servers and run:
-
-```
-python reset.py
-```
-
-It lists what it will delete and asks you to type `RESET`. It deletes:
-- both servers' assets
-- the audit logs
-- every account
-- `secret.key`
-- the certificate and its key
-
-It doesn't touch the code or any other file, and it refuses while a server is still
-running. It then offers to create a new certificate and admin account straight away.
-`python reset.py --yes` skips the confirmation. If you run the servers on two
-machines, reset each of them.
-
-### Running on several machines
-
-1. Put each server's real IP address or host name in `servers` in `config.json`, and use
-   the same `config.json` on every machine.
-2. Run `python certificate.py --replace` so the certificate names those hosts.
-3. Copy these files from the first machine to every other machine:
-   - `server.crt` and `config.json`
-   - `server.key`, `users.json` and `secret.key` (only to the machine that runs the other server)
-4. Allow each server's port through its firewall.
-
-No code changes are needed.
-
-### Roles
-
-| Role | Log in | Register, list, search, edit | Delete |
-| --- | --- | --- | --- |
-| `admin` | yes | yes | yes |
-| `user` | yes | yes | no (`FORBIDDEN`) |
 
 ## Messages
 

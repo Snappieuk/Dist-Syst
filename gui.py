@@ -338,7 +338,9 @@ class AssetApp:
     def build_login(self) -> None:
         frame = self.login_frame = ttk.LabelFrame(self.root, text="Connect and log in", padding=12)
         ttk.Label(frame, text="Server").grid(row=0, column=0, sticky=tk.W, pady=3)
-        self.server_entry = ttk.Entry(frame, width=30)
+        # Type any address, or pick one from the list: the servers found by "Find
+        # servers", or before that the ones used last time.
+        self.server_entry = ttk.Combobox(frame, width=34, values=list(self.settings.get("servers", [])))
         self.server_entry.insert(0, self.settings.get("server", ""))
         self.server_entry.grid(row=0, column=1, pady=3)
         ttk.Button(frame, text="Check", command=self.check_server).grid(row=0, column=2, padx=4)
@@ -442,18 +444,25 @@ class AssetApp:
 
     def read_address(self) -> tuple:
         """The address typed in, checked for format. Raises ValueError."""
-        return parse_address(self.server_entry.get(), DEFAULT_PORTS["primary"])
+        return parse_address(self.typed_server(), DEFAULT_PORTS["primary"])
+
+    def typed_server(self) -> str:
+        """The server box's address, without the "(primary)" label a found server has."""
+        return self.server_entry.get().split(" (")[0].strip()
 
     def find_servers(self) -> None:
         def done(result) -> None:
             if isinstance(result, Exception) or not result:
                 self.status_text.set("No servers found on this network. Enter the address by hand.")
                 return
-            server = result[0]  # the primary if it answered, otherwise the backup
-            self.server_entry.delete(0, tk.END)
-            self.server_entry.insert(0, f"{server['host']}:{server['port']}")
+            # Offer every server found in the box's list, and fill in the first: the
+            # primary if it answered, otherwise the backup.
+            choices = [f"{s['host']}:{s['port']} ({s['role']})" for s in result]
+            self.server_entry.configure(values=choices)
+            self.server_entry.set(choices[0])
             found = ", ".join(f"{s['role']} at {s['host']}:{s['port']}" for s in result)
-            self.status_text.set(f"Found {found}.")
+            more = " Pick another from the Server list, or type an address." if len(result) > 1 else ""
+            self.status_text.set(f"Found {found}.{more}")
 
         self.in_background(lambda: discover(list(DEFAULT_PORTS.values())), done)
 
@@ -558,7 +567,7 @@ class AssetApp:
             # From now on every request goes to the primary, or the backup if the
             # primary can't be reached, whichever address was typed.
             self.addresses = servers
-            self.settings["server"] = self.server_entry.get().strip()
+            self.settings["server"] = self.typed_server()
             self.settings["servers"] = [show_address(a) for a in servers]
             save_settings(self.settings_file, self.settings)
             self.send({

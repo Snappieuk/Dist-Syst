@@ -453,7 +453,8 @@ class AssetWindow : Form
 
     // Login screen
     Panel loginScreen;
-    TextBox serverBox, usernameBox, passwordBox;
+    ComboBox serverBox;
+    TextBox usernameBox, passwordBox;
     Button loginButton;
 
     // Asset screen
@@ -529,7 +530,11 @@ class AssetWindow : Form
         var box = new GroupBox { Text = "Connect and log in", AutoSize = true, Location = new Point(20, 20), Padding = new Padding(12) };
         var grid = new TableLayoutPanel { ColumnCount = 4, RowCount = 4, AutoSize = true, Dock = DockStyle.Fill };
 
-        serverBox = new TextBox { Width = 240, Text = settings.Server };
+        // Type any address, or pick one from the list: the servers found by "Find
+        // servers", or before that the ones used last time.
+        serverBox = new ComboBox { Width = 260, DropDownStyle = ComboBoxStyle.DropDown };
+        serverBox.Items.AddRange(settings.Servers.Cast<object>().ToArray());
+        serverBox.Text = settings.Server;
         usernameBox = new TextBox { Width = 240 };
         passwordBox = new TextBox { Width = 240, UseSystemPasswordChar = true };
         loginButton = MakeButton("Log in", (s, e) => LogIn());
@@ -655,7 +660,7 @@ class AssetWindow : Form
 
     ServerAddress ReadAddress()
     {
-        return Network.ParseAddress(serverBox.Text, Network.PrimaryPort);
+        return Network.ParseAddress(TypedServer(), Network.PrimaryPort);
     }
 
     async void FindServers()
@@ -674,8 +679,21 @@ class AssetWindow : Form
             statusText.Text = "No servers found on this network. Enter the address by hand.";
             return;
         }
-        serverBox.Text = result[0].Address.ToString();   // the primary if it answered, otherwise the backup
-        statusText.Text = "Found " + string.Join(", ", result.Select(s => s.Role + " at " + s.Address)) + ".";
+        // Offer every server found in the box's list, and fill in the first: the primary
+        // if it answered, otherwise the backup.
+        serverBox.Items.Clear();
+        foreach (var server in result) serverBox.Items.Add(server.Address + " (" + server.Role + ")");
+        serverBox.SelectedIndex = 0;
+        statusText.Text = "Found " + string.Join(", ", result.Select(s => s.Role + " at " + s.Address)) + "."
+            + (result.Count > 1 ? " Pick another from the Server list, or type an address." : "");
+    }
+
+    // The server box's address, without the "(primary)" label a found server has.
+    string TypedServer()
+    {
+        string text = serverBox.Text;
+        int label = text.IndexOf(" (", StringComparison.Ordinal);
+        return (label >= 0 ? text.Substring(0, label) : text).Trim();
     }
 
     async void CheckServer()
@@ -824,7 +842,7 @@ class AssetWindow : Form
         // From now on every request goes to the primary, or the backup if the primary
         // can't be reached, whichever address was typed.
         addresses = found.Servers;
-        settings.Server = serverBox.Text.Trim();
+        settings.Server = TypedServer();
         settings.Servers = addresses.Select(a => a.ToString()).ToList();
         settings.Save(settingsFile);
 

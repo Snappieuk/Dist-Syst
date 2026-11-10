@@ -194,8 +194,13 @@ class GuiTest(ServerTestCase):
         with mock.patch.dict(gui.DEFAULT_PORTS, ports):
             self.app.find_servers()
             self.wait_until(lambda: self.app.status_text.get().startswith("Found"), "found the servers")
-        self.assertTrue(self.app.server_entry.get().endswith(f":{ports['primary']}"))
+        self.assertTrue(self.app.server_entry.get().endswith(f":{ports['primary']} (primary)"))
         self.assertIn("backup at", self.app.status_text.get())
+        # Both are offered in the box's list, and a picked one is read without its label.
+        choices = list(self.app.server_entry["values"])
+        self.assertEqual([c.rsplit(" ", 1)[1] for c in choices], ["(primary)", "(backup)"])
+        self.app.server_entry.set(choices[1])
+        self.assertEqual(self.app.read_address()[1], ports["backup"])
 
     def test_find_servers_says_when_there_are_none(self):
         with mock.patch.dict(gui.DEFAULT_PORTS, {"primary": self.config["servers"]["backup"]["port"]}, clear=True):
