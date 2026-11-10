@@ -9,7 +9,6 @@ processes, because environment variables are read when a program starts.
 
 import json
 import os
-import socket
 import subprocess
 import sys
 import tempfile
@@ -37,26 +36,34 @@ def run_with(variables: dict, code: str) -> subprocess.CompletedProcess:
 
 
 class ServerListTest(unittest.TestCase):
-    def test_hostnames_and_ip_addresses_are_accepted(self):
+    def test_addresses_on_this_machine_are_accepted(self):
         self.assertEqual(
-            common.parse_servers("assets-1:65432, 10.0.0.2:65433"),
-            [("assets-1", 65432), ("10.0.0.2", 65433)],
+            common.parse_servers("127.0.0.1:65432, localhost:65433"),
+            [("127.0.0.1", 65432), ("localhost", 65433)],
         )
 
     def test_a_single_server_is_accepted(self):
-        self.assertEqual(common.parse_servers("assets-1:65432"), [("assets-1", 65432)])
+        self.assertEqual(common.parse_servers("127.0.0.1:65432"), [("127.0.0.1", 65432)])
+
+    def test_servers_on_other_machines_are_refused(self):
+        for text in ("assets-1:65432", "10.0.0.2:65433", "127.0.0.1:65432,assets-2:65433"):
+            with self.subTest(text):
+                with self.assertRaisesRegex(ValueError, "not on this machine"):
+                    common.parse_servers(text)
 
     def test_bad_entries_are_named_in_the_error(self):
-        for text in ("assets-1", "assets-1:", ":65432", "assets-1:port", "assets-1:0", "assets-1:70000", "a:1,"):
+        for text in ("127.0.0.1", "127.0.0.1:", ":65432", "127.0.0.1:port", "127.0.0.1:0", "127.0.0.1:70000",
+                     "127.0.0.1:1,"):
             with self.subTest(text):
                 with self.assertRaisesRegex(ValueError, common.SERVERS_VARIABLE):
                     common.parse_servers(text)
 
     def test_more_than_two_servers_are_allowed(self):
-        self.assertEqual(common.parse_servers("a:1,b:2,c:3"), [("a", 1), ("b", 2), ("c", 3)])
+        self.assertEqual(common.parse_servers("127.0.0.1:1,127.0.0.1:2,127.0.0.1:3"),
+                         [("127.0.0.1", 1), ("127.0.0.1", 2), ("127.0.0.1", 3)])
 
     def test_more_servers_than_there_are_id_letters_are_refused(self):
-        too_many = ",".join(f"host{number}:{1000 + number}" for number in range(common.MAX_SERVERS + 1))
+        too_many = ",".join(f"127.0.0.1:{1000 + number}" for number in range(common.MAX_SERVERS + 1))
         with self.assertRaisesRegex(ValueError, f"at most {common.MAX_SERVERS}"):
             common.parse_servers(too_many)
 
@@ -67,9 +74,9 @@ class ServerListTest(unittest.TestCase):
 
     def test_a_program_uses_the_list_it_is_given(self):
         result = run_with(
-            {common.SERVERS_VARIABLE: "assets-1:65432,assets-2:65433"}, "import common; print(common.SERVERS)"
+            {common.SERVERS_VARIABLE: "127.0.0.1:2001,127.0.0.1:2002"}, "import common; print(common.SERVERS)"
         )
-        self.assertEqual(result.stdout.strip(), "[('assets-1', 65432), ('assets-2', 65433)]")
+        self.assertEqual(result.stdout.strip(), "[('127.0.0.1', 2001), ('127.0.0.1', 2002)]")
 
 
 class ConfigFileTest(unittest.TestCase):
@@ -96,10 +103,10 @@ class ConfigFileTest(unittest.TestCase):
         self.assertEqual(common.load_config(self.path), {})
 
     def test_every_setting_is_read(self):
-        self.write({"servers": ["assets-1:1001", "assets-2:1002"], "web_address": "0.0.0.0:9000",
+        self.write({"servers": ["127.0.0.1:1001", "127.0.0.1:1002"], "web_address": "0.0.0.0:9000",
                     "timeout_seconds": 7, "heartbeat_timeout_seconds": 0.5, "failover_wait_seconds": 30})
 
-        self.assertEqual(self.show(), "[('assets-1', 1001), ('assets-2', 1002)] ('0.0.0.0', 9000) 7 0.5 30")
+        self.assertEqual(self.show(), "[('127.0.0.1', 1001), ('127.0.0.1', 1002)] ('0.0.0.0', 9000) 7 0.5 30")
 
     def test_settings_left_out_keep_their_defaults(self):
         self.write({"timeout_seconds": 9})
@@ -115,11 +122,11 @@ class ConfigFileTest(unittest.TestCase):
         self.assertEqual(common.address_to_connect_to(("10.0.0.5", 8080)), ("10.0.0.5", 8080))
 
     def test_environment_variables_override_the_file(self):
-        self.write({"servers": ["from-file:1001"], "web_address": "from-file:9000"})
+        self.write({"servers": ["127.0.0.1:1001"], "web_address": "from-file:9000"})
 
-        shown = self.show(**{common.SERVERS_VARIABLE: "from-env:2001", common.WEB_ADDRESS_VARIABLE: "from-env:9001"})
+        shown = self.show(**{common.SERVERS_VARIABLE: "localhost:2001", common.WEB_ADDRESS_VARIABLE: "from-env:9001"})
 
-        self.assertEqual(shown, "[('from-env', 2001)] ('from-env', 9001) 5 1 15")
+        self.assertEqual(shown, "[('localhost', 2001)] ('from-env', 9001) 5 1 15")
 
     def test_mistakes_are_reported_with_the_file_name(self):
         mistakes = {
@@ -129,7 +136,8 @@ class ConfigFileTest(unittest.TestCase):
             "servers not a list": {"servers": "a:1"},
             "empty servers": {"servers": []},
             "bad server": {"servers": ["no-port"]},
-            "too many servers": {"servers": [f"host{number}:{1000 + number}" for number in range(26)]},
+            "too many servers": {"servers": [f"127.0.0.1:{1000 + number}" for number in range(26)]},
+            "server on another machine": {"servers": ["assets-1:65432"]},
             "bad web address": {"web_address": "localhost"},
             "zero timeout": {"timeout_seconds": 0},
             "text timeout": {"failover_wait_seconds": "15"},
@@ -215,51 +223,12 @@ class HostnameTest(unittest.TestCase):
 class ListenAddressTest(unittest.TestCase):
     def test_a_server_normally_listens_on_every_network(self):
         with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": ""}):
-            self.assertEqual(node.listening_address(("assets-1", 65432)), ("0.0.0.0", 65432))
+            self.assertEqual(node.listening_address(("127.0.0.1", 65432)), ("0.0.0.0", 65432))
             self.assertEqual(node.listening_address(("127.0.0.1", 65433)), ("0.0.0.0", 65433))
 
     def test_the_host_can_be_replaced_but_not_the_port(self):
         with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": "127.0.0.1"}):
-            self.assertEqual(node.listening_address(("assets-1", 65432)), ("127.0.0.1", 65432))
-
-    def test_a_server_known_by_a_name_it_cannot_listen_on_still_starts(self):
-        # Other machines would know this server as assets-primary.invalid, a name that
-        # can't exist, so it can only start by listening on the address it is given.
-        with socket.socket() as spare:
-            spare.bind(("127.0.0.1", 0))
-            port = spare.getsockname()[1]
-        temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(temp_dir.cleanup)
-        code = (
-            f"import common\ncommon.LOG_FOLDER = {temp_dir.name!r}\n"
-            "import server\n"
-            f"server.ASSETS_FILE = {os.path.join(temp_dir.name, 'assets.json')!r}\n"
-            "server.main()\n"
-        )
-        env = {
-            **os.environ,
-            common.SERVERS_VARIABLE: f"assets-primary.invalid:{port}",
-            "ASSET_LISTEN_HOST": "127.0.0.1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
-        process = subprocess.Popen(
-            [sys.executable, "-c", code], cwd=FOLDER, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        self.addCleanup(process.wait)
-        self.addCleanup(process.kill)
-
-        deadline = time.monotonic() + 20
-        while True:
-            try:
-                reply = common.request_from(("127.0.0.1", port), {"action": "PING"})
-                break
-            except OSError:
-                if time.monotonic() > deadline or process.poll() is not None:
-                    self.fail("the server did not start")
-                time.sleep(0.2)
-
-        self.assertEqual(reply["status"], "OK")
+            self.assertEqual(node.listening_address(("127.0.0.1", 65432)), ("127.0.0.1", 65432))
 
 
 if __name__ == "__main__":

@@ -36,12 +36,16 @@ HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 
 # The address of each server: the primary first, then each backup in the order they take
-# over. Every program must agree on this list. 127.0.0.1 means "this machine", so by default everything
-# runs on one computer.
+# over. Every program must agree on this list. All the servers run on this one machine, so
+# each address is 127.0.0.1 ("this machine") and only the ports differ.
 DEFAULT_SERVERS = [
     ("127.0.0.1", 65432),  # primary
     ("127.0.0.1", 65433),  # backup
 ]
+
+# The only host names a server address may use. Both mean "this machine". Running servers on
+# other machines is not supported, so any other name is refused when the settings are read.
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
 
 # The most servers the list can hold. Each server gives out asset IDs with its own letter,
 # and server.ID_LETTERS has this many.
@@ -55,10 +59,7 @@ DEFAULT_WEB_ADDRESS = ("0.0.0.0", 8080)
 #   1. the defaults in this file
 #   2. config.json beside the code, if it exists (see config.example.json), or the file
 #      named by the ASSET_CONFIG environment variable
-#   3. environment variables, such as ASSET_SERVERS=assets-1:65432,assets-2:65433
-# To run the servers on separate machines, give every machine the same server list.
-# Hostnames are better than IP addresses, because a machine can then change its address
-# without every program being reconfigured. Nothing in the code has to change.
+#   3. environment variables, such as ASSET_SERVERS=127.0.0.1:65432,127.0.0.1:65433
 CONFIG_FILE = os.environ.get("ASSET_CONFIG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 SERVERS_VARIABLE = "ASSET_SERVERS"
 WEB_ADDRESS_VARIABLE = "ASSET_WEB_ADDRESS"
@@ -87,10 +88,14 @@ def parse_address(text: str, setting: str) -> tuple:
 def parse_servers(text: str, setting: str = SERVERS_VARIABLE) -> list:
     """Turn "host:port,host:port" into a list of (host, port) addresses.
 
-    Raises ValueError, naming the bad entry, if an address is wrong or there are more
-    than MAX_SERVERS.
+    Raises ValueError, naming the bad entry, if an address is wrong, is not on this
+    machine, or there are more than MAX_SERVERS.
     """
     servers = [parse_address(entry, setting) for entry in text.split(",")]
+    # Every server runs on this machine, so a host anywhere else is a mistake.
+    for host, port in servers:
+        if host not in LOCAL_HOSTS:
+            raise ValueError(f"{setting}: {host}:{port} is not on this machine. Every server must use 127.0.0.1")
     if len(servers) > MAX_SERVERS:
         raise ValueError(f"{setting} lists {len(servers)} servers, but there can be at most {MAX_SERVERS}")
     return servers
@@ -120,7 +125,7 @@ def load_config(path: str) -> dict:
     if "servers" in raw:
         entries = raw["servers"]
         if not isinstance(entries, list) or not entries or not all(isinstance(entry, str) for entry in entries):
-            raise ValueError(f'{path}: "servers" must be a list such as ["assets-1:65432", "assets-2:65433"]')
+            raise ValueError(f'{path}: "servers" must be a list such as ["127.0.0.1:65432", "127.0.0.1:65433"]')
         settings["servers"] = parse_servers(",".join(entries), f"{path} servers")
     if "web_address" in raw:
         if not isinstance(raw["web_address"], str):
@@ -175,14 +180,13 @@ def make_folder_for(path: str) -> None:
 
 
 # The key every program sends to prove it belongs to this system. It is created the first
-# time any program runs. To use several machines, copy this file to each of them.
+# time any program runs.
 SECRET_FILE = os.path.join(DATA_FOLDER, "secret.key")
 
 _secret = None  # the key, once read, so the file is only read once
 
 # The certificate that encrypts every connection to a server, with its private key, in one
-# file. Setup creates it, or the first program to run if setup hasn't. Like secret.key, it
-# must be copied to every machine. Clients trust this one certificate and nothing else, so
+# file. Setup creates it, or the first program to run if setup hasn't. Clients trust this one certificate and nothing else, so
 # a server with any other certificate is refused, even one a public authority signed.
 TLS_FILE = os.path.join(DATA_FOLDER, "tls.pem")
 TLS_CERTIFICATE_DAYS = 3650  # about 10 years, after which setup --reset makes a new one
