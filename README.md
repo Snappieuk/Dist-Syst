@@ -2,18 +2,18 @@
 
 A distributed system for registering, listing, updating and deleting asset records.
 The servers and clients are separate programs that run as their own processes and talk
-to each other by sending JSON messages over TCP sockets. By default everything runs on one
-machine. Setting one environment variable spreads it across several, with the servers
-found by name rather than by fixed addresses in the code.
+to each other by sending JSON messages over TCP sockets. Every server runs on one machine.
+Clients can be on other computers: the desktop apps connect to the servers or go through
+the web interface, and the web page can be reached through an HTTPS reverse proxy.
 
 ```
                                        browser
                                           | HTTP
-          cli.py         gui.py         web.py            clients, on any machine
-              \            |            /
-               \           |           /           find the servers by name through
-                v          v          v            ASSET_SERVERS, and try the
-    +-----------------+              +-----------------+   primary first, then the backup
+          cli.py         gui.py         web.py            clients, which try the
+              \            |            /                primary first, then the
+               \           |           /                 backup
+                v          v          v
+    +-----------------+              +-----------------+
     |    server.py    |  heartbeats  |    server.py    |
     |    (primary)    |<-------------|    (backup)     |
     |                 |  each change |                 |
@@ -22,7 +22,8 @@ found by name rather than by fixed addresses in the code.
     |  orders them    |<------------>|  refuses clients|
     +-----------------+              +-----------------+
        assets.json                     assets_backup.json
-       e.g. assets-1                   e.g. assets-2
+       port 65432                      port 65433
+                     (both on this machine)
 ```
 
 This shows the default of two servers. More can be added to the end of the list, and each
@@ -83,8 +84,7 @@ server in the list (the primary and the backup, by default) and the web interfac
 press Ctrl+C. To create an account from the command line, or replace a lost password, run
 `python web.py --set-password`.
 
-If one of them stops, the others carry on and it is restarted 20 seconds later, the way a
-cluster manager such as Kubernetes restarts a failed server. One that fails as it starts,
+If one of them stops, the others carry on and it is restarted 20 seconds later. One that fails as it starts,
 usually because the system is already running and its port is in use, stops everything
 instead.
 
@@ -140,7 +140,7 @@ Everything works without any settings. To change them, copy `config.example.json
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | Where the servers are: the primary first, then each backup in the order they take over |
+| `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | The servers' ports: the primary first, then each backup in the order they take over. Every server runs on this machine, so each address must be `127.0.0.1` (or `localhost`); any other is refused |
 | `web_address` | `"0.0.0.0:8080"` | Where `web.py` listens. `0.0.0.0` is every network; `127.0.0.1` is only this machine |
 | `behind_https_proxy` | `false` | Set to `true` when `web.py` sits behind an HTTPS reverse proxy such as Nginx Proxy Manager: the session cookie is then marked `Secure` and the real visitor address is logged |
 | `trusted_proxy` | `"127.0.0.1"` | The one address the proxy connects from. The `X-Forwarded-For` header is believed only on requests from here, and only when `behind_https_proxy` is `true` |
@@ -150,10 +150,12 @@ Everything works without any settings. To change them, copy `config.example.json
 
 A misspelt setting or a wrong value stops the program with a message naming `config.json`,
 rather than being ignored. Environment variables override the file: `ASSET_SERVERS` for the
-servers and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form;
+servers (such as `127.0.0.1:65432,127.0.0.1:65433`) and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form;
 `ASSET_BEHIND_HTTPS_PROXY` (`true` or `false`) and `ASSET_TRUSTED_PROXY` for the two proxy settings.
-`ASSET_CONFIG` can name a different settings file. `config.json` is ignored by git,
-because each machine has its own, and a reset leaves it alone.
+`ASSET_CONFIG` can name a different settings file. `ASSET_LISTEN_HOST=127.0.0.1` makes the
+servers accept connections from this machine only; without it they listen on every network,
+so the desktop apps on other computers can reach them. `config.json` is ignored by git,
+and a reset leaves it alone.
 
 The system runs without the backup, but it won't survive the primary failing. When the
 primary starts, it keeps trying to reach the backup for up to 3 seconds before serving
@@ -161,68 +163,23 @@ anyone, so the two can be started at the same moment and no change misses the ba
 the backup still isn't there, the primary starts alone and brings the backup up to date
 when it appears.
 
-## Running it across several machines
-
-Nothing in the code needs changing. Every machine, including those running only a client
-or `web.py`, needs the same server list, either as `servers` in its `config.json` or in the
-`ASSET_SERVERS` environment variable:
-
-| Variable | Set on | Meaning |
-|---|---|---|
-| `ASSET_SERVERS` | Every machine, unless `config.json` has `servers` | Where the servers are: the primary first, then each backup, as `host:port,host:port`. Without it or the setting, both are on this machine, on ports 65432 and 65433. |
-| `ASSET_LISTEN_HOST` | Each server machine, only to restrict it | The address the server listens on. Without it, every server listens on every network connection the machine has (`0.0.0.0`), so other devices can connect. Set it to `127.0.0.1` to accept only this machine. |
-
-For example:
-
-```
-export ASSET_SERVERS=assets-1:65432,assets-2:65433      # Linux and macOS
-$env:ASSET_SERVERS = "assets-1:65432,assets-2:65433"   # Windows PowerShell
-```
-
-Use hostnames rather than IP addresses where you can, so a machine can change its address
-without anyone updating the list. Any name the machines can look up works, from an entry
-in each machine's hosts file to DNS, a container's name or a Kubernetes service. Names are
-looked up as IPv4 addresses, because that is what the servers listen on.
-
-The servers listen on every network connection by default, on the port in their own
-`ASSET_SERVERS` entry, whatever name that entry uses. The name is only how other programs
-reach the server, and it may not belong to the server's own machine, for example when it is
-behind a router or in a container. `ASSET_LISTEN_HOST` restricts that if you want it to.
-
-Then:
-
-1. Run `python setup.py` on the machine that will run `web.py`. Copy the `secret.key` and
-   `tls.pem` it creates to the `data/` folder beside the code on every other machine. Every machine must have the
-   same two files, or its connections are refused.
-2. Run `python server.py` on the first machine and `python server.py --backup 1` on the
-   second. With more servers, run `--backup 2` on the third, and so on.
-3. Run clients or `web.py` anywhere that can reach every server.
-
-Each server's firewall must allow its port. Don't use `start.py` here, because it starts
-every server in the list on the same machine. Every connection to a server is encrypted, including the
-servers' own, so the network can't read them. The web page isn't, so keep `web.py` on the
-machine its users sit at, as it is by default.
-
-So far this has been tested as separate processes on one machine, with the servers found
-by name (`localhost`) instead of by `127.0.0.1`. It hasn't been run on two physical machines
-yet, and listening on `0.0.0.0` hasn't been tried.
-
 ## More than two servers
 
-To add a server, add its address to the end of the `servers` list on every machine, then
-start it with the next number:
+Every server runs on this machine, each on its own port. To add one, add another address
+to the end of the `servers` list in `config.json`:
 
 ```json
-{"servers": ["assets-1:65432", "assets-2:65433", "assets-3:65434"]}
+{"servers": ["127.0.0.1:65432", "127.0.0.1:65433", "127.0.0.1:65434"]}
 ```
 
-```
-python server.py               # the primary, assets-1
-python server.py --backup 1    # assets-2
-python server.py --backup 2    # assets-3
-```
+`start.py` then starts one server for each address in the list by itself. To start them by
+hand instead, give each the next number:
 
-On one machine, `start.py` starts one server for each address in the list by itself.
+```
+python server.py               # the primary, port 65432
+python server.py --backup 1    # port 65433
+python server.py --backup 2    # port 65434
+```
 
 The order of the list is the order of succession, and one rule decides everything:
 
@@ -242,9 +199,9 @@ Each server has its own name, data file, log and range of asset IDs: the primary
 uses `assets_backup2.json` and `AST-C...`, and so on. Clients need no changes, because they
 already try each server in the list in order.
 
-This is deliberately simple. Extra servers hold extra copies and can take over in turn, but
-they don't vote, so they don't protect against a network split. See
-[Known limitations](#known-limitations).
+This is deliberately simple. Extra servers hold extra copies and can take over in turn if a
+server process fails, but they are all on the same machine, so they don't protect against
+that machine failing. See [Known limitations](#known-limitations).
 
 ## Resetting
 
@@ -259,9 +216,7 @@ certificate and the logs on this machine.** It shows what will be lost, and what
 and asks you to type `RESET` first. After that it stops everything of the system running on
 this machine (`start.py` first, so it can't restart anything), then deletes. If something
 can't be stopped, nothing is deleted. It doesn't touch
-the code or the git history. If you use several machines, reset each of them, because a
-server that still has the data would copy it straight back, and a server on another machine
-has to be stopped there. The next `python start.py` runs setup again.
+the code or the git history. The next `python start.py` runs setup again.
 
 ## Filling the table with test data
 
@@ -309,8 +264,6 @@ from the servers' side. The demo pauses before each step, so you can explain it:
    it, as an admin would on the web page or in the GUI.
 6. It deletes the two assets it added.
 
-It also works across machines, as long as `ASSET_SERVERS` is set where it runs.
-
 To show it by hand instead, start both servers and the GUI in separate terminals, and keep
 the server logs visible.
 
@@ -327,9 +280,6 @@ the server logs visible.
 5. Run `web.py`, log in and repeat steps 2 and 3. Without reloading, the summary row
    changes to `Backup` and back, and you can still add and delete assets during the outage.
    If you stop both servers, it keeps the last list on screen with a warning.
-6. To show the servers being found by name, set
-   `ASSET_SERVERS=localhost:65432,localhost:65433` in every terminal and repeat steps 1–3.
-   Nothing changes for the user, because no program needs to know the servers' addresses.
 
 ## Reviewing, loans, history and the calendar
 
@@ -403,7 +353,7 @@ There are two layers, because a login on the web page alone could be bypassed by
 directly to a server's port.
 
 Between programs, every request to a server carries a shared secret from `secret.key`. The
-first program to run creates this file, and every machine needs the same copy. Servers
+first program to run creates this file, and every program on this machine uses it. Servers
 refuse any request without the right value with `UNAUTHORIZED`, including the messages
 between the servers themselves.
 
@@ -576,8 +526,7 @@ Every program logs to the console and to its own file in `data/logs/`:
 | `web.log` | `web.py` | Logins and failed logins with where they came from, logouts, and which account added, deleted or created what |
 | `start.log` | `start.py` | When the system started and stopped, and each program that stopped and was restarted |
 
-Each program has its own file because they are separate processes, possibly on separate
-machines. Processes sharing one file can mix up each other's lines, and can't safely take
+Each program has its own file because they are separate processes. Processes sharing one file can mix up each other's lines, and can't safely take
 turns starting a new file when it fills up. Every line starts with the time, the level, the
 program and the thread, for example:
 
@@ -637,8 +586,7 @@ network.
 part was checked separately in Microsoft Edge. `DistributedTest` runs the primary and
 the backup as separate programs and kills them partway through. `ThreeServerTest` does the
 same with three servers, failing the first two in turn and bringing both back. `test_config.py` starts
-programs with `ASSET_SERVERS` and `ASSET_LISTEN_HOST` set, including a server known by a name
-it can't listen on. `test_demo.py` runs the whole demo against real servers.
+programs with `ASSET_SERVERS` set, and checks that a server address on another machine is refused. `test_demo.py` runs the whole demo against real servers.
 `test_logging.py` checks that the servers write separate files, that full files are replaced
 and that crashes are recorded. Tests write logs to temporary folders, never to `data/logs/`. Some
 tests make a save fail on purpose, so you will see logged errors and tracebacks in the output.
@@ -649,14 +597,14 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 |---|---|---|
 | Message passing | Servers and clients share no memory and only communicate over sockets | `common.py`: `send_message`, `receive_message` |
 | External data representation | Length-prefixed UTF-8 JSON, so programs don't depend on a language or platform | `common.py`: `send_message` |
-| Naming and location transparency | Programs find the servers by name from configuration, so a server can move machine without any code changing | `common.py`: `SERVERS`, `parse_servers`, `request_from` |
+| Configuration | Programs find the servers' ports from one shared list, not from numbers fixed in the code | `common.py`: `SERVERS`, `parse_servers` |
 | Replication | The backup holds a full copy of the data in its own file | `server.py`: `apply_change` |
 | Synchronous replication | A client only hears that a change worked after the backup has saved it | `server.py`: `replicate_change` |
 | Single leader | Only the primary accepts changes, so there is one order of events | `node.py`: `accepts_writes` |
 | Total ordering | Every change has a sequence number, so a gap can be detected | `server.py`: `apply_change` |
 | Failure detection | Each backup pings the servers before it every second and treats 3 missed heartbeats as a failure | `server.py`: `monitor_earlier_servers` |
 | Failover | The first backup whose earlier servers are all silent promotes itself, and clients move to it automatically | `server.py`: `monitor_earlier_servers`, `common.py`: `send_request` |
-| Automatic restart | A server that stops is restarted while the others carry on, as a cluster manager would | `start.py`: `check_programs` |
+| Automatic restart | A server that stops is restarted while the others carry on | `start.py`: `check_programs` |
 | Recovery and reconciliation | A returning server merges the changes of the servers after it and takes back control | `server.py`: `catch_up`, `merge_state` |
 | Conflict resolution | A delete wins, then the higher version, then the primary's copy | `server.py`: `merge_state` |
 | Idempotent requests | A retry has the same `request_id`, so it can't create a second asset | `node.py`: `register_asset` |
@@ -796,8 +744,7 @@ limitations cover what happens if both do.
 - Errors have clear codes, and clients show a message instead of a traceback when no
   server can be reached.
 - A separate backup server takes over if the primary fails.
-- The servers can run on separate machines, found by name through configuration instead
-  of addresses fixed in the code.
+- The servers' ports come from configuration instead of being fixed in the code.
 - Programs need a shared secret, and the web page needs a login, with accounts that can be
   created from the page.
 - A web page, a single start command, first-time setup and a full reset were added.
@@ -817,38 +764,17 @@ While both servers are running, a change is on both disks before the client gets
 
 ## How far it scales
 
-Running the servers on separate machines makes the system **fault tolerant**: it keeps
-working when one machine fails. It doesn't add **capacity**, because every change still
-goes through the one primary.
+Every server runs on one machine. The backups let the system survive a **server process**
+failing, but not the **machine** failing, and they don't add **capacity**, because every
+change still goes through the one primary.
 
 | | Now |
 |---|---|
-| Server failures it survives | All but one, as long as they don't fail at the same moment as a network split |
+| Server failures it survives | All but one, as long as the machine itself keeps running |
 | Servers that accept changes | 1, the first one in the list that is running |
 | Servers that answer reads | Every server, though a backup may be slightly behind |
 | Servers in total | Any number up to 25, 2 by default |
 | Copies of `web.py` | 1, because logins are held in its memory |
-
-It could run on Kubernetes with two small changes. Each server would be a StatefulSet with
-one pod and a persistent volume, with the service names in `ASSET_SERVERS`,
-`ASSET_LISTEN_HOST=0.0.0.0`, and `secret.key` and `tls.pem` mounted from a Kubernetes Secret. Kubernetes
-would restart a failed pod, and the backup would cover the gap until it returned. First,
-though, the `data/` folder would need to be configurable, because it is always beside the
-code, and `web.py` would need to listen on more than `127.0.0.1`. This hasn't been tried.
-
-Growing beyond this would take, roughly in order:
-
-1. **Reading from the backup** for `LIST`, trading slightly old data for more read capacity.
-2. **A majority vote**, as in Raft. A change would count once most servers had saved it,
-   and a leader would be elected by majority. This would end the network split problem
-   below, because the smaller side can't form a majority. It was left out on purpose to
-   keep the system simple.
-3. **A database instead of the JSON file**, so a change only writes what changed, plus
-   paging for `LIST`.
-4. **Sessions and accounts in a shared store**, so `web.py` can run as many copies as needed
-   behind a load balancer.
-5. **Sharding**, splitting the assets across several groups of servers, each with its own
-   leader. This is the only step that adds write capacity.
 
 ## Known limitations
 
@@ -865,8 +791,8 @@ data, and some changes are lost even though their clients were told they worked:
   they made the same number.
 - A delete on either server beats any status change.
 
-This is more likely across separate machines, where the network between them can fail on
-its own, than on one machine.
+On one machine this is unlikely, but it can happen if a server stops answering for a while
+without stopping, for example while the machine is overloaded.
 
 Other limitations:
 
@@ -878,30 +804,26 @@ Other limitations:
   don't vote, and they don't make a network split any safer.
 - Every change is copied to every other server one after another, so each server added
   makes every change a little slower.
-- Every machine must have the same server list in the same order. Adding a server means
-  changing the list on every machine and restarting everything.
+- Adding a server means changing the list in `config.json` and restarting everything.
 - A backup only takes over when every server before it is silent, and it pings them one at
   a time, so the more earlier servers are down, the longer a takeover takes.
 - There can be at most 25 servers, because each needs its own letter for asset IDs.
-- `start.py` restarts a failed server, but only on one machine. Across machines, failed
-  servers have to be restarted by hand or by something like Kubernetes.
+- Every server is on one machine, so if that machine fails or its disk is lost, the whole
+  system stops and the data is only as safe as that disk.
 - Any program with `secret.key` can stop a server with `STOP`. That is no more access than it
   already has, since it could also delete every asset.
 - If the backup was down when the primary took changes and the primary then fails, those
   changes are unavailable until the primary returns. If the primary's disk were also
   destroyed, they would be lost.
 - The lock is held while copying to the other servers, so a stalled one can delay changes by
-  up to the 5-second timeout before it is marked as behind. Across a slow network, every
-  change also waits for the round trip to the backup.
+  up to the 5-second timeout before it is marked as behind.
 - The backup answers `LIST` while on standby, and may be out of date if it was recently down.
 - The servers only use IPv4. A name is looked up as an IPv4 address, and only its first
   address is tried.
-- `secret.key` and `tls.pem` have to be copied to each machine by hand, and every program
-  shares them. `tls.pem` holds the private key as well as the certificate, so a client
-  machine has the key too. That is no more than `secret.key` already gives, but it means
-  anyone with the file could pretend to be a server.
-- A new certificate means copying the new `tls.pem` to every machine and restarting
-  everything, because programs load it once.
+- Every program on this machine shares `secret.key` and `tls.pem`. `tls.pem` holds the
+  private key as well as the certificate, so anyone who can read it could pretend to be a
+  server.
+- A new certificate means restarting everything, because programs load it once.
 - Duplicates are judged only by description, category and location, because nothing
   identifies the physical item. "Dell laptop" and "Dell Latitude" at one site count as
   different items. Category and location are free text.
@@ -912,15 +834,12 @@ Other limitations:
   intercept that first connection could pose as the server. A copy downloaded from the web
   page has the real certificate built in, so it is not affected. Nothing is remembered, so
   a plain copy decides again every time. Discovery only finds servers on the usual
-  ports, on the local network. `web_users.json` isn't copied between servers, so every
-  server machine needs its own copy, and a token is only accepted where the account exists.
+  ports, on the local network.
 - Only `web.py` and the GUI know who made a change, so changes from the command-line
   clients are audited with `user` set to `null`. The servers trust the `user` a program sends, since only programs with
   `secret.key` can send one.
 - The audit logs are ordinary files, so someone with access to the machine could edit them.
   They are a record, not tamper-proof evidence.
-- Each machine keeps its own logs. Following an event across machines means collecting
-  their files, and their clocks must agree for the times to line up.
 - Accounts belong to `web.py` and are stored beside it. They aren't copied to the backup, so
   they don't protect against losing that machine.
 - A password can't be changed from the web page, only with `python web.py --set-password`,
@@ -952,7 +871,6 @@ Other limitations:
 
 ## Further development
 
-The scaling steps above come first, especially reading from the backups and a majority vote. Other
-ideas are a serial number to identify items, HTTPS for the web page, the shared secret supplied through an
-environment variable, changing passwords from the page, and sending every machine's logs
-to one place.
+Ideas include reading from the backups for `LIST`, a database instead of the JSON file, a
+serial number to identify items, HTTPS for the web page, the shared secret supplied through
+an environment variable, and changing passwords from the page.
