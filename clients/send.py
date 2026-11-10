@@ -2,14 +2,20 @@
 Registration client.
 
 Prompts you for the details of one asset, then registers it with the server.
-The server must already be running (start server.py first).
+The server must already be running (start it with python server.py first).
 
-    python send.py
+    python clients/send.py
 
 If you run this by double-clicking the file (rather than from an already-open
 terminal), Windows closes the console the instant the script finishes. The pause at
 the end keeps the window open until you press Enter.
 """
+
+import os
+import sys
+
+# common.py is in the project folder, one level up from this one.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import STATUSES, log_in_from_prompt, new_request_id, send_request
 

@@ -1,8 +1,8 @@
 """
 Creates the TLS certificate that encrypts every connection to the servers.
 
-    python certificate.py            (create server.crt and server.key, or show the fingerprint)
-    python certificate.py --replace  (make a new pair, e.g. after changing a server address)
+    python tools/certificate.py            (create server.crt and server.key, or show the fingerprint)
+    python tools/certificate.py --replace  (make a new pair, e.g. after changing a server address)
 
 It prints the certificate's fingerprint. Give it to the people using gui.py: the
 first time they connect, the GUI shows the server's fingerprint, and they should
@@ -29,6 +29,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+
+# common.py is in the project folder, one level up from this one.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import common
 import users
@@ -93,7 +96,7 @@ def main(arguments: list) -> None:
     config = common.load_config()
     certificate_path = common.config_path(config, config["certificate_file"])
     if os.path.exists(certificate_path) and "--replace" not in arguments:
-        print(f"{config['certificate_file']} already exists. To make a new one, run: python certificate.py --replace")
+        print(f"{config['certificate_file']} already exists. To make a new one, run: python tools/certificate.py --replace")
     else:
         create_certificate(config)
         print(f"Created {config['certificate_file']} and {config['private_key_file']}.")

@@ -13,10 +13,10 @@ asset holds a value:
 
 It talks to the server with the normal requests (LOGIN, REGISTER, EDIT, DELETE), so
 the changes are checked, saved, audited and copied to the backup like any other.
-The server must already be running (start server.py first).
+The server must already be running (start it with python server.py first).
 
-    python seed.py          (30 assets)
-    python seed.py 100      (100 assets)
+    python tools/seed.py          (30 assets)
+    python tools/seed.py 100      (100 assets)
 
 Asset IDs are SEED-0001, SEED-0002 and so on. IDs that already exist (from an
 earlier run) are skipped, so running it again adds new assets instead of failing.
@@ -24,6 +24,11 @@ earlier run) are skipped, so running it again adds new assets instead of failing
 
 import getpass
 import sys
+
+import os
+
+# common.py is in the project folder, one level up from this one.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import DUPLICATE_ASSET, STATUSES, load_config, login, new_request_id, send_request
 
@@ -118,7 +123,7 @@ def count_from_arguments(arguments: list) -> int:
         return DEFAULT_COUNT
     if len(arguments) == 1 and arguments[0].isdigit() and int(arguments[0]) > 0:
         return int(arguments[0])
-    raise ValueError("Usage: python seed.py [number of assets]")
+    raise ValueError("Usage: python tools/seed.py [number of assets]")
 
 
 def main(config: dict = None, arguments: list = None) -> None:

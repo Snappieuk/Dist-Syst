@@ -2,7 +2,7 @@
 Tkinter client for the Asset Management System. A single file: copy it to any
 computer with Python 3.8+ and run it.
 
-    python gui.py
+    python clients/gui.py
 
 On the login screen, enter the server's IP address or host name (add :port if it
 isn't the usual one), or press "Find servers" to look for it on the local network.

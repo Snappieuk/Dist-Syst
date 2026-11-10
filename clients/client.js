@@ -1,6 +1,9 @@
 // Minimal Node.js client (no dependencies). Speaks only JSON to the server:
 // TLS connection, 4-byte big-endian length header, then a UTF-8 JSON object.
 //
+// It reads config.json and server.crt from its own folder, or else from the folder
+// above (the project folder).
+//
 // Usage:
 //   node client.js <username> <password> ping
 //   node client.js <username> <password> list
@@ -13,8 +16,9 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 
-const config = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
-const ca = fs.readFileSync(path.join(__dirname, config.certificate_file));
+const folder = [__dirname, path.dirname(__dirname)].find((f) => fs.existsSync(path.join(f, "config.json"))) || __dirname;
+const config = JSON.parse(fs.readFileSync(path.join(folder, "config.json"), "utf8"));
+const ca = fs.readFileSync(path.join(folder, config.certificate_file));
 
 function sendRequest(server, request) {
   return new Promise((resolve, reject) => {

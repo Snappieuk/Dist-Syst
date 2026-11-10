@@ -2,11 +2,11 @@
 Query client.
 
 Asks the server for the registered assets and prints them. The server must already
-be running (start server.py first).
+be running (start it with python server.py first).
 
-    python receive.py                  (every asset)
-    python receive.py laptop           (assets with "laptop" in any field)
-    python receive.py location=site a  (assets whose location contains "site a")
+    python clients/receive.py                  (every asset)
+    python clients/receive.py laptop           (assets with "laptop" in any field)
+    python clients/receive.py location=site a  (assets whose location contains "site a")
 
 If you run this by double-clicking the file (rather than from an already-open
 terminal), Windows closes the console the instant the script finishes. The pause at
@@ -14,6 +14,11 @@ the end keeps the window open until you press Enter.
 """
 
 import sys
+
+import os
+
+# common.py is in the project folder, one level up from this one.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import log_in_from_prompt, send_request
 

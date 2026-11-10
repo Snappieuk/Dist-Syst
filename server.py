@@ -44,6 +44,9 @@ import ssl          # encrypts every connection with TLS
 import sys          # reads which server to run from the command line
 import threading    # one thread per client, and a lock for the shared data
 
+# users.py (accounts and login tokens) is in the tools folder.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
+
 import common
 import users
 from common import (
@@ -835,8 +838,8 @@ def main() -> None:
         print(
             "\nThe one-time setup hasn't been done yet. In this folder, run:\n"
             "    pip install -r requirements.txt\n"
-            "    python certificate.py\n"
-            "    python users.py add admin admin\n"
+            "    python tools/certificate.py\n"
+            "    python tools/users.py add admin admin\n"
             "then start the server again."
         )
         wait_before_closing()

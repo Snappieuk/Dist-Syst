@@ -3,12 +3,12 @@
 // Speaks only JSON to the server: a TLS connection, a 4-byte big-endian length header,
 // then a UTF-8 JSON object.
 //
-// Build (once), from this folder:
-//   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs client_gui.cs
+// Build it with build.bat, in this folder.
 //
 // Run client.exe with no arguments, or double-click it, to open the window (see
-// client_gui.cs). With arguments it works on the command line instead. Run those
-// commands from this folder, since they read config.json and server.crt beside client.exe:
+// client_gui.cs). With arguments it works on the command line instead. Those commands
+// read config.json and server.crt from beside client.exe, or else from the folder
+// above (the project folder):
 //   client.exe <username> <password> ping
 //   client.exe <username> <password> list
 //   client.exe <username> <password> register
@@ -70,7 +70,7 @@ class Client
             Console.Error.WriteLine("usage: client.exe <username> <password> ping|list|register|edit|delete ...");
             return 2;
         }
-        string folder = AppDomain.CurrentDomain.BaseDirectory;
+        string folder = ConfigFolder();
         config = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(folder, "config.json"), Encoding.UTF8));
         trusted = LoadCertificate(Path.Combine(folder, (string)config["certificate_file"]));
 
@@ -126,6 +126,16 @@ class Client
         var reply = Call(request);
         Show(reply);
         return (string)reply["status"] == "OK" ? 0 : 1;
+    }
+
+    // The folder holding config.json: beside client.exe, or else the folder above it.
+    static string ConfigFolder()
+    {
+        string here = AppDomain.CurrentDomain.BaseDirectory;
+        string above = Path.GetDirectoryName(here.TrimEnd(Path.DirectorySeparatorChar));
+        if (!File.Exists(Path.Combine(here, "config.json")) && above != null && File.Exists(Path.Combine(above, "config.json")))
+            return above;
+        return here;
     }
 
     // Trust only the system's own certificate: the server must present exactly the

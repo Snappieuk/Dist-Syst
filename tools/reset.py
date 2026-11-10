@@ -1,8 +1,8 @@
 """
 Resets the system to a fresh install, then optionally sets it up again.
 
-    python reset.py          (asks you to type RESET first)
-    python reset.py --yes    (no confirmation, for scripts)
+    python tools/reset.py          (asks you to type RESET first)
+    python tools/reset.py --yes    (no confirmation, for scripts)
 
 Deletes every file the system creates, and nothing else: both servers' asset data,
 the audit logs, every account, the token-signing key and the TLS certificate and
@@ -20,6 +20,9 @@ import getpass
 import os
 import socket
 import sys
+
+# common.py is in the project folder, one level up from this one.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import certificate
 import common
@@ -100,7 +103,7 @@ def set_up_again(config: dict) -> bool:
             continue
         print("Created the admin account. Start the servers with: python server.py  and  python server.py backup")
         return True
-    print("No account was created. Run: python users.py add admin admin")
+    print("No account was created. Run: python tools/users.py add admin admin")
     return False
 
 
@@ -112,7 +115,7 @@ def main(arguments: list) -> None:
     if answer in ("", "y", "yes"):
         set_up_again(config)
     else:
-        print("To set up later, run: python certificate.py  then  python users.py add admin admin")
+        print("To set up later, run: python tools/certificate.py  then  python tools/users.py add admin admin")
 
 
 if __name__ == "__main__":

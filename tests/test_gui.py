@@ -1,10 +1,11 @@
 """
 Tests for the Tkinter GUI (FR08). They drive the real window against real servers.
 
-    python -m unittest -v test_gui
+    python -m unittest discover -v tests            (every test, from the project folder)
+    python -m unittest discover -v tests -p test_gui.py  (just these)
 
 The window tests are skipped if Tkinter is not installed or there is no display. On a
-Linux machine without a screen, run them with: xvfb-run python -m unittest test_gui
+Linux machine without a screen, run them with: xvfb-run python -m unittest discover tests
 """
 
 import ast
@@ -13,6 +14,15 @@ import os
 import time
 import unittest
 from unittest import mock
+
+import sys
+
+# The code under test is in the project folder and its tools and clients folders.
+TESTS = os.path.dirname(os.path.abspath(__file__))
+PROJECT = os.path.dirname(TESTS)
+for folder in (TESTS, PROJECT, os.path.join(PROJECT, "tools"), os.path.join(PROJECT, "clients")):
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
 
 import common
 import server
@@ -33,7 +43,7 @@ class StandaloneTest(unittest.TestCase):
     """gui.py must work as a single file handed out on its own."""
 
     def test_it_imports_only_the_standard_library(self):
-        tree = ast.parse(open(os.path.join(os.path.dirname(__file__), "gui.py"), encoding="utf-8").read())
+        tree = ast.parse(open(os.path.join(PROJECT, "clients", "gui.py"), encoding="utf-8").read())
         imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
                     for alias in node.names}
         imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}

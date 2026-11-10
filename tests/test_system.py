@@ -1,7 +1,8 @@
 """
 Automated tests for the Asset Management System.
 
-    python -m unittest -v test_system
+    python -m unittest discover -v tests            (every test, from the project folder)
+    python -m unittest discover -v tests -p test_system.py  (just these)
 
 Each test starts real servers on spare ports, with their own temporary data files,
 and talks to them over real sockets.
@@ -21,6 +22,15 @@ import io
 from unittest import mock
 
 import ssl
+
+import sys
+
+# The code under test is in the project folder and its tools and clients folders.
+TESTS = os.path.dirname(os.path.abspath(__file__))
+PROJECT = os.path.dirname(TESTS)
+for folder in (TESTS, PROJECT, os.path.join(PROJECT, "tools"), os.path.join(PROJECT, "clients")):
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
 
 import certificate
 import common

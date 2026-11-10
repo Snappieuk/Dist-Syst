@@ -1,9 +1,9 @@
 """
 User accounts, passwords and login tokens.
 
-    python users.py add USERNAME admin    (create an administrator, or reset a password)
-    python users.py add USERNAME user     (create an ordinary user)
-    python users.py list                  (show every account and its role)
+    python tools/users.py add USERNAME admin    (create an administrator, or reset a password)
+    python tools/users.py add USERNAME user     (create an ordinary user)
+    python tools/users.py list                  (show every account and its role)
 
 Accounts live in the users file named in config.json. Only a salted hash of each
 password is stored, never the password itself. Roles:
@@ -24,6 +24,9 @@ import os        # creates files that only their owner can read
 import secrets   # generates salts and the signing key
 import sys       # reads the command line
 import time      # sets and checks token expiry
+
+# common.py is in the project folder, one level up from this one.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import common
 
