@@ -71,7 +71,7 @@ the certificate that encrypts every connection:
 python -m pip install -r requirements.txt
 ```
 
-A machine that is given a copy of `tls.pem`, rather than creating its own, doesn't need it.
+Setup uses it to create the certificate.
 
 The quickest way to start everything is:
 
@@ -148,8 +148,7 @@ Everything works without any settings. To change them, copy `config.example.json
 | `heartbeat_timeout_seconds` | `1` | How long the servers wait for each other's heartbeats |
 | `failover_wait_seconds` | `15` | How long a client keeps trying while the backup takes over |
 
-A misspelt setting or a wrong value stops the program with a message naming `config.json`,
-rather than being ignored. Environment variables override the file: `ASSET_SERVERS` for the
+A misspelt setting or a wrong value stops the program with a message naming `config.json`. Environment variables override the file: `ASSET_SERVERS` for the
 servers (such as `127.0.0.1:65432,127.0.0.1:65433`) and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form;
 `ASSET_BEHIND_HTTPS_PROXY` (`true` or `false`) and `ASSET_TRUSTED_PROXY` for the two proxy settings.
 `ASSET_CONFIG` can name a different settings file. `ASSET_LISTEN_HOST=127.0.0.1` makes the
@@ -157,7 +156,7 @@ servers accept connections from this machine only; without it they listen on eve
 so the desktop apps on other computers can reach them. `config.json` is ignored by git,
 and a reset leaves it alone.
 
-The system runs without the backup, but it won't survive the primary failing. When the
+The system runs without the backup. It then stops working if the primary fails. When the
 primary starts, it keeps trying to reach the backup for up to 3 seconds before serving
 anyone, so the two can be started at the same moment and no change misses the backup. If
 the backup still isn't there, the primary starts alone and brings the backup up to date
@@ -183,14 +182,14 @@ python server.py --backup 2    # port 65434
 
 The order of the list is the order of succession, and one rule decides everything:
 
-- **A server accepts changes only when no server before it in the list answers.** Normally
+- A server accepts changes only when no server before it in the list answers. Normally
   that is the primary. If it fails, backup 1 takes over. If backup 1 has failed as well,
   backup 2 takes over, and so on. A server only takes over once every server before it has
   missed 3 heartbeats in a row.
-- **Whichever server is accepting changes copies each one to every server after it** before
+- Whichever server is accepting changes copies each one to every server after it before
   the client is told it worked. A server that is down is skipped, and brought up to date
   when it returns.
-- **When a server earlier in the list comes back, it takes control again.** It collects the
+- When a server earlier in the list comes back, it takes control again. It collects the
   data of each server after it, merges it with its own using the usual rules, and sends the
   result back, which puts them on standby.
 
@@ -199,9 +198,8 @@ Each server has its own name, data file, log and range of asset IDs: the primary
 uses `assets_backup2.json` and `AST-C...`, and so on. Clients need no changes, because they
 already try each server in the list in order.
 
-This is deliberately simple. Extra servers hold extra copies and can take over in turn if a
-server process fails, but they are all on the same machine, so they don't protect against
-that machine failing. See [Known limitations](#known-limitations).
+Extra servers hold extra copies and take over in turn if a server process fails. They are
+all on the same machine, so if that machine fails, they all stop. See [Known limitations](#known-limitations).
 
 ## Resetting
 
@@ -211,8 +209,8 @@ To put everything back to a fresh install, run:
 python setup.py --reset
 ```
 
-**This permanently deletes every asset, every web account, the shared secret, the
-certificate and the logs on this machine.** It shows what will be lost, and what is running,
+This permanently deletes every asset, every web account, the shared secret, the
+certificate and the logs on this machine. It shows what will be lost, and what is running,
 and asks you to type `RESET` first. After that it stops everything of the system running on
 this machine (`start.py` first, so it can't restart anything), then deletes. If something
 can't be stopped, nothing is deleted. It doesn't touch
@@ -236,7 +234,7 @@ as sample data, so it has a `sample data` tag (search for it to see only these).
 in five are lent to a made-up person, with loans from 30 days ago to 20 days ahead: most
 that have ended were returned, some late, and some are overdue, so the loans calendar has
 something to show. Adding 500 takes about 10 seconds. To clear them away again, run `python setup.py --reset`,
-which deletes every asset, not just these.
+which deletes every asset, including these.
 
 ## Demo
 
@@ -283,7 +281,7 @@ the server logs visible.
 
 ## Reviewing, loans, history and the calendar
 
-**Flagged for review.** Only the primary normally accepts changes, so an asset registered
+Flagged for review. Only the primary normally accepts changes, so an asset registered
 while it was offline (by a backup that had taken over) is flagged for someone to check. The
 web page shows these in a "Flagged for review" panel above the totals, and the GUI in an
 area above the table, each saying the assets were added while the primary server was
@@ -292,7 +290,7 @@ ticked ones or all of them. Approving clears the flag. Denying deletes the asset
 asks first. On the web page only admins can approve or deny, as only they can delete.
 Flagged assets are also marked "Needs review" in the main table.
 
-**Check-out form.** On the web page, each asset has a Check out button, which asks for the
+Check-out form. On the web page, each asset has a Check out button, which asks for the
 borrower's name, a start date (today) and a due date (a week later). An asset on loan has a
 Check in button instead, and its status says who has it and until when, in red once it is
 overdue. Checking out marks it In Use and checking in marks it Not In Use. An asset can't
@@ -302,19 +300,19 @@ same form for an asset that is free, or asks before checking in one that is on l
 Loans button lists every loan of the assets the table shows, oldest start first, with
 the return date, "On loan" or "Overdue".
 
-**History.** Every registration, status change, edit, approval, check-out and check-in is
+History. Every registration, status change, edit, approval, check-out and check-in is
 recorded with the asset: when, what, which web user asked and which server did it. The
 history travels with the asset, so every server has it. Click an asset on the web page,
 or double-click it (or use History) in the GUI, to see it.
 
-**People.** The People tab lists everyone who has something on loan right now. It is worked
+People. The People tab lists everyone who has something on loan right now. It is worked
 out from the loans themselves, so it fills by itself (including with demo data), the same
 person lent two items is one row listing both, and they drop off once everything is back,
 whoever checked it in. The Borrower box offers every name ever lent to as you type. Remove
 on someone who still has items out first lists those items, then asks again before
 checking them all back in. (A loan can't be deleted, only closed by checking the item in.)
 
-**Loans and calendar.** The Loans tab lists every loan, newest first, with a filter for
+Loans and calendar. The Loans tab lists every loan, newest first, with a filter for
 on loan, overdue or returned, and a Check in button on loans still out. The Calendar tab shows a month at a time as a real calendar,
 weeks starting on Monday. Each loan is a bar across its days: green while out, red when
 overdue (running up to today) and grey once returned. A day with more loans than fit shows
@@ -322,7 +320,7 @@ overdue (running up to today) and grey once returned. A day with more loans than
 Every loan an asset has had is kept, so past months show too. The Review tab is always
 there, and says so when nothing is waiting.
 
-**Totals.** The totals at the top of the web page count what the search and status filter
+Totals. The totals at the top of the web page count what the search and status filter
 match, so searching "switch" shows how many switches there are, how many are in use and
 how many are on loan.
 
@@ -342,7 +340,7 @@ Clients don't check the server's name, because trusting one exact certificate is
 check, and the servers may be reached by any name. A program that doesn't use TLS gets
 nothing from a server.
 
-The web page itself is plain HTTP, not HTTPS. That is safe while `web.py` listens only on
+The web page itself uses plain HTTP. That is safe while `web.py` listens only on
 127.0.0.1, its default, because then the browser and `web.py` are on the same machine and
 nothing crosses a network. Changing its address to reach it from other machines would send
 passwords unencrypted.
@@ -382,7 +380,7 @@ last admin can't be removed or made a user, so the system can't be left with no 
 --set-password`, run on the machine itself, can replace a password. An existing account
 keeps its role when its password is replaced.
 
-**The command-line clients (`cli.py`, `demo.py`) are trusted admin tools.** They have no
+The command-line clients (`cli.py`, `demo.py`) are trusted admin tools. They have no
 login, because they prove themselves with `secret.key` instead, and anything with that file
 can do everything, including deleting. Only give `secret.key` to people who should have
 admin rights. `gui.py` doesn't need that file: it logs in, as described next.
@@ -404,30 +402,30 @@ should never be shared publicly.
 any computer with Python 3.8 or later. It has no `secret.key`, `tls.pem` or settings
 file, and saves nothing.
 
-**Easiest: download it from the web page.** Log in to the web page, open the account
-menu and choose **Download Python app (gui.py)**. The file you get is `gui.py` with two lines
+Easiest: download it from the web page. Log in to the web page, open the account
+menu and choose Download Python app (gui.py). The file you get is `gui.py` with two lines
 filled in: the servers' addresses (the address you used for the web page replaces
 `127.0.0.1`) and the fingerprint of the real certificate. Run it, type your username and
-password, and that's all: the address is already there and nothing is asked about
+password. The address is already there and nothing is asked about
 certificates. It only ever talks to a server presenting that exact certificate, which
 closes the gap described below. Neither value is secret, and the secret key and passwords
 are never put in the file. If the servers' certificate is ever replaced (`data/tls.pem`),
 old downloads stop working and need downloading again. Anyone who can change the web page
 could hand out a different file, so serve the page only over a network you trust.
 
-**Behind an HTTPS reverse proxy** (`behind_https_proxy` is on in `config.json`), both
+Behind an HTTPS reverse proxy (`behind_https_proxy` is on in `config.json`), both
 downloads (`gui.py` and `AssetApp.exe`) are filled in differently: they hold the site's
 `https://` address, as the browser reached it (for example `https://assets.example.com`),
 and no server addresses or fingerprint, because they then use HTTPS mode (below) and the
 site's own certificate. With the setting off, the downloads are as described above.
 
-**Windows app (.exe), no Python needed.** `clients\app\` holds the same desktop app written
+Windows app (.exe), no Python needed. `clients\app\` holds the same desktop app written
 in C# (Windows Forms): login, Assets, Loans, People, Calendar and Review tabs, add, edit,
 status, delete, history and check out / in, with the same search, failover and certificate
 pinning as `gui.py`. It refreshes itself every few seconds. The Loans and People tabs have
 check-in buttons, a click on a person lists what they have out, and a click on a calendar
-day lists that day's loans. Items are shown by description rather than asset tag. If no
-server answers, a red notice appears in the status bar until one does. The web page's account menu has **Download Windows app (.exe)**. The server
+day lists that day's loans. Items are shown by description. If no
+server answers, a red notice appears in the status bar until one does. The web page's account menu has Download Windows app (.exe). The server
 builds `AssetApp.exe` the first time with the C# compiler that comes with Windows (no
 SDK needed; only a Windows server can do this, otherwise the link says so), caches it in
 `data\`, and appends the server addresses and certificate fingerprint to the end of the
@@ -436,19 +434,19 @@ file, which the program reads when it starts. To build it yourself, run
 address and trusts the first certificate it sees, like a plain `gui.py`. Windows may show
 a "SmartScreen" warning for an unsigned program: choose More info, then Run anyway.
 
-The Windows app also has **HTTPS mode**, like `gui.py`: type `https://assets.example.com`
+The Windows app also has HTTPS mode, like `gui.py`: type `https://assets.example.com`
 as the server and it uses the web page's own API over ordinary HTTPS (port 443 only,
 through a reverse proxy). The certificate is checked the normal way by Windows (TLS 1.2 is
 switched on, since .NET Framework 4.x doesn't always do that), plain `http://` and redirects
 are refused, and pinning and Find servers are not used. The code is in `clients\app\WebNet.cs`.
 
-**Without the download**, a plain copy of `gui.py` works on its own:
+Without the download, a plain copy of `gui.py` works on its own:
 
 1. Run `python gui.py`. On the login screen, type the server's IP address or host name
-   (add `:port` if it isn't 65432), or press **Find servers**. Find servers broadcasts on
+   (add `:port` if it isn't 65432), or press Find servers. Find servers broadcasts on
    the local network to the usual ports, 65432 and 65433, and lists the servers that
-   answer, so a server on another port has to be typed in. **Check** tests an address
-   without logging in. **From outside the network**, type the site's web address instead,
+   answer, so a server on another port has to be typed in. Check tests an address
+   without logging in. From outside the network, type the site's web address instead,
    starting with `https://` (for example `https://assets.example.com`). The GUI then uses
    the web page's own API over ordinary HTTPS (only port 443 is needed): the site's
    certificate is checked the normal way, plain `http://` is refused, and Find servers
@@ -479,41 +477,41 @@ logins share the web page's limit: 5 in a row refuses logins for a minute.
 
 ## Remote access through Nginx Proxy Manager (port 443 only)
 
-To use the web page and the desktop apps from outside your network, only **port 443** has
+To use the web page and the desktop apps from outside your network, only port 443 has
 to be opened on the router, and it goes to Nginx Proxy Manager (NPM). The servers' own
 ports (65432/65433) stay inside the network. NPM is only used for the web page's HTTPS
-traffic: **no Streams and no extra router ports** are needed, because outside the network
+traffic: no Streams and no extra router ports are needed, because outside the network
 the desktop apps talk to `web.py`'s JSON API (the one the web page uses) instead of the
 servers' own protocol, and `web.py` forwards to the primary or backup and handles failover.
 
-1. **Proxy Host.** In NPM, add a Proxy Host for your domain (for example
-   `assets.example.com`) that forwards to this machine's address, port **8080** (scheme
-   `http`). On the SSL tab, request a Let's Encrypt certificate and turn on **Force SSL**.
+1. Proxy Host. In NPM, add a Proxy Host for your domain (for example
+   `assets.example.com`) that forwards to this machine's address, port 8080 (scheme
+   `http`). On the SSL tab, request a Let's Encrypt certificate and turn on Force SSL.
    Leave WebSockets off; the site doesn't use them.
-2. **Tell `web.py` it is behind the proxy.** In `config.json` set
+2. Tell `web.py` it is behind the proxy. In `config.json` set
    `"behind_https_proxy": true` (or the environment variable `ASSET_BEHIND_HTTPS_PROXY=true`)
    and `"trusted_proxy"` to the address NPM connects from (default `127.0.0.1`; use NPM's
    address if it runs on another machine; `ASSET_TRUSTED_PROXY`). With this on, the session
    cookie is marked `Secure`, the login log uses the client address NPM passes in
-   `X-Forwarded-For`, but only for requests that really come from `trusted_proxy`, so nobody
-   else can claim an address, and the downloads hold the site's https address (see "The GUI
+   `X-Forwarded-For` (only on requests that come from `trusted_proxy`, so nobody else can
+   claim an address), and the downloads hold the site's https address (see "The GUI
    on other computers"). Restart `web.py` afterwards. To stop other machines bypassing the
    proxy, set `web_address` to `127.0.0.1:8080` if NPM runs on the same machine.
-3. **Use it.** Open `https://assets.example.com` in a browser. In `gui.py` or the Windows
+3. Use it. Open `https://assets.example.com` in a browser. In `gui.py` or the Windows
    app, type `https://assets.example.com` as the server (no port, no path), or use the
    download from the web page, which already holds it. Only `https://` is accepted, the
    site's certificate is checked the normal way, and permissions are checked by the
    servers, never only by the app. Find servers and certificate pinning are not used in this
    mode.
-4. **Inside the network nothing changes.** An address that doesn't start with `https://`
+4. Inside the network nothing changes. An address that doesn't start with `https://`
    (a host or IP, with or without a port) still uses the raw TLS protocol with pinning and
    Find servers, exactly as before, and the downloads made with the setting off are the same
    as before.
 
 The login lockout on the web page is per username (5 wrong passwords lock that account for a
 minute), so someone on the internet can't lock everyone out. The servers' own lockout is
-still shared, but it is only reachable from inside the network, because those ports are not
-forwarded.
+shared between usernames. It can only be reached from inside the network, because those
+ports are not forwarded.
 
 ## Logs
 
@@ -582,7 +580,7 @@ so yours aren't touched. They do use `secret.key` and `tls.pem`, and create them
 don't exist yet. `test_tls.py` checks that a server with a different certificate is refused,
 that a client that doesn't encrypt gets nothing, and that nothing readable crosses the
 network.
-`test_web.py` makes real HTTP requests but doesn't run the page's script in a browser, so that
+`test_web.py` makes real HTTP requests. It doesn't run the page's script in a browser, so that
 part was checked separately in Microsoft Edge. `DistributedTest` runs the primary and
 the backup as separate programs and kills them partway through. `ThreeServerTest` does the
 same with three servers, failing the first two in turn and bringing both back. `test_config.py` starts
@@ -597,7 +595,7 @@ tests make a save fail on purpose, so you will see logged errors and tracebacks 
 |---|---|---|
 | Message passing | Servers and clients share no memory and only communicate over sockets | `common.py`: `send_message`, `receive_message` |
 | External data representation | Length-prefixed UTF-8 JSON, so programs don't depend on a language or platform | `common.py`: `send_message` |
-| Configuration | Programs find the servers' ports from one shared list, not from numbers fixed in the code | `common.py`: `SERVERS`, `parse_servers` |
+| Configuration | Programs find the servers' ports from one shared list in the settings | `common.py`: `SERVERS`, `parse_servers` |
 | Replication | The backup holds a full copy of the data in its own file | `server.py`: `apply_change` |
 | Synchronous replication | A client only hears that a change worked after the backup has saved it | `server.py`: `replicate_change` |
 | Single leader | Only the primary accepts changes, so there is one order of events | `node.py`: `accepts_writes` |
@@ -662,7 +660,7 @@ updated record.
 
 `request_id` is a random value the client picks for each new registration. Sending the
 same one again returns the same asset. `expected_version` is the version of the asset
-the client last saw. Both are optional, but you lose their protection without them.
+the client last saw. Both are optional. Without them, a retry can create a second asset and a change can overwrite one made in the meantime.
 
 Requests between the servers:
 
@@ -764,9 +762,9 @@ While both servers are running, a change is on both disks before the client gets
 
 ## How far it scales
 
-Every server runs on one machine. The backups let the system survive a **server process**
-failing, but not the **machine** failing, and they don't add **capacity**, because every
-change still goes through the one primary.
+Every server runs on one machine. The backups keep the system working when a server process
+fails. If the machine fails, everything stops. The backups don't add capacity, because
+every change still goes through the one primary.
 
 | | Now |
 |---|---|
@@ -779,8 +777,8 @@ change still goes through the one primary.
 ## Known limitations
 
 The biggest one is a network split. A server can't tell a failed server from an
-unreachable one, and settling that properly needs the servers to vote, which this system
-deliberately doesn't do, however many servers there are. If a backup loses contact with
+unreachable one. Settling that properly needs the servers to vote, and this system has no
+voting. If a backup loses contact with
 every server before it while they are still running, it takes over while they carry on,
 which keeps the system available. When they reconnect, the primary merges the
 data, and some changes are lost even though their clients were told they worked:
@@ -791,7 +789,7 @@ data, and some changes are lost even though their clients were told they worked:
   they made the same number.
 - A delete on either server beats any status change.
 
-On one machine this is unlikely, but it can happen if a server stops answering for a while
+On one machine this is unlikely. It can happen if a server stops answering for a while
 without stopping, for example while the machine is overloaded.
 
 Other limitations:
@@ -839,7 +837,6 @@ Other limitations:
   clients are audited with `user` set to `null`. The servers trust the `user` a program sends, since only programs with
   `secret.key` can send one.
 - The audit logs are ordinary files, so someone with access to the machine could edit them.
-  They are a record, not tamper-proof evidence.
 - Accounts belong to `web.py` and are stored beside it. They aren't copied to the backup, so
   they don't protect against losing that machine.
 - A password can't be changed from the web page, only with `python web.py --set-password`,
@@ -858,11 +855,11 @@ Other limitations:
   edit made while the primary was offline isn't flagged, although its history shows which
   server made it.
 - The GUI's review area only lists flagged assets that the table is showing, so a search
-  can hide some. The GUI has a check-out form and a loans list, like the web page, but no calendar; that is only on the web page.
+  can hide some. The GUI has a check-out form and a loans list. The calendar is only on the web page.
 - Loans are whole days, in each machine's local date, with no times or time zones. The
   calendar shows the browser's month.
 - Every change rewrites the whole file, changes happen one at a time and every asset is held
-  in memory. `LIST` can page, but the handover between the servers can't. Once the data is
+  in memory. `LIST` can page. The handover between the servers can't. Once the data is
   over the 10 MiB message limit, a `LIST` without a `limit` replies `TOO_LARGE`, and the
   primary can't reconcile with a returning backup, although changes still work.
 - There is no limit on threads, so a flood of connections could exhaust a server. The idle
