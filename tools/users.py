@@ -5,13 +5,13 @@ User accounts, passwords and login tokens.
     python tools/users.py add USERNAME user     (create an ordinary user)
     python tools/users.py list                  (show every account and its role)
 
-Accounts live in the users file named in config.json. Only a salted hash of each
+Accounts live in users.json in the project folder. Only a salted hash of each
 password is stored, never the password itself. Roles:
     admin  may do everything, including deleting assets
     user   may register, list, search and edit assets, but not delete them
 
 When someone logs in, the server gives them a session token that is valid for
-session_seconds (config.json). The token is signed with the key in secret.key, so
+session_seconds (see the settings in common.py). The token is signed with the key in secret.key, so
 it can't be forged or altered, and any server holding the same key can check it.
 """
 

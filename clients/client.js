@@ -1,8 +1,10 @@
 // Minimal Node.js client (no dependencies). Speaks only JSON to the server:
 // TLS connection, 4-byte big-endian length header, then a UTF-8 JSON object.
 //
-// It reads config.json and server.crt from its own folder, or else from the folder
-// above (the project folder).
+// It connects to the servers on this computer (127.0.0.1, ports 65432 and 65433) and
+// trusts only server.crt, which it looks for in its own folder or else in the folder
+// above (the project folder). A config.json there, if an administrator made one,
+// changes those settings the same way as for the Python programs.
 //
 // Usage:
 //   node client.js <username> <password> ping
@@ -16,8 +18,26 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 
-const folder = [__dirname, path.dirname(__dirname)].find((f) => fs.existsSync(path.join(f, "config.json"))) || __dirname;
-const config = JSON.parse(fs.readFileSync(path.join(folder, "config.json"), "utf8"));
+// The settings this client uses; they match DEFAULT_CONFIG in common.py.
+const config = {
+  servers: { primary: { host: "127.0.0.1", port: 65432 }, backup: { host: "127.0.0.1", port: 65433 } },
+  client_timeout_seconds: 5,
+  certificate_file: "server.crt",
+};
+
+// Apply the settings in `changes`, merging nested settings rather than replacing them.
+function apply(settings, changes) {
+  for (const [key, value] of Object.entries(changes)) {
+    const nested = value && typeof value === "object" && !Array.isArray(value);
+    if (nested && settings[key] && typeof settings[key] === "object") apply(settings[key], value);
+    else settings[key] = value;
+  }
+}
+
+const folder = [__dirname, path.dirname(__dirname)].find((f) => fs.existsSync(path.join(f, "server.crt"))) || __dirname;
+if (fs.existsSync(path.join(folder, "config.json"))) {
+  apply(config, JSON.parse(fs.readFileSync(path.join(folder, "config.json"), "utf8")));
+}
 const ca = fs.readFileSync(path.join(folder, config.certificate_file));
 
 function sendRequest(server, request) {

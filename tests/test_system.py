@@ -52,18 +52,20 @@ def spare_port() -> int:
 
 
 def make_config(folder: str) -> dict:
-    """A configuration like config.json, but with spare ports and files in `folder`."""
-    with open(common.CONFIG_FILE, encoding="utf-8") as file:
-        config = json.load(file)
-    for role in config["servers"]:
-        config["servers"][role] = {"host": "127.0.0.1", "port": spare_port()}
-    # Short timeouts keep the tests quick.
-    config["server_timeout_seconds"] = 1
-    config["client_timeout_seconds"] = 2
-    config["sync_interval_seconds"] = 0.2
+    """The usual settings, but with spare ports, short timeouts and files in `folder`.
+
+    The changes are written to an optional config.json there, as an administrator would.
+    """
+    changes = {
+        "servers": {role: {"port": spare_port()} for role in common.DEFAULT_CONFIG["servers"]},
+        # Short timeouts keep the tests quick.
+        "server_timeout_seconds": 1,
+        "client_timeout_seconds": 2,
+        "sync_interval_seconds": 0.2,
+    }
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as file:
-        json.dump(config, file)
+        json.dump(changes, file)
     config = common.load_config(path)
     certificate.create_certificate(config)
     return config
@@ -229,6 +231,16 @@ class ProtocolTest(ServerTestCase):
 
     def test_settings_come_from_the_configuration_file(self):
         self.assertEqual(self.server.address[1], self.config["servers"]["primary"]["port"])
+
+    def test_no_configuration_file_is_needed(self):
+        config = common.load_config(os.path.join(self.folder, "missing", "config.json"))
+        self.assertEqual(config["servers"], common.DEFAULT_CONFIG["servers"])
+        self.assertEqual(config["listen_host"], "0.0.0.0")
+
+    def test_a_configuration_file_changes_only_the_settings_it_names(self):
+        self.assertEqual(self.config["servers"]["primary"]["host"], "127.0.0.1")  # kept from the defaults
+        self.assertNotEqual(self.config["servers"]["primary"]["port"], 65432)     # changed by the file
+        self.assertEqual(self.config["session_seconds"], common.DEFAULT_CONFIG["session_seconds"])
 
     def test_register_and_list_are_accepted(self):
         reply = self.register(make_asset())

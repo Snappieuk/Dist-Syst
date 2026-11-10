@@ -29,7 +29,7 @@ these actions between themselves, authenticated with a key derived from secret.k
 
 Discovery: each server also answers UDP broadcasts of DISCOVERY_REQUEST on the same
 port number as its TCP port, so gui.py can find servers on the local network without
-being told their addresses. Set "discoverable": false in config.json to turn it off.
+being told their addresses. Set "discoverable" to False in the settings (common.py) to turn it off.
 """
 
 import datetime     # creates the server's timestamps

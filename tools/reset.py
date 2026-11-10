@@ -12,8 +12,6 @@ data again.
 
 Afterwards it offers to create a new certificate and admin account straight away,
 so the servers can be started again at once.
-
-If you run the servers on two machines, reset each of them.
 """
 
 import getpass

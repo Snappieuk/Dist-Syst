@@ -9,12 +9,13 @@ first time they connect, the GUI shows the server's fingerprint, and they should
 only trust it if the two match.
 
 The certificate is self-signed: rather than trusting a public certificate authority,
-every client trusts exactly this certificate (the certificate_file in config.json)
+every client trusts exactly this certificate (server.crt in the project folder)
 and refuses any server that presents a different one. It names every server host in
-config.json, plus localhost and 127.0.0.1, so the clients' host name check passes.
+the settings (common.py), plus localhost and 127.0.0.1, so the clients' host name
+check passes.
 
 server.key is the private key. Only the servers need it, and it must stay secret.
-server.crt is public; copy it to every machine that runs a client or a server.
+server.crt is public: the command-line clients use it to check they reached the real server.
 
 Needs the cryptography package: pip install -r requirements.txt
 """
@@ -100,7 +101,6 @@ def main(arguments: list) -> None:
     else:
         create_certificate(config)
         print(f"Created {config['certificate_file']} and {config['private_key_file']}.")
-        print("Copy the certificate to every machine; keep the key on the server machines only.")
     print(f"\nCertificate fingerprint (give this to GUI users to check):\n{fingerprint(config)}")
 
 

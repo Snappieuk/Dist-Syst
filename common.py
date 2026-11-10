@@ -6,12 +6,13 @@ the server and client programs do not need to be written in the same
 language, or run on the same type of machine, to understand each other.
 
 This module is the single place that defines the wire format, the protocol
-version, the error codes and how settings are loaded from config.json.
+version, the error codes and the settings (DEFAULT_CONFIG).
 """
 
+import copy      # copies the default settings before changing them
 import getpass   # asks for a password without showing it
 import json      # turns Python dicts into JSON text and back
-import os        # finds config.json next to this file
+import os        # finds the project folder and the optional config.json
 import socket    # the networking building blocks (sockets)
 import ssl       # encrypts every connection with TLS
 import uuid      # creates the unique ID sent with every change
@@ -43,22 +44,60 @@ STATUSES = ("In Use", "Not In Use")
 # The fields EDIT may change. The asset_id identifies the asset, so it never changes.
 EDITABLE_FIELDS = ("description", "category", "location", "status")
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+PROJECT_FOLDER = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(PROJECT_FOLDER, "config.json")
+
+# The settings. Servers listen on every network connection (0.0.0.0), and the
+# command-line clients reach them on this computer at 127.0.0.1. The files below are
+# created in the project folder.
+#
+# Nothing needs a config file. To change a setting without editing the code, an
+# administrator can create config.json in the project folder holding only the
+# settings to change, for example {"servers": {"backup": {"port": 7001}}}.
+DEFAULT_CONFIG = {
+    "servers": {
+        "primary": {"host": "127.0.0.1", "port": 65432},
+        "backup": {"host": "127.0.0.1", "port": 65433},
+    },
+    "listen_host": "0.0.0.0",
+    "discoverable": True,               # answer "Find servers" on the local network
+    "max_message_bytes": 1048576,       # 1 MiB
+    "client_timeout_seconds": 5,
+    "server_timeout_seconds": 10,
+    "sync_interval_seconds": 2,         # how often the primary checks on the backup
+    "session_seconds": 3600,            # how long a login lasts
+    "data_files": {"primary": "assets_primary.json", "backup": "assets_backup.json"},
+    "audit_files": {"primary": "audit_primary.log", "backup": "audit_backup.log"},
+    "users_file": "users.json",
+    "secret_file": "secret.key",
+    "certificate_file": "server.crt",
+    "private_key_file": "server.key",
+}
 
 
 class MessageTooLargeError(ValueError):
     """A message is bigger than the configured limit."""
 
 
-def load_config(path: str = CONFIG_FILE) -> dict:
-    """Read the settings from config.json.
+def _apply(settings: dict, changes: dict) -> None:
+    """Apply `changes` to `settings`, merging nested settings rather than replacing them."""
+    for key, value in changes.items():
+        if isinstance(value, dict) and isinstance(settings.get(key), dict):
+            _apply(settings[key], value)
+        else:
+            settings[key] = value
 
-    Host names, ports and other machine-specific settings live in this file, so the
-    servers and clients can be moved to different machines by editing it rather than
-    the code. File paths in it are relative to the folder that holds the file.
-    """
-    with open(path, encoding="utf-8") as file:
-        config = json.load(file)
+
+def load_config(path: str = CONFIG_FILE) -> dict:
+    """Return the settings: DEFAULT_CONFIG, with any changes from the config file at
+    `path` if it exists. The files the settings name live in the folder of `path`."""
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as file:
+            changes = json.load(file)
+        if not isinstance(changes, dict):
+            raise ValueError(f"{path} must hold a JSON object")
+        _apply(config, changes)
     config["folder"] = os.path.dirname(os.path.abspath(path))
     return config
 
@@ -153,7 +192,7 @@ def log_in_from_prompt(config: Optional[dict] = None) -> Optional[str]:
 def client_tls_context(config: dict) -> ssl.SSLContext:
     """TLS settings for connecting to a server.
 
-    Only the system's own certificate (certificate_file in config.json) is trusted, and
+    Only the system's own certificate (server.crt in the project folder) is trusted, and
     the server must present it for the host name being connected to. A server with
     any other certificate is refused, so a client never sends anything, including a
     password, to an impostor, and never falls back to an unencrypted connection.

@@ -5,8 +5,8 @@ keeps a copy of everything, and clients switch to it by themselves if the primar
 
 | Folder | Contents |
 | --- | --- |
-| *(this one)* | `server.py`, `common.py` (shared code), `config.json` (ports, hosts, limits) |
-| `clients/` | `gui.py` (window), `send.py` / `receive.py` (command line), `client.exe` (C#, from `build.bat`), `client.js` (Node.js) |
+| *(this one)* | `server.py`, `common.py` (shared code and settings) |
+| `clients/` | `gui.py`, `send.py`, `receive.py`, `client.exe` (C#, built by `build.bat`), `client.js` (Node.js) |
 | `tools/` | `users.py` (accounts), `certificate.py`, `seed.py` (sample data), `reset.py` |
 | `tests/` | Automated tests |
 
@@ -26,31 +26,84 @@ accounts can do everything; `user` accounts can do everything except delete.
 
 ## Run
 
-Start each server in its own terminal and leave them open:
+Start each server in its own terminal and leave them open. They listen on every
+network connection (`0.0.0.0`), the primary on port 65432 and the backup on 65433:
 
 ```
 python server.py
 python server.py backup
 ```
 
-Then open a client:
+Then open any of the clients below.
+
+## Clients
+
+### `gui.py`: window
 
 ```
 python clients/gui.py
 ```
 
-Click **Find servers** (or pick from the Server list, or type an address), enter your
-username and password, and click **Log in**. The first time, click **Yes** to trust the
-server's certificate.
+No options. Click **Find servers** (or pick from the Server list, or type an address
+such as `192.168.1.20` or `192.168.1.20:65433`), enter your username and password, and
+click **Log in**. The first time, click **Yes** to trust the server's certificate.
+**Check** tests an address without logging in.
 
-## Other clients
+### `client.exe`: C# window and command line
 
-| Client | How |
+Double-click `clients/build.bat` once to build it. Needs nothing installed on Windows.
+
+Double-click `client.exe`, or run it with no options, to open a window that works like
+`gui.py`. With options it works on the command line, against the servers on this
+computer:
+
+```
+clients\client.exe USERNAME PASSWORD COMMAND ...
+```
+
+| Command | What it does |
 | --- | --- |
-| C# window (Windows, no Python needed) | Double-click `clients/build.bat`, then `clients/client.exe`. Works like `gui.py`. |
-| C# command line | `clients\client.exe alice PASSWORD list` (also `register`, `edit ID VERSION field=value`, `delete ID VERSION`, `ping`) |
-| Node.js | `node clients/client.js alice PASSWORD list` (same commands) |
-| Python command line | `python clients/send.py` registers one asset; `python clients/receive.py [search]` lists them |
+| `ping` | Checks a server is there. Type anything for the username and password. |
+| `list` | Shows every asset. |
+| `register` | Asks for each field, one at a time. |
+| `register asset_id=A1 description=Laptop category=IT location=HQ "status=In Use"` | Registers an asset in one go. |
+| `edit ID VERSION field=value ...` | Changes those fields, e.g. `edit A1 1 location=Lab`. `VERSION` is the asset's current `version`, shown by `list`. |
+| `delete ID VERSION` | Deletes an asset. `admin` accounts only. |
+
+It prints the server's reply, and exits with 1 if the reply is an error.
+
+### `client.js`: Node.js command line
+
+Needs [Node.js](https://nodejs.org/). Same commands as `client.exe`, except that fields
+are given as one JSON object:
+
+```
+node clients/client.js USERNAME PASSWORD COMMAND ...
+node clients/client.js alice PASSWORD register '{"asset_id":"A1","description":"Laptop","category":"IT","location":"HQ","status":"In Use"}'
+node clients/client.js alice PASSWORD edit A1 1 '{"location":"Lab"}'
+```
+
+In PowerShell, use `register` on its own (it asks for each field), because PowerShell
+removes the quotes from JSON.
+
+### `send.py`: register one asset
+
+```
+python clients/send.py
+```
+
+No options. Asks for your username and password, then for each field of the new asset.
+
+### `receive.py`: list and search
+
+```
+python clients/receive.py                 every asset
+python clients/receive.py laptop          assets with "laptop" in any field
+python clients/receive.py location=site a assets whose location contains "site a"
+```
+
+Asks for your username and password first. The field before `=` can be `asset_id`,
+`description`, `category`, `location` or `status`.
 
 ## Tools
 
@@ -58,18 +111,8 @@ server's certificate.
 | --- | --- |
 | Add sample data | `python tools/seed.py` (30 assets, or `python tools/seed.py 100`) |
 | Add an account or reset a password | `python tools/users.py add NAME admin` (or `user`) |
+| List accounts | `python tools/users.py list` |
 | Delete everything and start again | Stop the servers, then `python tools/reset.py` |
-
-## Running on several computers
-
-1. In `config.json`, replace `127.0.0.1` under `servers` with each server's real IP
-   address, and use the same `config.json` everywhere.
-2. Run `python tools/certificate.py --replace`.
-3. Copy `server.crt` and `config.json` to every computer, and `server.key`, `users.json`
-   and `secret.key` only to the other server's computer.
-4. Allow ports 65432 and 65433 through each server's firewall.
-
-The windows (`gui.py`, `client.exe`) need none of these files: type the server's address.
 
 ## Troubleshooting
 
@@ -138,7 +181,7 @@ Tests are in `tests/`.
 | NFR05 | Support concurrent clients safely | `server.py` thread per connection, `self.lock` on every read and write | `test_many_clients_at_once_complete_without_errors_or_lost_writes`, `test_only_one_of_many_simultaneous_edits_of_a_version_wins` |
 | NFR06 | Encrypt data in transit | `tools/certificate.py`; `server.py` `self.tls`; `common.py` `client_tls_context` | `TlsTest` |
 | NFR07 | Isolate client failures | `server.py` `handle_connection` | `test_a_client_vanishing_mid_message_does_not_affect_the_server`, `test_an_exception_while_processing_affects_only_that_request` |
-| NFR08 | Apply network timeouts | `config.json` timeouts; `server.py`, `common.py` | `test_an_idle_client_does_not_block_others_and_is_disconnected`, `test_a_client_does_not_wait_forever_for_a_silent_server` |
+| NFR08 | Apply network timeouts | `common.py` `DEFAULT_CONFIG` timeouts; `server.py`, `common.py` | `test_an_idle_client_does_not_block_others_and_is_disconnected`, `test_a_client_does_not_wait_forever_for_a_silent_server` |
 | NFR09 | Provide server replication | `server.py` `sync_with_backup`, `keep_backup_in_sync`; `common.py` `send_request` | `ReplicationTest` |
 | NFR10 | Detect conflicting updates | `server.py` `current_asset` | `test_an_edit_based_on_an_old_version_is_a_conflict`, `test_a_delete_based_on_an_old_version_is_a_conflict` |
 | NFR11 | Make retried requests idempotent | `server.py` `change`; `common.py` `new_request_id` | `test_repeating_a_registration_stores_one_asset_and_returns_the_same_reply`, `test_repeating_an_edit_or_delete_does_not_repeat_the_change`, `test_a_retry_on_the_backup_of_a_change_the_primary_made_is_not_repeated` |
@@ -147,7 +190,7 @@ Tests are in `tests/`.
 | NFR14 | Limit message size | `common.py` `receive_message` checks the header first | `test_an_oversized_message_is_rejected_before_it_is_read` |
 | NFR15 | Handle malformed JSON safely | `common.py` `receive_message`; `server.py` `read_and_process` | `test_malformed_json_gets_a_structured_error`, `test_json_that_is_not_an_object_is_rejected` |
 | NFR16 | Return structured error codes | `common.py` `error_reply` and codes | context checked throughout the tests |
-| NFR17 | Use configurable network settings | `config.json`, `common.py` `load_config` | `test_settings_come_from_the_configuration_file` |
+| NFR17 | Use configurable network settings | `common.py` `DEFAULT_CONFIG`, `load_config` (an optional `config.json` changes any setting) | `test_settings_come_from_the_configuration_file`, `test_no_configuration_file_is_needed`, `test_a_configuration_file_changes_only_the_settings_it_names` |
 | NFR18 | Declare protocol version | `common.py` `request_from`; `server.py` `process` | `test_a_missing_protocol_version_is_rejected`, `test_an_unsupported_protocol_version_is_rejected` |
 | NFR19 | Maintain logging and an audit trail | `server.py` `audit` | `AuditTest` |
 | NFR20 | Verify behaviour under concurrent load | `tests/test_system.py` | `test_many_clients_at_once_complete_without_errors_or_lost_writes`, `test_only_one_of_many_simultaneous_edits_of_a_version_wins` |

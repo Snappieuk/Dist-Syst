@@ -7,8 +7,10 @@
 //
 // Run client.exe with no arguments, or double-click it, to open the window (see
 // client_gui.cs). With arguments it works on the command line instead. Those commands
-// read config.json and server.crt from beside client.exe, or else from the folder
-// above (the project folder):
+// connect to the servers on this computer (127.0.0.1, ports 65432 and 65433) and
+// trust only server.crt, which they look for beside client.exe or else in the folder
+// above (the project folder). A config.json there, if an administrator made one,
+// changes those settings the same way as for the Python programs.
 //   client.exe <username> <password> ping
 //   client.exe <username> <password> list
 //   client.exe <username> <password> register
@@ -70,8 +72,11 @@ class Client
             Console.Error.WriteLine("usage: client.exe <username> <password> ping|list|register|edit|delete ...");
             return 2;
         }
-        string folder = ConfigFolder();
-        config = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(folder, "config.json"), Encoding.UTF8));
+        string folder = ProjectFolder();
+        config = Json.Deserialize<Dictionary<string, object>>(DefaultConfig);
+        string configFile = Path.Combine(folder, "config.json");
+        if (File.Exists(configFile))
+            Apply(config, Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(configFile, Encoding.UTF8)));
         trusted = LoadCertificate(Path.Combine(folder, (string)config["certificate_file"]));
 
         string username = args[0], password = args[1], command = args[2];
@@ -128,12 +133,35 @@ class Client
         return (string)reply["status"] == "OK" ? 0 : 1;
     }
 
-    // The folder holding config.json: beside client.exe, or else the folder above it.
-    static string ConfigFolder()
+    // The settings this client uses; they match DEFAULT_CONFIG in common.py.
+    const string DefaultConfig = @"{
+        ""servers"": {""primary"": {""host"": ""127.0.0.1"", ""port"": 65432},
+                      ""backup"": {""host"": ""127.0.0.1"", ""port"": 65433}},
+        ""client_timeout_seconds"": 5,
+        ""max_message_bytes"": 1048576,
+        ""certificate_file"": ""server.crt""
+    }";
+
+    // Apply the settings in `changes`, merging nested settings rather than replacing them.
+    static void Apply(Dictionary<string, object> settings, Dictionary<string, object> changes)
+    {
+        foreach (var change in changes)
+        {
+            object current;
+            var nested = change.Value as Dictionary<string, object>;
+            if (nested != null && settings.TryGetValue(change.Key, out current) && current is Dictionary<string, object>)
+                Apply((Dictionary<string, object>)current, nested);
+            else
+                settings[change.Key] = change.Value;
+        }
+    }
+
+    // The folder holding server.crt: beside client.exe, or else the folder above it.
+    static string ProjectFolder()
     {
         string here = AppDomain.CurrentDomain.BaseDirectory;
         string above = Path.GetDirectoryName(here.TrimEnd(Path.DirectorySeparatorChar));
-        if (!File.Exists(Path.Combine(here, "config.json")) && above != null && File.Exists(Path.Combine(above, "config.json")))
+        if (!File.Exists(Path.Combine(here, "server.crt")) && above != null && File.Exists(Path.Combine(above, "server.crt")))
             return above;
         return here;
     }
