@@ -38,7 +38,8 @@ met and which tests prove it.
 | `receive.py` | Command-line query client, with optional search. |
 | `gui.py` | Tkinter GUI: log in, register, view, search, page through, edit and delete. |
 | `seed.py` | Fills a running server with sample assets, then edits and deletes some, so every stored field has a value. |
-| `client.cs` | C# client that needs nothing installed on Windows: it is built with the C# compiler included with Windows. Same commands and JSON-only messages as `client.js`. |
+| `client.cs`, `client_gui.cs` | C# client that needs nothing installed on Windows: it is built with the C# compiler included with Windows. With no arguments it opens a window like `gui.py`; with arguments it takes the same commands as `client.js`. JSON-only messages. |
+| `build.bat` | Builds `client.exe` from the C# files. |
 | `client.js` | Minimal Node.js client with no dependencies. It talks to the server only in JSON (TLS, 4-byte length header, UTF-8 JSON object) and fails over to the backup. |
 | `config.json` | Hosts, ports, timeouts, size limits and file names. |
 | `requirements.txt` | The one third-party package: `cryptography`, used only by `certificate.py`. |
@@ -99,17 +100,25 @@ Each command except `ping` logs in first, then sends the request with a fresh `r
 
 ### C# client
 
-`client.cs` is a client written in C#. It needs nothing installed on Windows: it is
-compiled with the C# compiler that comes with the .NET Framework, which is part of
-Windows 10 and 11, and uses only .NET Framework libraries. Build it once from this
-folder:
+`client.cs` and `client_gui.cs` are a client written in C#. It needs nothing installed
+on Windows: it is compiled with the C# compiler that comes with the .NET Framework,
+which is part of Windows 10 and 11, and uses only .NET Framework libraries (Windows
+Forms for the window). To build `client.exe`, double-click `build.bat`, or run
+`.\build.bat` in this folder. It runs:
 
 ```
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs client_gui.cs
 ```
 
-This creates `client.exe`. Run it from this folder, since it reads `config.json` and
-`server.crt` beside itself:
+Double-click `client.exe`, or run it with no arguments, to open a window that works
+like `gui.py`: log in (with "Check" and "Find servers"), then view, search, page
+through, register, edit and delete assets. Like `gui.py`, it needs no other files: it
+shows a server's certificate fingerprint the first time and asks whether to trust it,
+and remembers servers and trusted certificates in `.asset_management_csharp.json` in
+your home folder.
+
+With arguments it works on the command line instead. Run those commands from this
+folder, since they read `config.json` and `server.crt` beside `client.exe`:
 
 ```
 client.exe x x ping

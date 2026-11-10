@@ -267,6 +267,11 @@ def discover(ports: list) -> list:
                 info = json.loads(data.decode("utf-8"))
             except socket.timeout:
                 continue
+            except ConnectionResetError:
+                # Windows reports a port with no server listening (the backup isn't
+                # running, say) as an error on the next receive. It only means nothing
+                # is there, and other servers' replies may still be on their way.
+                continue
             except (OSError, ValueError):
                 break
             if not isinstance(info, dict) or info.get("service") != SERVICE_NAME:

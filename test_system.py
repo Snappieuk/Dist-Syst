@@ -342,7 +342,7 @@ class DiscoveryTest(ServerTestCase):
             sock.sendto(server.DISCOVERY_REQUEST, ("127.0.0.1", port))
             try:
                 return [json.loads(sock.recvfrom(1024)[0])]
-            except socket.timeout:
+            except (socket.timeout, ConnectionResetError):  # Windows reports no listener as a reset
                 return []
 
     def test_the_server_listens_on_every_network_connection(self):

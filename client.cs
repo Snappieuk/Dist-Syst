@@ -1,12 +1,14 @@
-// Minimal C# client. Needs nothing beyond what ships with Windows: it is compiled with
-// the C# compiler that comes with the .NET Framework, and uses only .NET Framework
-// libraries. Speaks only JSON to the server: a TLS connection, a 4-byte big-endian
-// length header, then a UTF-8 JSON object.
+// C# client. Needs nothing beyond what ships with Windows: it is compiled with the C#
+// compiler that comes with the .NET Framework, and uses only .NET Framework libraries.
+// Speaks only JSON to the server: a TLS connection, a 4-byte big-endian length header,
+// then a UTF-8 JSON object.
 //
-// Build (once):
-//   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs
+// Build (once), from this folder:
+//   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Web.Extensions.dll client.cs client_gui.cs
 //
-// Run from this folder, since it reads config.json and server.crt beside client.exe:
+// Run client.exe with no arguments, or double-click it, to open the window (see
+// client_gui.cs). With arguments it works on the command line instead. Run those
+// commands from this folder, since they read config.json and server.crt beside client.exe:
 //   client.exe <username> <password> ping
 //   client.exe <username> <password> list
 //   client.exe <username> <password> register
@@ -35,12 +37,18 @@ class Client
     const int ProtocolVersion = 1;
     static readonly string[] Statuses = { "In Use", "Not In Use" };
 
-    static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
+    internal static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     static Dictionary<string, object> config;
     static X509Certificate2 trusted;
 
+    [STAThread]
     static int Main(string[] args)
     {
+        if (args.Length == 0)
+        {
+            AssetWindow.Start();
+            return 0;
+        }
         try
         {
             // Show and read accented and other non-English characters correctly.
@@ -185,17 +193,17 @@ class Client
         }
     }
 
-    static byte[] BigEndian(int value)
+    internal static byte[] BigEndian(int value)
     {
         return new[] { (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value };
     }
 
-    static int FromBigEndian(byte[] b)
+    internal static int FromBigEndian(byte[] b)
     {
         return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
     }
 
-    static byte[] ReadExact(Stream stream, int count)
+    internal static byte[] ReadExact(Stream stream, int count)
     {
         var buffer = new byte[count];
         int read = 0;
