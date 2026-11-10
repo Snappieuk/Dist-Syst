@@ -24,6 +24,7 @@ from unittest import mock
 import ssl
 
 import sys
+from typing import Optional
 
 # The code under test is in the project folder and its tools and clients folders.
 TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -134,11 +135,11 @@ class ServerTestCase(unittest.TestCase):
             request = {**request, "token": self.token}
         return common.send_request(request, self.config)
 
-    def register(self, asset: dict, request_id: str = None) -> dict:
+    def register(self, asset: object, request_id: Optional[str] = None) -> dict:
         request_id = request_id or common.new_request_id()
         return self.request({"action": "REGISTER", "request_id": request_id, "asset": asset})
 
-    def edit(self, asset_id: str, version: int, request_id: str = None, **changes) -> dict:
+    def edit(self, asset_id: str, version: int, request_id: Optional[str] = None, **changes) -> dict:
         return self.request({
             "action": "EDIT",
             "request_id": request_id or common.new_request_id(),
@@ -147,7 +148,7 @@ class ServerTestCase(unittest.TestCase):
             "changes": changes,
         })
 
-    def delete(self, asset_id: str, version: int, request_id: str = None) -> dict:
+    def delete(self, asset_id: str, version: int, request_id: Optional[str] = None) -> dict:
         return self.request({
             "action": "DELETE",
             "request_id": request_id or common.new_request_id(),
@@ -423,12 +424,8 @@ class ConcurrencyTest(ServerTestCase):
         self.assertEqual(self.request({"action": "LIST"})["status"], "OK")
 
     def test_an_exception_while_processing_affects_only_that_request(self):
-        original = self.server.process
-        self.server.process = lambda request: 1 / 0
-        try:
+        with mock.patch.object(self.server, "process", side_effect=ZeroDivisionError):
             self.assertEqual(self.request({"action": "LIST"})["code"], common.INTERNAL)
-        finally:
-            self.server.process = original
         self.assertEqual(self.request({"action": "LIST"})["status"], "OK")
 
     def test_a_client_does_not_wait_forever_for_a_silent_server(self):
@@ -439,7 +436,7 @@ class ConcurrencyTest(ServerTestCase):
             started = time.monotonic()
             with self.assertRaises(OSError):
                 common.send_request({"action": "LIST"}, config)
-            self.assertLess(time.monotonic() - started, config["client_timeout_seconds"] + 1)
+            self.assertLess(time.monotonic() - started, self.config["client_timeout_seconds"] + 1)
 
 
 
@@ -598,7 +595,7 @@ class AccountTest(ServerTestCase):
 class AuditTest(ServerTestCase):
     """NFR19."""
 
-    def events(self, name: str = None) -> list:
+    def events(self, name: Optional[str] = None) -> list:
         with open(self.server.audit_file, encoding="utf-8") as file:
             records = [json.loads(line) for line in file]
         return [record for record in records if name is None or record["event"] == name]

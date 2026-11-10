@@ -13,6 +13,7 @@ the end keeps the window open until you press Enter.
 
 import os
 import sys
+from typing import Optional
 
 # common.py is in the project folder, one level up from this one.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,7 +43,7 @@ def prompt_for_asset() -> dict:
     }
 
 
-def main(config: dict = None) -> None:
+def main(config: Optional[dict] = None) -> None:
     token = log_in_from_prompt(config)
     if token is None:
         return

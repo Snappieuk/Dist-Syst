@@ -1,0 +1,4 @@
+{
+  "extraPaths": [".", "tools", "clients", "tests"],
+  "exclude": ["**/__pycache__", ".git"]
+}

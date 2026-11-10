@@ -43,6 +43,7 @@ import socket       # provides the networking building blocks (sockets)
 import ssl          # encrypts every connection with TLS
 import sys          # reads which server to run from the command line
 import threading    # one thread per client, and a lock for the shared data
+from typing import Optional
 
 # users.py (accounts and login tokens) is in the tools folder.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
@@ -356,7 +357,7 @@ class AssetServer:
             matched = False
         else:
             matched = users.password_matches(record, password)
-        if not matched:
+        if not matched or record is None:
             logger.warning("Failed login for %r", username)
             self.audit("login_failed", user=username)
             raise InvalidRequest("Wrong username or password", code=UNAUTHENTICATED)
@@ -388,7 +389,8 @@ class AssetServer:
             raise InvalidRequest("This account no longer exists. Please log in again.", code=UNAUTHENTICATED)
         user = {"username": username, "role": record["role"]}
 
-        allowed = ALLOWED_ROLES.get(request.get("action"))
+        action = request.get("action")
+        allowed = ALLOWED_ROLES.get(action) if isinstance(action, str) else None
         if allowed and user["role"] not in allowed:
             logger.warning("%s (%s) was refused %s", username, user["role"], request.get("action"))
             self.audit(
@@ -699,7 +701,7 @@ class AssetServer:
             )
             return error_reply(INTERNAL, "The server could not complete the request")
 
-    def handle_connection(self, conn: socket.socket, addr: tuple = None) -> None:
+    def handle_connection(self, conn: socket.socket, addr: Optional[tuple] = None) -> None:
         """Serve one connection: one request, one reply. Runs on the client's own thread.
 
         Nothing one client does may affect the server or other clients, so every
@@ -733,7 +735,7 @@ class AssetServer:
         server_sock.listen()
         return server_sock
 
-    def serve(self, stop: threading.Event = None) -> None:
+    def serve(self, stop: Optional[threading.Event] = None) -> None:
         """Accept connections until `stop` is set (or forever)."""
         stop = stop or threading.Event()
         if self.role == "primary" and "backup" in self.config["servers"]:

@@ -26,6 +26,7 @@ import getpass
 import sys
 
 import os
+from typing import Optional
 
 # common.py is in the project folder, one level up from this one.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,7 +127,7 @@ def count_from_arguments(arguments: list) -> int:
     raise ValueError("Usage: python tools/seed.py [number of assets]")
 
 
-def main(config: dict = None, arguments: list = None) -> None:
+def main(config: Optional[dict] = None, arguments: Optional[list] = None) -> None:
     try:
         count = count_from_arguments(sys.argv[1:] if arguments is None else arguments)
     except ValueError as exc:

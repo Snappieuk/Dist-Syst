@@ -24,6 +24,7 @@ import os        # creates files that only their owner can read
 import secrets   # generates salts and the signing key
 import sys       # reads the command line
 import time      # sets and checks token expiry
+from typing import Optional
 
 # common.py is in the project folder, one level up from this one.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,7 +42,7 @@ class TokenError(ValueError):
 
 # ---- Passwords ----------------------------------------------------------------
 
-def hash_password(password: str, salt: str = None, iterations: int = HASH_ITERATIONS) -> dict:
+def hash_password(password: str, salt: Optional[str] = None, iterations: int = HASH_ITERATIONS) -> dict:
     """Return a salted PBKDF2-SHA256 hash of a password. A random salt means two
     identical passwords have different hashes, so precomputed tables are useless."""
     salt = salt or secrets.token_hex(16)

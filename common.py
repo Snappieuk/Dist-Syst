@@ -15,6 +15,7 @@ import os        # finds config.json next to this file
 import socket    # the networking building blocks (sockets)
 import ssl       # encrypts every connection with TLS
 import uuid      # creates the unique ID sent with every change
+from typing import Optional
 
 HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 
@@ -127,13 +128,13 @@ def new_request_id() -> str:
     return uuid.uuid4().hex
 
 
-def login(username: str, password: str, config: dict = None) -> dict:
+def login(username: str, password: str, config: Optional[dict] = None) -> dict:
     """Log in, returning the server's reply. On success it holds "token", which must be
     sent with every later request, and the user's "role"."""
     return send_request({"action": "LOGIN", "username": username, "password": password}, config)
 
 
-def log_in_from_prompt(config: dict = None) -> str:
+def log_in_from_prompt(config: Optional[dict] = None) -> Optional[str]:
     """Ask for a username and password at the command line and log in. Returns the
     session token, or None after printing why the login failed."""
     username = input("Username: ").strip()
@@ -178,7 +179,7 @@ def request_from(server: dict, request: dict, config: dict) -> dict:
             return receive_message(sock, config["max_message_bytes"])
 
 
-def send_request(request: dict, config: dict = None) -> dict:
+def send_request(request: dict, config: Optional[dict] = None) -> dict:
     """Send a request to the primary server, or to the backup if the primary can't be
     reached, and return the reply.
 

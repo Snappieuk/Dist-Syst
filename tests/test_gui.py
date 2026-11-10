@@ -30,12 +30,15 @@ from test_system import ADMIN_PASSWORD, USER_PASSWORD, ServerTestCase, make_asse
 
 try:
     import tkinter as tk
+except ImportError:
+    raise unittest.SkipTest("Tkinter is not installed")
 
-    import gui
+import gui
 
+try:
     tk.Tk().destroy()
     GUI_AVAILABLE = True
-except Exception:  # no Tkinter, or no display
+except Exception:  # no display
     GUI_AVAILABLE = False
 
 
@@ -46,7 +49,7 @@ class StandaloneTest(unittest.TestCase):
         tree = ast.parse(open(os.path.join(PROJECT, "clients", "gui.py"), encoding="utf-8").read())
         imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
                     for alias in node.names}
-        imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        imported |= {(node.module or "").split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
         standard = {"hashlib", "ipaddress", "itertools", "json", "os", "queue", "re", "socket", "ssl",
                     "threading", "time", "tkinter", "uuid"}
         self.assertLessEqual(imported, standard)
@@ -96,7 +99,7 @@ class GuiTest(ServerTestCase):
         Python's garbage collector, they could be cleaned up from a background thread,
         which Tk does not allow."""
         self.root.destroy()
-        self.app = self.apps = self.root = None
+        del self.app, self.apps, self.root
         gc.collect()
 
     def open_app(self) -> "gui.AssetApp":

@@ -113,7 +113,11 @@ def connect(address: tuple) -> tuple:
     except Exception:
         raw.close()
         raise
-    return sock, fingerprint(sock.getpeercert(binary_form=True))
+    certificate = sock.getpeercert(binary_form=True)
+    if certificate is None:  # TLS always sends one; this only satisfies the type checker
+        sock.close()
+        raise ssl.SSLError("The server sent no certificate")
+    return sock, fingerprint(certificate)
 
 
 def receive_exact(sock: socket.socket, size: int) -> bytes:
@@ -651,7 +655,7 @@ class AssetApp:
     def form_values(self) -> dict:
         return {field: entry.get().strip() for field, entry in self.fields.items()}
 
-    def selected(self) -> object:
+    def selected(self) -> "dict | None":
         selection = self.tree.selection()
         return self.shown.get(selection[0]) if selection else None
 
