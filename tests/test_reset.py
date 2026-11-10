@@ -93,6 +93,7 @@ class ResetWhileRunningTest(ServerTestCase):
     """A running server would just save its data again, so the reset must refuse."""
 
     def test_it_refuses_while_a_server_is_running(self):
+        self.release_port("backup")  # reset.py would take the tests' stand-in for a server
         self.register(make_asset())
         output = io.StringIO()
         with mock.patch("builtins.input", return_value="RESET"), contextlib.redirect_stdout(output):

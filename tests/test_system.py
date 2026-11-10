@@ -93,8 +93,54 @@ class ServerTestCase(unittest.TestCase):
         # Few hash rounds keep the tests quick; real accounts use users.HASH_ITERATIONS.
         users.add_user(self.config, "admin", ADMIN_PASSWORD, "admin", iterations=1000)
         users.add_user(self.config, "alice", USER_PASSWORD, "user", iterations=1000)
+        self.stand_ins = {}
+        self.addCleanup(self.release_ports)
+        self.stand_in("backup")
         self.server = self.start_server("primary")
         self.token = self.log_in("admin", ADMIN_PASSWORD)
+
+    def stand_in(self, role: str) -> None:
+        """Hold the port of a server that isn't running, closing each connection at once.
+
+        On Windows, connecting to a port with nothing listening takes about 2 seconds
+        to fail. Every test would spend that long whenever a server looked for its
+        partner or a client tried a stopped server. Closing the connection at once
+        makes it fail straight away, as a refused connection does on other systems.
+        """
+        server_ = self.config["servers"][role]
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((server_["host"], server_["port"]))
+        listener.listen()
+        listener.settimeout(0.1)
+        stop = threading.Event()
+
+        def close_each_connection() -> None:
+            with listener:
+                while not stop.is_set():
+                    try:
+                        connection, _ = listener.accept()
+                    except socket.timeout:
+                        continue
+                    except OSError:
+                        return
+                    connection.close()
+
+        thread = threading.Thread(target=close_each_connection, daemon=True)
+        thread.start()
+        self.stand_ins[role] = (stop, thread)
+
+    def release_port(self, role: str) -> None:
+        """Remove the stand-in for `role`, leaving nothing at its port."""
+        stand_in = self.stand_ins.pop(role, None)
+        if stand_in is not None:
+            stop, thread = stand_in
+            stop.set()
+            thread.join(5)
+
+    def release_ports(self) -> None:
+        for role in list(self.stand_ins):
+            self.release_port(role)
 
     def log_in(self, username: str, password: str) -> str:
         reply = common.login(username, password, self.config)
@@ -102,6 +148,7 @@ class ServerTestCase(unittest.TestCase):
         return reply["token"]
 
     def start_server(self, role: str) -> server.AssetServer:
+        self.release_port(role)
         node = server.AssetServer(self.config, role)
         stop = threading.Event()
         thread = threading.Thread(target=node.serve, args=(stop,), daemon=True)
@@ -118,6 +165,7 @@ class ServerTestCase(unittest.TestCase):
         stop, thread = self.running.pop(role)
         stop.set()
         thread.join(5)
+        self.stand_in(role)
 
     def wait_for_port(self, address: tuple) -> None:
         deadline = time.monotonic() + 5

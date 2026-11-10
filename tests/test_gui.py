@@ -196,6 +196,7 @@ class GuiTest(ServerTestCase):
         self.assertIn("not yet trusted", self.app.status_text.get())
         self.assertIn(f"other server at {self.address('backup')}", self.app.status_text.get())
 
+        self.release_port("backup")  # truly nothing there, not even the tests' stand-in
         self.app.server_entry.delete(0, tk.END)
         self.app.server_entry.insert(0, self.address("backup"))  # nothing is running there
         self.app.check_server()
