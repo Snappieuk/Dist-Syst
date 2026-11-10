@@ -141,7 +141,7 @@ def apply_change(request: dict) -> dict:
     return {"status": "OK", "seq": seq}
 
 
-def hand_over(request: dict) -> dict:
+def hand_over(_: dict) -> dict:  # the HANDOVER request carries nothing this needs
     """Stop accepting changes, and send all this server's data to an earlier server that
     is taking control.
 

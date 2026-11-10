@@ -173,7 +173,6 @@ class HttpsGuiTest(test_web.WebTestCase):
     # ---- Everything the window does ----
 
     def test_the_whole_window_works_over_https(self):
-        gui = self.gui
         self.log_in()
         stored = self.register_asset()
         asset_id = stored["asset_id"]
@@ -365,7 +364,7 @@ class HttpsGuiTest(test_web.WebTestCase):
         gui = self.gui
         vars(gui.session).clear()
         self.certificate_patch.stop()
-        root, screen, done = self.make_window()
+        root, screen, _ = self.make_window()
         screen.server_box.set(self.site)
 
         screen.check()
@@ -382,7 +381,7 @@ class HttpsGuiTest(test_web.WebTestCase):
 
     def test_a_local_network_address_leaves_https_mode(self):
         gui = self.gui
-        root, screen, _ = self.make_window()
+        _, screen, _ = self.make_window()
         screen.server_box.set("127.0.0.1:1")  # nothing listens here; only the mode matters
 
         screen.check()

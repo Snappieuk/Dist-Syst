@@ -65,7 +65,7 @@ class CSharpHttpsTest(unittest.TestCase):
         self.assertRegex(self.run_harness("address", "http://assets.example.com"), r"^error: Plain http://")
 
     def test_a_certificate_that_is_not_trusted_is_refused_before_anything_is_sent(self):
-        ca_path, server_path = test_gui_https.make_test_certificates(self.folder)
+        _, server_path = test_gui_https.make_test_certificates(self.folder)
         received = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -74,7 +74,7 @@ class CSharpHttpsTest(unittest.TestCase):
 
             do_GET = do_POST
 
-            def log_message(self, *args):
+            def log_message(self, *_):
                 pass
 
         server = HTTPServer(("127.0.0.1", 0), Handler)

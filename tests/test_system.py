@@ -1492,7 +1492,7 @@ class LoginTest(NodeTestCase):
                    "token": token, "user": "someone else"}
         seen = []
         with mock.patch.object(node, "set_asset_status",
-                               side_effect=lambda *args: seen.append(node.current.request["user"]) or {"status": "OK"}):
+                               side_effect=lambda *_: seen.append(node.current.request["user"]) or {"status": "OK"}):
             self.assertEqual(self.ask(request)["status"], "OK")
         self.assertEqual(seen, ["sam"])
 
@@ -1544,7 +1544,7 @@ class StartSyncTest(unittest.TestCase):
         self.addCleanup(setattr, server, "START_SYNC_SECONDS", server.START_SYNC_SECONDS)
         server.START_SYNC_SECONDS = 0.2
 
-        with mock.patch.object(server, "catch_up", side_effect=lambda index: False), \
+        with mock.patch.object(server, "catch_up", side_effect=lambda _: False), \
                 self.assertLogs(node.logger, "INFO") as logs:
             started = time.monotonic()
             self.assertFalse(server.sync_at_start())

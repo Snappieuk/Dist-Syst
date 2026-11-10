@@ -325,7 +325,7 @@ HTTPS_ASSET_ACTIONS = {
 class NoRedirects(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect: it could lead to plain http://, and the API never redirects."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(self, *_):  # urllib passes six details, none of them needed here
         return None
 
 
@@ -574,12 +574,12 @@ class AssetManagementApp:
         ttk.Label(finder, text="Search").pack(side=tk.LEFT)
         self.search_box = ttk.Entry(finder, width=30)
         self.search_box.pack(side=tk.LEFT, padx=(6, 12))
-        self.search_box.bind("<Return>", lambda event: self.refresh_assets())
+        self.search_box.bind("<Return>", lambda _: self.refresh_assets())
         ttk.Label(finder, text="Status").pack(side=tk.LEFT)
         self.status_filter = ttk.Combobox(finder, values=(ALL_STATUSES,) + STATUSES, state="readonly", width=14)
         self.status_filter.set(ALL_STATUSES)
         self.status_filter.pack(side=tk.LEFT, padx=(6, 12))
-        self.status_filter.bind("<<ComboboxSelected>>", lambda event: self.refresh_assets())
+        self.status_filter.bind("<<ComboboxSelected>>", lambda _: self.refresh_assets())
         self.search_button = ttk.Button(finder, text="Search", command=self.refresh_assets)
         self.search_button.pack(side=tk.LEFT)
         self.clear_button = ttk.Button(finder, text="Clear", command=self.clear_search)
@@ -645,7 +645,7 @@ class AssetManagementApp:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Double-clicking an asset shows its history.
-        self.tree.bind("<Double-1>", lambda event: self.show_selected_history())
+        self.tree.bind("<Double-1>", lambda _: self.show_selected_history())
 
         self.status_label = ttk.Label(self.root, text="Ready", anchor=tk.W)
         self.status_label.pack(fill=tk.X, padx=14, pady=(0, 10))
@@ -1205,7 +1205,7 @@ class LoginWindow(ttk.Frame):
         ttk.Label(self, text="Password").grid(row=2, column=0, sticky=tk.W, pady=3)
         self.password_box = ttk.Entry(self, show="*")
         self.password_box.grid(row=2, column=1, sticky=tk.EW, pady=3, padx=(8, 0))
-        self.password_box.bind("<Return>", lambda event: self.log_in())
+        self.password_box.bind("<Return>", lambda _: self.log_in())
 
         self.login_button = ttk.Button(self, text="Log in", command=self.log_in)
         self.login_button.grid(row=3, column=1, sticky=tk.E, pady=(10, 0))
@@ -1339,7 +1339,7 @@ class LoginWindow(ttk.Frame):
                 raise ConnectionError(f"{web_url} does not look like an asset site (it answered {status}).")
             return status
 
-        def finished(result: Any, error: Any) -> None:
+        def finished(_: Any, error: Any) -> None:  # the result isn't needed, only whether it failed
             if error:
                 session.web_url, session.opener = None, None
                 self._say(f"Could not connect to {web_url}: {error}")

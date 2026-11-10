@@ -24,6 +24,10 @@ import common
 import server
 import web
 
+# Whether this is Windows. It is kept in a variable so the editor (Pylance) checks the
+# code for every system, including the branches that can't run on this one.
+ON_WINDOWS: bool = os.name == "nt"
+
 # How many times to ask for the first account's details before giving up.
 ACCOUNT_ATTEMPTS = 3
 
@@ -47,7 +51,7 @@ def can_ask_questions() -> bool:
     """
     if sys.stdin is None or not sys.stdin.isatty():
         return False
-    if os.name != "nt":
+    if not ON_WINDOWS:
         return True
 
     import ctypes
@@ -120,7 +124,7 @@ def running_programs() -> list:
 def process_table() -> dict:
     """Return every process on this machine as {pid: (parent pid, command line)}."""
     table = {}
-    if os.name == "nt":
+    if ON_WINDOWS:
         command = ["powershell", "-NoProfile", "-Command",
                    "Get-CimInstance Win32_Process | ForEach-Object "
                    "{ \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }"]
@@ -142,7 +146,7 @@ def process_table() -> dict:
 def listening_pids(port: int) -> set:
     """Return the process IDs listening on a TCP port on this machine."""
     pids = set()
-    if os.name == "nt":
+    if ON_WINDOWS:
         command = ["netstat", "-ano", "-p", "TCP"]
     else:
         command = ["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"]
@@ -152,7 +156,7 @@ def listening_pids(port: int) -> set:
         return pids
     for line in output.splitlines():
         parts = line.split()
-        if os.name != "nt":
+        if not ON_WINDOWS:
             pids.update(int(part) for part in parts if part.isdigit())
         elif len(parts) >= 5 and parts[3] == "LISTENING" and parts[1].rsplit(":", 1)[-1] == str(port):
             pids.add(int(parts[4]))
@@ -163,7 +167,7 @@ def stop_process(pid: int) -> None:
     """Ask the operating system to end one process. Failing is fine: the caller checks
     afterwards whether the programs really stopped."""
     try:
-        if os.name == "nt":
+        if ON_WINDOWS:
             subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=30)
         else:
             os.kill(pid, signal.SIGTERM)

@@ -43,7 +43,7 @@ class StartTest(unittest.TestCase):
         long_ago = {"running": 0, "stopped": 0}  # both started well over START_FAILURE_SECONDS ago
         restart_at = {}
 
-        with mock.patch.object(start, "start_program", side_effect=lambda name: run_for(30)), \
+        with mock.patch.object(start, "start_program", side_effect=lambda _: run_for(30)), \
                 self.assertLogs("start", "INFO") as logs:
             self.assertIsNone(start.check_programs(self.processes, long_ago, restart_at))
             self.assertIn("stopped", restart_at)

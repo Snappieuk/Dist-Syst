@@ -100,6 +100,10 @@ accepts_writes = True    # whether this node currently accepts changes from clie
 on_change = None         # called with each change, while holding the lock
 role_actions = {}        # requests only this role understands: {action: function}
 
+# Whether this is Linux or macOS. It is kept in a variable so the editor (Pylance) checks the
+# code for every system, including the branches that can't run on this one.
+ON_POSIX: bool = os.name == "posix"
+
 # ---- The data ----
 
 assets = []        # every registered asset, as a plain list of dicts
@@ -211,7 +215,7 @@ def flush_data_folder() -> None:
     A failure is only logged, because some file systems do not support this. The
     new file is already in place by now, so reporting a failed save would be wrong.
     """
-    if os.name != "posix":
+    if not ON_POSIX:
         return
 
     try:

@@ -647,7 +647,7 @@ def site_servers(web_host: str) -> list:
     server's own port, because "127.0.0.1" means nothing on another computer."""
     if not SAFE_HOST.fullmatch(web_host or ""):
         raise ValueError("The web page was reached by an address that can't be used")
-    return [(web_host, port) for _host, port in common.SERVERS]
+    return [(web_host, port) for _, port in common.SERVERS]
 
 
 def site_url(host_header: str) -> Optional[str]:
