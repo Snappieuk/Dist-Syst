@@ -142,15 +142,12 @@ Everything works without any settings. To change them, copy `config.example.json
 |---|---|---|
 | `servers` | `["127.0.0.1:65432", "127.0.0.1:65433"]` | The servers' ports: the primary first, then each backup in the order they take over. Every server runs on this machine, so each address must be `127.0.0.1` (or `localhost`); any other is refused |
 | `web_address` | `"0.0.0.0:8080"` | Where `web.py` listens. `0.0.0.0` is every network; `127.0.0.1` is only this machine |
-| `behind_https_proxy` | `false` | Set to `true` when `web.py` sits behind an HTTPS reverse proxy such as Nginx Proxy Manager: the session cookie is then marked `Secure` and the real visitor address is logged |
-| `trusted_proxy` | `"127.0.0.1"` | The one address the proxy connects from. The `X-Forwarded-For` header is believed only on requests from here, and only when `behind_https_proxy` is `true` |
 | `timeout_seconds` | `5` | How long a program waits on each network step before giving up |
 | `heartbeat_timeout_seconds` | `1` | How long the servers wait for each other's heartbeats |
 | `failover_wait_seconds` | `15` | How long a client keeps trying while the backup takes over |
 
 A misspelt setting or a wrong value stops the program with a message naming `config.json`. Environment variables override the file: `ASSET_SERVERS` for the
-servers (such as `127.0.0.1:65432,127.0.0.1:65433`) and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form;
-`ASSET_BEHIND_HTTPS_PROXY` (`true` or `false`) and `ASSET_TRUSTED_PROXY` for the two proxy settings.
+servers (such as `127.0.0.1:65432,127.0.0.1:65433`) and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form.
 `ASSET_CONFIG` can name a different settings file. The servers always listen on every
 network (`0.0.0.0`), so the desktop apps on other computers can reach them. `config.json` is ignored by git,
 and a reset leaves it alone.
@@ -412,11 +409,12 @@ are never put in the file. If the servers' certificate is ever replaced (`data/t
 old downloads stop working and need downloading again. Anyone who can change the web page
 could hand out a different file, so serve the page only over a network you trust.
 
-Behind an HTTPS reverse proxy (`behind_https_proxy` is on in `config.json`), both
-downloads (`gui.py` and `AssetApp.exe`) are filled in differently: they hold the site's
-`https://` address, as the browser reached it (for example `https://assets.example.com`),
-and no server addresses or fingerprint, because they then use HTTPS mode (below) and the
-site's own certificate. With the setting off, the downloads are as described above.
+When the web page is opened through an HTTPS reverse proxy, both downloads (`gui.py` and
+`AssetApp.exe`) are filled in differently: they hold the site's `https://` address, as the
+browser reached it (for example `https://assets.example.com`), and no server addresses or
+fingerprint, because they then use HTTPS mode (below) and the site's own certificate.
+`web.py` tells the two cases apart by the `X-Forwarded-Proto: https` header the proxy adds,
+so nothing needs setting. Opened directly, the downloads are as described above.
 
 Windows app (.exe), no Python needed. `clients\app\` holds the same desktop app written
 in C# (Windows Forms): login, Assets, Loans, People, Calendar and Review tabs, add, edit,
@@ -480,22 +478,18 @@ To use the web page and the desktop apps from outside your network, only port 44
 to be opened on the router, and it goes to Nginx Proxy Manager (NPM). The servers' own
 ports (65432/65433) stay inside the network. NPM is only used for the web page's HTTPS
 traffic: no Streams and no extra router ports are needed, because outside the network
-the desktop apps talk to `web.py`'s JSON API (the one the web page uses) instead of the
-servers' own protocol, and `web.py` forwards to the primary or backup and handles failover.
+the desktop apps talk to `web.py`'s JSON API (the one the web page uses), and `web.py` forwards to the primary or backup and handles failover.
 
 1. Proxy Host. In NPM, add a Proxy Host for your domain (for example
-   `assets.example.com`) that forwards to this machine's address, port 8080 (scheme
+   `assets.example.com`) that forwards to this machine's IP address, port 8080 (scheme
    `http`). On the SSL tab, request a Let's Encrypt certificate and turn on Force SSL.
-   Leave WebSockets off; the site doesn't use them.
-2. Tell `web.py` it is behind the proxy. In `config.json` set
-   `"behind_https_proxy": true` (or the environment variable `ASSET_BEHIND_HTTPS_PROXY=true`)
-   and `"trusted_proxy"` to the address NPM connects from (default `127.0.0.1`; use NPM's
-   address if it runs on another machine; `ASSET_TRUSTED_PROXY`). With this on, the session
-   cookie is marked `Secure`, the login log uses the client address NPM passes in
-   `X-Forwarded-For` (only on requests that come from `trusted_proxy`, so nobody else can
-   claim an address), and the downloads hold the site's https address (see "The GUI
-   on other computers"). Restart `web.py` afterwards. To stop other machines bypassing the
-   proxy, set `web_address` to `127.0.0.1:8080` if NPM runs on the same machine.
+   Leave WebSockets off; the site doesn't use them. Nothing in this system needs changing.
+2. What `web.py` does on its own. NPM adds `X-Forwarded-Proto: https` and
+   `X-Forwarded-For` to every request it passes on. When `web.py` sees the first, it marks
+   the login cookie `Secure` and fills the downloads with the site's `https://` address. The
+   login log shows the address from `X-Forwarded-For` and the address the request came from,
+   as `203.0.113.9 via 192.168.1.5`. Requests made straight to port 8080 inside the network
+   work as before.
 3. Use it. Open `https://assets.example.com` in a browser. In `gui.py` or the Windows
    app, type `https://assets.example.com` as the server (no port, no path), or use the
    download from the web page, which already holds it. Only `https://` is accepted, the
@@ -504,8 +498,8 @@ servers' own protocol, and `web.py` forwards to the primary or backup and handle
    mode.
 4. Inside the network nothing changes. An address that doesn't start with `https://`
    (a host or IP, with or without a port) still uses the raw TLS protocol with pinning and
-   Find servers, exactly as before, and the downloads made with the setting off are the same
-   as before.
+   Find servers, exactly as before, and downloads made from the page inside the network are
+   the same as before.
 
 The login lockout on the web page is per username (5 wrong passwords lock that account for a
 minute), so someone on the internet can't lock everyone out. The servers' own lockout is
