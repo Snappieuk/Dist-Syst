@@ -112,8 +112,8 @@ class DemoTest(ServerTestCase):
             time.sleep(0.2)
 
         def restart_when_stopped():
-            # What start.py does, but sooner: once the backup has taken over and stored
-            # the demo's second asset, rather than after a fixed 20 seconds.
+            # What start.py does, sooner: as soon as the backup has taken over and
+            # stored the demo's second asset.
             primary.wait()
             while not any(asset_id.startswith("AST-B") for asset_id in demo.held_by(self.servers[1])):
                 time.sleep(0.2)

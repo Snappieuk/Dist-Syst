@@ -49,7 +49,7 @@ class SetupTestCase(unittest.TestCase):
         self.patch_value(web, "PASSWORD_FILE", self.path("web_password.json"))
         self.patch_value(web, "USERS_FILE", self.path("web_users.json"))
         self.addCleanup(web.users.clear)
-        self.patch_value(web, "HASH_ITERATIONS", 1000)  # the real number is slow on purpose
+        self.patch_value(web, "HASH_ITERATIONS", 1000)  # the real number is slow
         self.patch_value(common, "DATA_FOLDER", self.folder)  # where each server's data file goes
         self.patch_value(common, "SERVERS", [unused_address(), unused_address()])
         self.patch_value(web, "WEB_ADDRESS", unused_address())

@@ -16,7 +16,7 @@ Certificates: you never have to deal with them. A copy downloaded from the web p
 fingerprint, so it only ever talks to the genuine servers. A copy of this file from
 anywhere else trusts the first certificate it sees, and after that only that exact
 certificate until the window is closed. That is encrypted and refuses a different
-server mid-session, but cannot notice someone intercepting the very first connection.
+server mid-session. It cannot notice someone intercepting the very first connection.
 
 From outside the network: type a web address that starts with https:// (for example
 https://assets.example.com) instead. The program then uses the web page's own API over
@@ -24,7 +24,7 @@ ordinary HTTPS, through the reverse proxy, so only port 443 is needed. The site'
 certificate is checked the normal way, plain http:// is refused, and Find servers and
 certificate pinning are not used. web.py does the failover and checks every permission.
 
-WHY THIS FILE USES THREADS AND A QUEUE: Tkinter can only redraw the window and
+Threads and a queue: Tkinter can only redraw the window and
 respond to clicks while its main thread is free. A network request can take
 seconds, and running it on the main thread would freeze the window. So each
 request runs on a background thread. Tkinter is also not safe to call from other
@@ -121,7 +121,7 @@ def parse_address(text: str, default_port: int = DEFAULT_PORTS[0]) -> tuple:
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # Something like 999.1.1 looks like an IP address but isn't one, and isn't a name either.
+        # Something like 999.1.1 is neither an IP address nor a name.
         if re.fullmatch(r"[\d.]+", host) or not HOST_NAME.fullmatch(host):
             raise ValueError(f"'{host}' is not a valid IP address or host name.") from None
     return host, int(port_text) if has_port else default_port
@@ -172,7 +172,7 @@ def ask(address: tuple, request: dict, trusted: object = None) -> tuple:
 
     The server uses its own certificate, which Python can't check against a known
     authority, so the usual check is switched off. Instead the fingerprint is compared
-    with the one the user trusted, BEFORE anything is sent, so a password is never sent
+    with the one the user trusted before anything is sent, so a password is never sent
     to a server the user hasn't accepted. With no `trusted` fingerprint the request is
     sent anyway, so it must hold nothing private: only probe()'s PING does that.
     """
@@ -188,7 +188,7 @@ def ask(address: tuple, request: dict, trusted: object = None) -> tuple:
         raise
     with sock:
         certificate = sock.getpeercert(binary_form=True)
-        if certificate is None:  # a TLS server always sends one, but the type allows for none
+        if certificate is None:  # a TLS server always sends one; the type allows for none
             raise OSError("The server did not present a certificate")
         found = fingerprint(certificate)
         if trusted is not None and found != trusted:
@@ -1094,7 +1094,7 @@ class AssetManagementApp:
 
                 if error:
                     # The change worked and only the list refresh failed, so finish
-                    # as usual but report the problem.
+                    # as usual and report the problem.
                     if operation != "list" and response and response.get("status") == "OK":
                         if operation == "register":
                             self._finish_registration()

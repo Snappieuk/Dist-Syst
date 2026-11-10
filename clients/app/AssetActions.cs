@@ -53,7 +53,7 @@ namespace AssetApp
     {
         // The last registration whose result we never saw (the connection may have dropped
         // after the server saved it). Pressing Add again with the same details re-sends the
-        // SAME request ID, so the server recognises it and doesn't create a second asset.
+        // same request ID, so the server recognises it and doesn't create a second asset.
         Dictionary<string, object> unconfirmedRegistration;
 
         // Make a button, add it to a row of buttons, and run `click` when pressed.

@@ -30,7 +30,7 @@ import web
 
 # The project folder, where the real data, accounts and secret live.
 
-# These tests cause errors on purpose, so the logged warnings are only noise here.
+# These tests cause errors, so the logged warnings are only noise here.
 logging.getLogger("asset_web").setLevel(logging.ERROR)
 
 
@@ -81,7 +81,7 @@ class WebTestCase(unittest.TestCase):
         self.addCleanup(setattr, common, "SERVERS", common.SERVERS)
         common.SERVERS = [self.asset_server]
 
-        # A cheap hash keeps the tests fast. The real one is slow on purpose. Both account
+        # A cheap hash keeps the tests fast. The real one is slow. Both account
         # files are temporary, so a test can never touch the real ones.
         self.addCleanup(setattr, web, "USERS_FILE", web.USERS_FILE)
         self.addCleanup(setattr, web, "PASSWORD_FILE", web.PASSWORD_FILE)
@@ -132,7 +132,7 @@ class PasswordTest(unittest.TestCase):
         for name, value in (
             ("PASSWORD_FILE", os.path.join(temp_dir.name, "web_password.json")),
             ("USERS_FILE", os.path.join(temp_dir.name, "web_users.json")),
-            ("HASH_ITERATIONS", 1000),  # the real number is slow on purpose
+            ("HASH_ITERATIONS", 1000),  # the real number is slow
         ):
             self.addCleanup(setattr, web, name, getattr(web, name))
             setattr(web, name, value)
@@ -225,7 +225,7 @@ class AccountStoreTest(unittest.TestCase):
         self.addCleanup(setattr, web, "HASH_ITERATIONS", web.HASH_ITERATIONS)
         self.addCleanup(web.users.clear)
         web.USERS_FILE = os.path.join(temp_dir.name, "web_users.json")
-        web.HASH_ITERATIONS = 1000  # the real number is slow on purpose
+        web.HASH_ITERATIONS = 1000  # the real number is slow
         web.users.clear()
 
     def test_an_account_is_stored_without_its_password(self):

@@ -184,7 +184,7 @@ namespace AssetApp
                 port = int.Parse(portText);
             }
             IPAddress ignored;
-            // Something like 999.1.1 looks like an IP address but isn't one, and isn't a name either.
+            // Something like 999.1.1 is neither an IP address nor a name.
             if (!IPAddress.TryParse(host, out ignored) &&
                 (Regex.IsMatch(host, "^[0-9.]+$") || !Regex.IsMatch(host, "^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")))
                 throw new FormatException("'" + host + "' is not a valid IP address or host name.");
@@ -236,7 +236,7 @@ namespace AssetApp
         }
 
         // Send one request to one server and return its reply. If `trusted` is given, the
-        // server's certificate must match it, and this is checked BEFORE anything is sent, so
+        // server's certificate must match it, and this is checked before anything is sent, so
         // a password is never sent to a server that wasn't accepted. With no `trusted`, the
         // request is sent anyway, so it must hold nothing private: only PING does that.
         public static Dictionary<string, object> Ask(Addr address, Dictionary<string, object> request,

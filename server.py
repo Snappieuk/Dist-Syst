@@ -25,7 +25,7 @@ several pings in a row, it takes over. When a server earlier in the list comes b
 takes control again: it collects each later server's data, merges it into its own, and
 sends the result back, which puts them on standby.
 
-This is kept simple on purpose. There is no voting between servers, so if the network
+There is no voting between servers, so if the network
 splits, servers on each side can both accept changes until it heals. See "Known
 limitations" in the README.
 
@@ -124,7 +124,7 @@ def apply_change(request: dict) -> dict:
                 node.assets.pop(index)
             node.deleted_ids[asset_id] = request.get("request_id")
             if isinstance(request.get("deleted_at"), str):
-                node.deleted_at[asset_id] = request["deleted_at"]  # the leader's time, not this server's
+                node.deleted_at[asset_id] = request["deleted_at"]  # the leader's time
 
         node.last_seq = seq
         try:
@@ -238,7 +238,7 @@ def is_valid_peer_asset(record: object) -> bool:
 
     Records saved before tagging was added have no tags, and those saved before
     status changes were added have no version, so these fields and the date are
-    optional, but they must have the right type if present.
+    optional. When present, they must have the right type.
     """
     if not isinstance(record, dict):
         return False
@@ -429,7 +429,7 @@ def sync_at_start() -> bool:
 
 def watch_followers() -> None:
     """Check on every later server forever, bringing each up to date whenever it needs
-    it, but only while this server is the one accepting changes. Runs on its own thread.
+    it, while this server is the one accepting changes. Runs on its own thread.
 
     This also ends a split: if the network failed but the servers stayed running, a
     later one will have taken over, and this notices when it can be reached again.

@@ -69,7 +69,7 @@ CLIENT_FIELDS = ("description", "category", "location", "status")
 STORED_FIELDS = ("asset_id",) + CLIENT_FIELDS
 
 # Two assets with the same values in these fields count as the same item. Status is
-# left out, because it describes the item's current use rather than which item it is.
+# left out, because it describes the item's current use.
 IDENTITY_FIELDS = ("description", "category", "location")
 
 # The fields a LIST search looks in.
@@ -148,8 +148,8 @@ def load_data() -> dict:
     """Read the data file, returning its assets, deleted IDs, deletion times and last
     sequence number. It starts empty if the file does not exist yet.
 
-    A corrupt file raises an error rather than starting empty, because the next
-    save would then overwrite whatever could still be recovered.
+    A corrupt file raises an error. Starting empty would let the next save
+    overwrite whatever could still be recovered.
     """
     try:
         with open(ASSETS_FILE, "r", encoding="utf-8") as file:
@@ -307,7 +307,7 @@ def generate_asset_id() -> str:
     if it is unused. Holding the lock means nothing can take it before it is stored.
 
     Each server issues IDs from its own range (AST-P... or AST-B...). The other server
-    may not be reachable to ask, but this means it can never issue the same ID.
+    may not be reachable to ask. With separate ranges it can never issue the same ID.
     """
     used = {asset["asset_id"] for asset in assets} | set(deleted_ids)
     number = len(used) + 1
@@ -369,8 +369,8 @@ def save_update(index: int, previous: dict, updated: dict) -> dict:
     """Store a changed copy of an asset in place of the old one, and return the reply.
     The caller must hold the lock, and has already added a line of history.
 
-    A new record replaces the old one rather than the old one being edited, because a
-    LIST reply may be being sent from the old one on another thread, outside the lock.
+    A new record replaces the old one, because a LIST reply may be being sent from
+    the old one on another thread, outside the lock.
     """
     updated["version"] = previous.get("version", 0) + 1
     updated["updated_at"] = utc_timestamp()
@@ -456,8 +456,8 @@ def set_asset_status(asset_id: str, status: str, expected_version: object = None
     """Change an asset's status and return the reply.
 
     The tags include the status, so they are regenerated. A new record replaces the
-    old one rather than the old one being edited, because a LIST reply may be being
-    sent from the old one on another thread, outside the lock.
+    old one, because a LIST reply may be being sent from the old one on another
+    thread, outside the lock.
     """
     with assets_lock:
         if not accepts_writes:
@@ -895,8 +895,8 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
                 send_message(conn, reply)
             except MessageTooLargeError as exc:
                 # A LIST of too many assets. send_message() checks the size before
-                # sending anything, so the client can still be told what happened,
-                # rather than seeing a dropped connection that looks like an outage.
+                # sending anything, so the client is told what happened. A dropped
+                # connection would look like an outage.
                 send_message(conn, error_reply(TOO_LARGE, f"The reply is too large to send. {exc}", served_by=ROLE))
     except OSError as exc:
         # The client disconnected or timed out. Nobody is left to read a reply,

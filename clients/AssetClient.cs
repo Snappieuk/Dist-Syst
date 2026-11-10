@@ -72,7 +72,7 @@ class AssetClient
             {
                 tls.AuthenticateAsClient(host, null, SslProtocols.Tls12, false);
 
-                // This check comes BEFORE anything is sent, so a password never goes to the
+                // This check comes before anything is sent, so a password never goes to the
                 // wrong server.
                 byte[] hash = SHA256.Create().ComputeHash(new X509Certificate2(tls.RemoteCertificate).RawData);
                 string found = BitConverter.ToString(hash).Replace("-", ":");
@@ -196,7 +196,7 @@ class AssetClient
             else if (command == "add")
             {
                 // The server makes the asset ID itself. The request ID makes a retry safe:
-                // sending the same request again returns the same asset, not a second one.
+                // sending the same request again returns the same asset.
                 Dictionary<string, object> request = Request("REGISTER");
                 request["request_id"] = Guid.NewGuid().ToString("N");
                 request["asset"] = new Dictionary<string, object> {

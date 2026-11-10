@@ -27,8 +27,8 @@ import web
 # How many times to ask for the first account's details before giving up.
 ACCOUNT_ATTEMPTS = 3
 
-# What must be typed to confirm a reset. Having to type a word rather than just pressing y
-# makes it much harder to delete everything by accident.
+# What must be typed to confirm a reset. Typing a whole word makes it much harder to
+# delete everything by accident.
 RESET_WORD = "RESET"
 
 # How long to wait when checking whether a program is running.

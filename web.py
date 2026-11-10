@@ -75,7 +75,7 @@ STATIC_FILES = {
 # is converted to an account once, then removed.
 PASSWORD_FILE = os.path.join(common.DATA_FOLDER, "web_password.json")
 
-# How many rounds of hashing a password gets. This is deliberately slow, so that someone
+# How many rounds of hashing a password gets. This is slow, so that someone
 # who obtained the file could only try a few guesses each second.
 HASH_ITERATIONS = 600_000
 
@@ -112,7 +112,7 @@ LOCKOUT_SECONDS = 60
 # Set these when this program sits behind an HTTPS reverse proxy such as Nginx Proxy
 # Manager (config.json "behind_https_proxy" / "trusted_proxy", or ASSET_BEHIND_HTTPS_PROXY /
 # ASSET_TRUSTED_PROXY). The session cookie is then marked Secure, and the browser's real
-# address is read from X-Forwarded-For, but only when the request came from the proxy.
+# address is read from X-Forwarded-For when the request came from the proxy.
 BEHIND_HTTPS_PROXY = common.BEHIND_HTTPS_PROXY
 TRUSTED_PROXY = common.TRUSTED_PROXY
 
@@ -390,7 +390,7 @@ def public_asset(asset: dict) -> dict:
 def assets_reply() -> tuple:
     """Fetch the assets from the servers, returning an HTTP status and a JSON body.
 
-    Problems are logged in full for whoever runs this, but the browser only gets a
+    Problems are logged in full for whoever runs this. The browser only gets a
     general message, because internal details can help an attacker.
     """
     try:
@@ -1055,7 +1055,7 @@ class WebHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def log_message(self, format: str, *args) -> None:
-        """Send request logs to the normal log, rather than straight to the console."""
+        """Send request logs to the normal log."""
         logger.debug("%s %s", self.address_string(), format % args)
 
 

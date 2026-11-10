@@ -20,7 +20,7 @@ import time      # times the failover, and waits for the primary to return
 import os    # finds the project folder
 import sys   # sys.path is where Python looks for modules
 
-# This file is in tools/, but common.py is one folder up, in the project folder, so
+# This file is in tools/ and common.py is one folder up, in the project folder, so
 # Python is told to look there too.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -6,8 +6,7 @@ the server and client programs do not need to be written in the same
 language, or run on the same type of machine, to understand each other.
 
 This module is the one place that defines the "wire format", so the rules
-about what counts as a valid message live here rather than being repeated
-(and possibly disagreeing) in every program.
+about what counts as a valid message live here, and every program uses them.
 """
 
 import json         # used to turn a Python dict into a JSON string, and back
@@ -29,10 +28,10 @@ HEADER_LENGTH_BYTES = 4  # every message is prefixed with a 4-byte length header
 # reply instead, and the primary can no longer reconcile with a returning backup, because
 # there is no paging. Copying each new change to the backup still works.
 #
-# WHY: the 4-byte header can claim up to 4 GB. The header comes from another
+# The 4-byte header can claim up to 4 GB. The header comes from another
 # machine, so it must be treated as untrusted input. Without a cap, a faulty
 # client could claim 4 GB and make a server thread try to collect that much data.
-# Checking the claim BEFORE reading the payload means no memory is used for it.
+# Checking the claim before reading the payload means no memory is used for it.
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 
 # The address of each server: the primary first, then each backup in the order they take
@@ -71,7 +70,7 @@ TRUSTED_PROXY_VARIABLE = "ASSET_TRUSTED_PROXY"
 DEFAULT_TRUSTED_PROXY = "127.0.0.1"
 
 # What config.json may contain. Anything else is rejected, so a misspelt setting is
-# noticed instead of silently ignored.
+# reported.
 CONFIG_TIMEOUTS = ("timeout_seconds", "heartbeat_timeout_seconds", "failover_wait_seconds")
 CONFIG_KEYS = ("servers", "web_address", "behind_https_proxy", "trusted_proxy") + CONFIG_TIMEOUTS
 
@@ -161,9 +160,9 @@ TRUSTED_PROXY = (os.environ[TRUSTED_PROXY_VARIABLE].strip() if os.environ.get(TR
 
 
 def address_to_connect_to(address: tuple) -> tuple:
-    """The address to use to reach a program on THIS machine. A program listening on
-    0.0.0.0 or :: listens everywhere, but those can't be connected to (Windows refuses),
-    so this machine uses 127.0.0.1 for them."""
+    """The address to use to reach a program on this machine. A program listening on
+    0.0.0.0 or :: listens everywhere. Windows refuses connections to those addresses, so
+    this machine uses 127.0.0.1 for them."""
     host, port = address
     return ("127.0.0.1" if host in ("0.0.0.0", "::", "") else host, port)
 
@@ -232,7 +231,7 @@ UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"  # no protocol_version, or one the s
 
 # The version of the message format this program speaks, sent in every request. A
 # server only accepts the versions it knows, so a program written for a different
-# format gets a clear error instead of being misunderstood. Change this, and add the
+# format gets a clear error. Change this, and add the
 # new number to SUPPORTED_PROTOCOL_VERSIONS, whenever requests or replies change in a
 # way older programs couldn't handle.
 PROTOCOL_VERSION = 1
@@ -370,8 +369,7 @@ def new_register_request(asset: dict) -> dict:
     """Build a REGISTER request with a new random request ID.
 
     The server stores the request ID with the asset. If the request is sent again, the
-    server recognises it and replies with that asset, rather than storing a second
-    copy, which makes retrying safe. To retry, send the same request again.
+    server recognises it and replies with that asset, which makes retrying safe. To retry, send the same request again.
     """
     return {"action": "REGISTER", "request_id": uuid.uuid4().hex, "asset": asset}
 
@@ -404,8 +402,7 @@ def send_message(sock: socket.socket, message: dict) -> None:
     payload = json.dumps(message).encode("utf-8")
 
     # Apply the same limit when sending as when receiving. Failing here gives
-    # the sender a clear error, instead of the other end rejecting the message
-    # after it has been sent across the network.
+    # the sender a clear error before anything crosses the network.
     if len(payload) > MAX_MESSAGE_BYTES:
         raise MessageTooLargeError(
             f"Message is {len(payload)} bytes; the limit is {MAX_MESSAGE_BYTES}"
@@ -446,7 +443,7 @@ def receive_message(sock: socket.socket) -> dict:
     """Read one length-prefixed JSON message from `sock`.
 
     Raises OSError if the connection fails, so no reply can be delivered. Raises
-    ValueError if the connection works but the data is invalid, so the sender can
+    ValueError if the connection works and the data is invalid, so the sender can
     be told what was wrong. JSON nested too deeply to parse raises RecursionError.
     """
     # First, read exactly the 4-byte header written by send_message().
@@ -468,7 +465,7 @@ def receive_message(sock: socket.socket) -> dict:
     # Turn the raw bytes back into text, then parse the JSON.
     message = json.loads(payload.decode("utf-8"))
 
-    # `[1, 2]` and `"hello"` are valid JSON but not valid messages. Checking
+    # `[1, 2]` and `"hello"` are valid JSON and are not valid messages. Checking
     # here means every caller can safely assume it has a dict and call .get().
     if not isinstance(message, dict):
         raise ValueError("Message must be a JSON object")
@@ -602,9 +599,9 @@ def new_tls_pem() -> bytes:
     """Create a new private key and a self-signed certificate for it, as PEM text.
 
     The cryptography package is only needed here, so a machine that was given a copy of
-    tls.pem doesn't need it installed. The certificate names "localhost" and 127.0.0.1,
-    but clients don't check names, because they trust only this exact certificate, and
-    the servers may be reached by any name.
+    tls.pem doesn't need it installed. The certificate names "localhost" and 127.0.0.1.
+    Clients don't check names, because they trust only this exact certificate, and the
+    servers may be reached by any name.
     """
     import datetime
     import ipaddress

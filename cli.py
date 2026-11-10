@@ -8,7 +8,7 @@ The command-line client: adds an asset, lists them, or changes one.
 Without a command, it asks which of the three you want. At least one server must
 already be running (run start.py first).
 
-If you run this by double-clicking the file (rather than from an already-open terminal),
+If you run this by double-clicking the file,
 Windows closes the console the instant the script finishes, too fast to read the server's
 response. The pause at the end keeps the window open until you press Enter. Running it
 from a terminal you already have open does not need it.
@@ -64,9 +64,9 @@ def add_asset() -> None:
     """Ask for a new asset's details, then register it."""
     new_asset = prompt_for_asset()
 
-    # If this fails, show a clear message rather than a traceback. After an error,
-    # running this again is safe: if the first attempt did work, the server replies
-    # DUPLICATE_ASSET with the existing asset's ID, rather than storing the item twice.
+    # If this fails, show a clear message. After an error, running this again is safe:
+    # if the first attempt did work, the server replies DUPLICATE_ASSET with the
+    # existing asset's ID and stores nothing new.
     try:
         response = send_request(new_register_request(new_asset))
     except (OSError, ValueError) as exc:
@@ -81,7 +81,7 @@ def add_asset() -> None:
 
 def list_assets() -> None:
     """Print every asset's ID, status and tags."""
-    # If this fails, show a clear message rather than a traceback.
+    # If this fails, show a clear message.
     try:
         response = send_request({"action": "LIST"})
     except (OSError, ValueError) as exc:
@@ -134,8 +134,8 @@ def prompt_for_request(asset: dict) -> Optional[dict]:
     """Ask the user what to do, returning the request, or None if they cancel.
 
     The request says which version of the asset the user was shown. If someone else
-    changes it while they decide, the server replies CONFLICT rather than overwriting
-    a change the user has not seen.
+    changes it while they decide, the server replies CONFLICT and keeps the other
+    person's change.
     """
     asset_id = asset["asset_id"]
     print(f"{asset_id}: {asset.get('description')} ({asset.get('status')})")
@@ -172,7 +172,7 @@ def change_asset() -> None:
     """Ask for an asset's ID, then change its status, edit it or delete it."""
     asset_id = input("Asset ID (python cli.py list shows them): ").strip()
 
-    # If this fails, show a clear message rather than a traceback.
+    # If this fails, show a clear message.
     try:
         listing = send_request({"action": "LIST"})
         if listing.get("status") != "OK":

@@ -99,7 +99,7 @@ class HttpsGuiTest(test_web.WebTestCase):
 
     def fetch(self, path: str, method: str = "GET", body: Optional[dict] = None,
               extra_headers: Optional[dict] = None, **options) -> tuple:
-        """The base class's way of making requests, over HTTPS instead of HTTP."""
+        """The base class's way of making requests, over HTTPS."""
         data = None if body is None else __import__("json").dumps(body).encode("utf-8")
         headers = dict(extra_headers or {})
         cookie = options.get("cookie", getattr(self, "cookie", None))

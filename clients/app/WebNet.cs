@@ -76,7 +76,7 @@ namespace AssetApp
             request.AllowAutoRedirect = false;   // a redirect could lead to plain http://
             request.Timeout = TimeoutMs;
             request.ReadWriteTimeout = TimeoutMs;
-            // The certificate is deliberately NOT given a validation callback: the normal check applies.
+            // The certificate has no validation callback, so the normal check applies.
 
             byte[] data = body == null ? null : Encoding.UTF8.GetBytes(J.Serializer.Serialize(body));
             if (data != null)

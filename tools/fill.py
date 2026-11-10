@@ -21,7 +21,7 @@ import string    # the letters and digits a serial number is made from
 import os        # finds the project folder
 import sys       # sys.path is where Python looks for modules
 
-# This file is in tools/, but common.py is one folder up, in the project folder, so
+# This file is in tools/ and common.py is one folder up, in the project folder, so
 # Python is told to look there too.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -91,7 +91,7 @@ BORROWERS = ["Sam Lee", "Priya Shah", "Alex Kim", "Jo Brown", "Chris Evans", "Ma
 
 def made_up_loan(today: datetime.date) -> dict:
     """Return a loan around today: a start from 30 days ago to 20 days ahead, lasting 1 to
-    21 days. Most that have ended were returned (some late), but one in five is overdue."""
+    21 days. Most that have ended were returned (some late). One in five is overdue."""
     start = today + datetime.timedelta(days=random.randint(-30, 20))
     due = start + datetime.timedelta(days=random.randint(1, 21))
     loan = {"borrower": random.choice(BORROWERS), "start": start.isoformat(), "due": due.isoformat()}
@@ -124,7 +124,7 @@ def made_up_asset() -> dict:
 
 
 def positive_number(text: str) -> int:
-    """Check the --count value, so a mistake gets a clear message rather than a crash."""
+    """Check the --count value, so a mistake gets a clear message."""
     try:
         number = int(text)
     except ValueError:
@@ -138,8 +138,8 @@ def fill(count: int) -> int:
     """Register `count` made-up assets, lending some of them, and return how many were
     added.
 
-    It stops at the first one the servers refuse, rather than repeating the same
-    error hundreds of times.
+    It stops at the first one the servers refuse, so the same error isn't repeated
+    hundreds of times.
     """
     added = 0
     today = datetime.date.today()

@@ -286,7 +286,7 @@ function reviewRow(asset) {
 
 function showReview() {
   const flagged = flaggedAssets();
-  // The Review page is always there. With nothing flagged it says so instead of vanishing.
+  // The Review page is always there. With nothing flagged it says so.
   reviewTable.hidden = flagged.length === 0;
   document.getElementById("review-count").textContent = flagged.length;
   document.getElementById("review-count").classList.toggle("waiting", flagged.length > 0);
@@ -408,7 +408,7 @@ function showLoans() {
 // themselves, so it fills by itself (including from fill.py) and a person disappears when
 // their last item is checked in, wherever that happens. Names are compared ignoring
 // capitals and extra spaces, so "sam lee" and "Sam  Lee" are the same person, and a second
-// item lent to them is added to the same row instead of making a new one.
+// item lent to them is added to the same row.
 function nameKey(name) {
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -1118,7 +1118,7 @@ function showAssets() {
     }
     row.append(actionsCell(asset));
 
-    // Clicking a row (but not one of its buttons) or pressing Enter on it shows the history.
+    // Clicking a row (outside its buttons) or pressing Enter on it shows the history.
     row.className = "clickable";
     row.tabIndex = 0;
     row.addEventListener("click", (event) => {

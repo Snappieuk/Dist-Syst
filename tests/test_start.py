@@ -3,8 +3,7 @@ Tests for the program that starts the whole system.
 
     python -m unittest -v tests.test_start
 
-These run short stand-in programs rather than the real servers, and replace setup with a
-stand-in, so they do not need the system's ports and never touch your data.
+These run short stand-in programs in place of the real servers and setup, so they do not need the system's ports and never touch your data.
 """
 
 import contextlib

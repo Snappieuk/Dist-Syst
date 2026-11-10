@@ -44,7 +44,7 @@ namespace AssetApp
         public Func<CalendarLoan, bool> IsOverdue;
         public event Action<string> DayClicked;
 
-        // One bold font reused for today's date, instead of a new one per redraw.
+        // One bold font for today's date, made once and reused on every redraw.
         Font todayFont;
         protected override void OnFontChanged(EventArgs e)
         {
