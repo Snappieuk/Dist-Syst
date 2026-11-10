@@ -15,7 +15,6 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest import mock
 
 import common
 import node
@@ -221,14 +220,10 @@ class HostnameTest(unittest.TestCase):
 
 
 class ListenAddressTest(unittest.TestCase):
-    def test_a_server_normally_listens_on_every_network(self):
-        with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": ""}):
-            self.assertEqual(node.listening_address(("127.0.0.1", 65432)), ("0.0.0.0", 65432))
-            self.assertEqual(node.listening_address(("127.0.0.1", 65433)), ("0.0.0.0", 65433))
-
-    def test_the_host_can_be_replaced_but_not_the_port(self):
-        with mock.patch.dict(os.environ, {"ASSET_LISTEN_HOST": "127.0.0.1"}):
-            self.assertEqual(node.listening_address(("127.0.0.1", 65432)), ("127.0.0.1", 65432))
+    def test_a_server_listens_on_every_network(self):
+        # Remote devices can only connect if the server listens on 0.0.0.0.
+        self.assertEqual(node.listening_address(("127.0.0.1", 65432)), ("0.0.0.0", 65432))
+        self.assertEqual(node.listening_address(("127.0.0.1", 65433)), ("0.0.0.0", 65433))
 
 
 if __name__ == "__main__":

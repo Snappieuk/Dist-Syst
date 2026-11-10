@@ -974,14 +974,13 @@ def start_discovery(port: int) -> None:
 
 
 def listening_address(address: tuple) -> tuple:
-    """Return the address this server should listen on: every network connection this
-    machine has (0.0.0.0), on the port from its own entry in SERVERS.
+    """Return the address this server listens on: every network connection this machine
+    has (0.0.0.0), on the port from its own entry in SERVERS.
 
     The host in SERVERS is always 127.0.0.1, which is how programs on this machine reach
-    it. Listening everywhere instead means a GUI on another device can connect without any
-    extra setting. Setting ASSET_LISTEN_HOST to 127.0.0.1 accepts only this machine.
+    it. Listening on 0.0.0.0 lets the desktop apps on other devices connect too.
     """
-    return (os.environ.get("ASSET_LISTEN_HOST") or "0.0.0.0", address[1])
+    return ("0.0.0.0", address[1])
 
 
 def start_up(address: tuple) -> socket.socket:

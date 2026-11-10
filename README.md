@@ -151,9 +151,8 @@ Everything works without any settings. To change them, copy `config.example.json
 A misspelt setting or a wrong value stops the program with a message naming `config.json`. Environment variables override the file: `ASSET_SERVERS` for the
 servers (such as `127.0.0.1:65432,127.0.0.1:65433`) and `ASSET_WEB_ADDRESS` for the web address, each in the same `host:port` form;
 `ASSET_BEHIND_HTTPS_PROXY` (`true` or `false`) and `ASSET_TRUSTED_PROXY` for the two proxy settings.
-`ASSET_CONFIG` can name a different settings file. `ASSET_LISTEN_HOST=127.0.0.1` makes the
-servers accept connections from this machine only; without it they listen on every network,
-so the desktop apps on other computers can reach them. `config.json` is ignored by git,
+`ASSET_CONFIG` can name a different settings file. The servers always listen on every
+network (`0.0.0.0`), so the desktop apps on other computers can reach them. `config.json` is ignored by git,
 and a reset leaves it alone.
 
 The system runs without the backup. It then stops working if the primary fails. When the
